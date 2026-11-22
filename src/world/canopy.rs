@@ -1,0 +1,480 @@
+//! The map's trees: imported, textured models growing in the landmark groves
+//! and around the hangar. There are no procedural trees.
+
+use std::f32::consts::TAU;
+
+use bevy::gltf::GltfMaterial;
+use bevy::light::NotShadowCaster;
+use bevy::pbr::gltf::standard_material_from_gltf_material;
+use bevy::prelude::*;
+
+use crate::assets::{self, PreloadedAssets};
+use crate::player::PlayerCamera;
+
+use super::collision::{Collider, Pillar};
+use super::cordon::{inside_yard, near_wall_or_checkpoint, shelterbelt};
+use super::detail_range;
+use super::hydrology::{LAKE, SWAMP};
+use super::terrain::{
+    BALD_CENTER, BASE, QUARRY_CENTER, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep,
+};
+use super::weather::Wind;
+
+const SEED: u32 = 0xD4EA_9021;
+const SHADOW_ENTER: f32 = 48.0;
+const SHADOW_EXIT: f32 = 55.0;
+const LANDMARK_GROVES: [(Vec2, f32); 4] = [
+    (Vec2::new(QUARRY_CENTER.0, QUARRY_CENTER.1), 102.0),
+    (Vec2::new(BALD_CENTER.0, BALD_CENTER.1), 68.0),
+    (LAKE, 174.0),
+    (SWAMP, 136.0),
+];
+
+pub(super) fn near_landmark(at: Vec2) -> bool {
+    shelterbelt(at) > 0.0
+        || at.distance_squared(Vec2::from(BASE)) <= 107.0_f32.powi(2)
+        || LANDMARK_GROVES
+            .into_iter()
+            .any(|(center, radius)| at.distance_squared(center) <= radius * radius)
+        || super::sites::grove(at) > 0.0
+}
+
+pub(super) fn landmark_grove(at: Vec2) -> f32 {
+    LANDMARK_GROVES
+        .into_iter()
+        .fold(super::sites::grove(at), |amount, (center, radius)| {
+            amount.max(smoothstep(
+                1.0,
+                0.33,
+                at.distance_squared(center) / (radius * radius),
+            ))
+        })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Species {
+    Small,
+    Broadleaf,
+    Tall,
+    Birch,
+    Dead,
+}
+
+impl Species {
+    pub(super) const ALL: [Self; 5] = [
+        Self::Small,
+        Self::Broadleaf,
+        Self::Tall,
+        Self::Birch,
+        Self::Dead,
+    ];
+
+    fn model(self) -> &'static TreeModel {
+        &MODELS[self as usize]
+    }
+}
+
+struct TreeModel {
+    path: &'static str,
+    scale: (f32, f32),
+    footprint: f32,
+    wind_bend: f32,
+    draw_distance: f32,
+    trunks: &'static [Pillar],
+}
+
+const MODELS: [TreeModel; Species::ALL.len()] = [
+    TreeModel {
+        path: assets::TREE_SMALL,
+        scale: (4.8, 7.5),
+        footprint: 0.34,
+        wind_bend: 0.034,
+        draw_distance: 125.0,
+        trunks: &[Pillar {
+            x: 0.004,
+            z: 0.001,
+            radius: 0.017,
+            bottom: -0.035,
+            top: 0.35,
+        }],
+    },
+    TreeModel {
+        path: assets::TREE_BIG,
+        scale: (13.5, 19.5),
+        footprint: 0.22,
+        wind_bend: 0.017,
+        draw_distance: 195.0,
+        trunks: &[Pillar {
+            x: 0.019,
+            z: 0.022,
+            radius: 0.083,
+            bottom: -0.035,
+            top: 0.20,
+        }],
+    },
+    TreeModel {
+        path: assets::TREE_VERY_TALL,
+        scale: (25.5, 33.5),
+        footprint: 0.05,
+        wind_bend: 0.021,
+        draw_distance: 335.0,
+        trunks: &[Pillar {
+            x: 0.008,
+            z: -0.004,
+            radius: 0.024,
+            bottom: -0.035,
+            top: 0.15,
+        }],
+    },
+    TreeModel {
+        path: assets::TREE_BIRCH,
+        scale: (10.0, 15.0),
+        footprint: 0.047,
+        wind_bend: 0.028,
+        draw_distance: 175.0,
+        trunks: &[Pillar {
+            x: 0.005,
+            z: 0.0,
+            radius: 0.032,
+            bottom: -0.035,
+            top: 0.38,
+        }],
+    },
+    TreeModel {
+        path: assets::TREE_DEAD,
+        scale: (9.5, 14.5),
+        footprint: 0.22,
+        wind_bend: 0.0,
+        draw_distance: 155.0,
+        trunks: &[Pillar {
+            x: -0.014,
+            z: 0.045,
+            radius: 0.070,
+            bottom: -0.035,
+            top: 0.40,
+        }],
+    },
+];
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) struct ForestTree {
+    pub species: Species,
+    pub pose: Transform,
+}
+
+impl ForestTree {
+    /// An imported tree on a scenery tree spot near a landmark; open country
+    /// away from them stays treeless.
+    pub(super) fn at_tree_spot(terrain: &Terrain, spot: Transform, seed: u32) -> Option<Self> {
+        let roll = |n| lattice_hash(seed as i32, 0, SEED + n);
+        if !near_landmark(spot.translation.xz()) || roll(0) >= 0.6 {
+            return None;
+        }
+        let choice = roll(1);
+        let species = if choice < 0.32 {
+            Species::Small
+        } else if choice < 0.52 {
+            Species::Broadleaf
+        } else if choice < 0.70 {
+            Species::Tall
+        } else if choice < 0.88 {
+            Species::Birch
+        } else {
+            Species::Dead
+        };
+        let spec = species.model();
+        let scale = lerp(spec.scale.0, spec.scale.1, roll(2));
+        Self::grounded(
+            terrain,
+            species,
+            spot.translation.xz(),
+            spot.rotation,
+            scale,
+            false,
+        )
+    }
+
+    fn grounded(
+        terrain: &Terrain,
+        species: Species,
+        at: Vec2,
+        rotation: Quat,
+        scale: f32,
+        allow_base_pad: bool,
+    ) -> Option<Self> {
+        let radius = species.model().footprint * scale;
+        let edge = (0..8).map(|i| at + Vec2::from_angle(i as f32 * TAU / 8.0) * radius);
+        let center = terrain.mesh_height_at(at);
+        let mut low = center;
+        let mut high = center;
+        for root in std::iter::once(at).chain(edge) {
+            if terrain.road_mask(root.x, root.y) > 0.02
+                || (!allow_base_pad && terrain.base_mask(root.x, root.y) > 0.05)
+                || terrain.water_depth_at(root.x, root.y) > 0.0
+            {
+                return None;
+            }
+            let y = terrain.mesh_height_at(root);
+            low = low.min(y);
+            high = high.max(y);
+        }
+        if high - low > scale * 0.09 {
+            return None;
+        }
+        Some(Self {
+            species,
+            pose: Transform::from_xyz(at.x, low - 0.05, at.y)
+                .with_rotation(rotation)
+                .with_scale(Vec3::splat(scale)),
+        })
+    }
+
+    pub(super) fn collider(self) -> Collider {
+        Collider(self.species.model().trunks)
+    }
+}
+
+pub(super) fn hangar_trees(terrain: &Terrain, tile: IVec2) -> Vec<ForestTree> {
+    const CELLS: i32 = 12;
+    let mid = (tile.as_vec2() + Vec2::splat(0.5)) * TILE_SIZE;
+    if (mid - Vec2::from(BASE)).abs().max_element() > 113.0 + TILE_SIZE * 0.5 {
+        return Vec::new();
+    }
+    let start = tile * CELLS;
+    let cell = TILE_SIZE / CELLS as f32;
+    let mut trees = Vec::new();
+    for z in start.y..start.y + CELLS {
+        for x in start.x..start.x + CELLS {
+            let roll = |n| lattice_hash(x, z, SEED + 431 + n);
+            let at = (Vec2::new(x as f32, z as f32)
+                + Vec2::new(lerp(0.24, 0.76, roll(0)), lerp(0.24, 0.76, roll(1))))
+                * cell;
+            if roll(2) >= shelterbelt(at) * 0.60
+                || near_wall_or_checkpoint(at, 2.6)
+                || terrain.normal_at(at.x, at.y).y < 0.88
+            {
+                continue;
+            }
+            let index = (roll(3) * Species::ALL.len() as f32) as usize;
+            let species = Species::ALL[index.min(Species::ALL.len() - 1)];
+            let spec = species.model();
+            let scale = lerp(spec.scale.0, spec.scale.1, roll(4))
+                * if inside_yard(at) { 0.84 } else { 1.0 };
+            trees.extend(ForestTree::grounded(
+                terrain,
+                species,
+                at,
+                Quat::from_rotation_y(roll(5) * TAU),
+                scale,
+                true,
+            ));
+        }
+    }
+    trees
+}
+
+#[derive(Component)]
+pub(super) struct CanopyVisual {
+    rest: Quat,
+    phase: f32,
+    bend: f32,
+}
+
+impl CanopyVisual {
+    fn new(tree: ForestTree) -> Self {
+        let cell = tree.pose.translation.xz().floor().as_ivec2();
+        let roll = |n| lattice_hash(cell.x, cell.y, SEED + n);
+        Self {
+            rest: tree.pose.rotation,
+            phase: roll(11) * TAU,
+            bend: if roll(10) < 0.65 {
+                tree.species.model().wind_bend * lerp(0.55, 1.0, roll(12))
+            } else {
+                0.0
+            },
+        }
+    }
+
+    /// Leans downwind, further in a gust, and stirs even in still air.
+    fn displaced(&self, wind: &Wind, distance: f32) -> Quat {
+        let bend = self.bend * (1.0 - smoothstep(60.0, 85.0, distance));
+        if bend == 0.0 {
+            return self.rest;
+        }
+        let seconds = wind.seconds;
+        let stir = bend * (0.35 + wind.strength());
+        let sway = (seconds * 1.12 + self.phase).sin();
+        let side = (seconds * 0.76 + self.phase).cos();
+        let flutter = Quat::from_euler(EulerRot::XYZ, stir * sway * 0.39, 0.0, stir * side * 0.27);
+        let downwind = wind.direction();
+        // Tips the crown (+Y) toward the downwind side.
+        let lean = Quat::from_axis_angle(
+            Vec3::new(downwind.y, 0.0, -downwind.x),
+            bend * (0.15 + 0.6 * wind.strength()),
+        );
+        lean * flutter * self.rest
+    }
+}
+
+#[derive(Resource, Default)]
+pub(super) struct CanopyModels([(Handle<Mesh>, Handle<StandardMaterial>); MODELS.len()]);
+
+pub(super) fn preload_canopies(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
+    for spec in &MODELS {
+        let (mesh, paint) = assets::load_single_primitive(&server, spec.path);
+        preloaded.0.extend([mesh.untyped(), paint.untyped()]);
+    }
+}
+
+pub(super) fn prepare_canopy_materials(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    paints: Res<Assets<GltfMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    commands.insert_resource(CanopyModels(MODELS.map(|spec| {
+        let (mesh, paint) = assets::load_single_primitive(&server, spec.path);
+        let paint = paints
+            .get(&paint)
+            .expect("tree materials finish preloading before the Zone opens");
+        (
+            mesh,
+            materials.add(standard_material_from_gltf_material(paint)),
+        )
+    })));
+}
+
+pub(super) fn spawn_canopies(
+    parent: &mut ChildSpawnerCommands,
+    models: &CanopyModels,
+    sites: &[ForestTree],
+) {
+    for &tree in sites {
+        let (mesh, paint) = &models.0[tree.species as usize];
+        let distance = tree.species.model().draw_distance;
+        parent.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(paint.clone()),
+            tree.pose,
+            detail_range(distance, 25.0),
+            CanopyVisual::new(tree),
+            NotShadowCaster,
+        ));
+    }
+}
+
+pub(super) fn update_canopy_motion(
+    mut commands: Commands,
+    wind: Res<Wind>,
+    camera: Single<&Transform, With<PlayerCamera>>,
+    mut trees: Query<
+        (Entity, &CanopyVisual, &mut Transform, Has<NotShadowCaster>),
+        Without<PlayerCamera>,
+    >,
+) {
+    for (entity, visual, mut pose, no_shadow) in &mut trees {
+        let distance_sq = pose.translation.distance_squared(camera.translation);
+        if no_shadow && distance_sq < SHADOW_ENTER * SHADOW_ENTER {
+            commands.entity(entity).remove::<NotShadowCaster>();
+        } else if !no_shadow && distance_sq > SHADOW_EXIT * SHADOW_EXIT {
+            commands.entity(entity).insert(NotShadowCaster);
+        }
+        if visual.bend != 0.0 {
+            let rotation = visual.displaced(&wind, distance_sq.sqrt());
+            if pose.rotation != rotation {
+                pose.rotation = rotation;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_hangar_shelterbelt_adds_all_species_without_filling_the_yard() {
+        let terrain = Terrain::new();
+        let mut trees = Vec::new();
+        for z in -3..=0 {
+            for x in -2..=2 {
+                trees.extend(hangar_trees(&terrain, IVec2::new(x, z)));
+            }
+        }
+        assert!((45..=85).contains(&trees.len()), "{} trees", trees.len());
+        assert!(
+            trees
+                .iter()
+                .filter(|tree| tree.pose.translation.z - BASE.1 < -44.0)
+                .count()
+                > trees.len() / 2
+        );
+        for species in Species::ALL {
+            assert!(trees.iter().filter(|tree| tree.species == species).count() >= 4);
+        }
+        for tree in trees {
+            let at = tree.pose.translation;
+            let offset = at.xz() - Vec2::from(BASE);
+            assert!(offset.x.abs() > 49.0 || offset.y < -44.0);
+            assert!(at.y <= terrain.mesh_height_at(at.xz()));
+            assert!(terrain.road_mask(at.x, at.z) <= 0.02);
+            assert!(!near_wall_or_checkpoint(at.xz(), 2.6));
+        }
+    }
+
+    #[test]
+    fn wind_moves_nearby_trees_in_place_and_distant_trees_stop_casting_shadows() {
+        let mut app = App::new();
+        let mut time = Time::<()>::default();
+        time.advance_by(std::time::Duration::from_secs_f32(0.5));
+        app.insert_resource(time)
+            .insert_resource(crate::world::Weather::default())
+            .init_resource::<Wind>()
+            .add_systems(
+                Update,
+                (super::super::weather::blow_wind, update_canopy_motion).chain(),
+            );
+        let camera = app
+            .world_mut()
+            .spawn((PlayerCamera, Transform::IDENTITY))
+            .id();
+        let root = Vec3::new(2.0, 0.0, 1.0);
+        let tree = app
+            .world_mut()
+            .spawn((
+                CanopyVisual {
+                    rest: Quat::IDENTITY,
+                    phase: 1.0,
+                    bend: 0.02,
+                },
+                Transform::from_translation(root),
+                NotShadowCaster,
+            ))
+            .id();
+        app.update();
+        let near = app.world().entity(tree);
+        let rotation = near.get::<Transform>().expect("visual transform").rotation;
+        assert_ne!(rotation, Quat::IDENTITY);
+        assert!(!near.contains::<NotShadowCaster>());
+        app.update();
+        assert_ne!(
+            app.world()
+                .get::<Transform>(tree)
+                .expect("visual transform")
+                .rotation,
+            rotation
+        );
+        app.world_mut()
+            .get_mut::<Transform>(camera)
+            .expect("camera transform")
+            .translation
+            .x = 100.0;
+        app.update();
+        let far = app.world().entity(tree);
+        assert_eq!(
+            *far.get::<Transform>().expect("visual transform"),
+            Transform::from_translation(root)
+        );
+        assert!(far.contains::<NotShadowCaster>());
+    }
+}

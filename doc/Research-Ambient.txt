@@ -1,0 +1,39 @@
+To make your 3D Zone feel authentic to Roadside Picnic (set in the industrial-rural outskirts of Harmont), the environment shouldn't look like a generic post-apocalyptic wasteland—it should feel like an abruptly abandoned, warped everyday town where nature and physics behave wrong.
+
+1. Flora & Natural Terrain
+
+• Petrified / Vitreous Trees: Trees near anomalies that have turned brittle, glassy, or charred without burning, snapping like porcelain when touched or hit by bolts.
+• Anomalous Overgrowth: Unnaturally thick, pale, or mutated weeds, dandelions, and nettles growing through cracked asphalt.
+• Sinking Mud & Oil Bogs: Deep, viscous mud flats (especially around the old quarry and railway tracks) that slow movement, drain stamina, and swallow dropped items.
+• Dead Birch & Pine Groves: Sparse, silent woods with no bird sounds; needles and leaves sometimes hang suspended in mid-air near gravity pockets.
+• Slime-Filled Ditches & Puddles: Waterlogged trenches and basement pits pooling with rainwater mixed with iridescent Hell Slime.
+
+2. Vehicles & Machinery
+
+• Abandoned Civilian Cars: 1960s/70s sedans and station wagons frozen mid-evacuation—some rusted out, others pristine inside despite decades of exposure, and a few crushed completely flat by Mosquito Manges.
+• Rusted Quarry Dump Trucks & Excavators: Massive, half-sunken industrial vehicles in the sand/clay pit (a major landmark in the novel).
+• Institute "Hover-Boots" / Tracked Crawlers: Wrecked or abandoned UN/Institute armored amphibious crawlers and robotic drones left behind by failed expeditions.
+• Derailed Train Cars & Flatbeds: Overgrown railway spurs with rusted boxcars, tankers, and torn-up tracks twisted into impossible knots by spatial anomalies.
+
+3. Buildings & Infrastructure
+
+• The Plague Quarter (Abandoned Suburbs): Rows of silent, intact wooden and brick houses with peeling paint, broken windows, and personal belongings still sitting on tables.
+• Dilapidated Warehouses & Garages: Corrugated metal sheds, auto repair shops with hydraulic lifts, and brick factories—prime hiding spots for Hell Slime and Silver Webs.
+• High-Voltage Pylons & Snapped Cables: Fallen power towers with dangling copper wires often covered in Burning Fuzz.
+• The UN Perimeter Cordon: Concrete blast walls, barbed-wire fences, watchtowers with sweeping searchlights, automated acoustic/motion poles, and armored checkpoints.
+
+4. Animals & Zone Entities
+
+Unlike S.T.A.L.K.E.R., Roadside Picnic has very few monsters—the horror comes from silence and biological weirdness:
+• Feral Dogs: Mangy, terrified stray dogs scavenging the perimeter; they panic, howl, and flee violently when near Itchers or invisible anomalies (making them great organic "detectors").
+• Crows & Rooks: Perch on perimeter fences and telegraph poles; they refuse to fly past certain invisible lines in the sky, acting as visual boundary markers.
+• The "Living Dead" (Replicas): Slow, silent, mindless biological duplicates of people buried in the Harmont cemetery before the Visitation, wandering aimlessly along old roads back toward town.
+• Insects & Flies: Unnatural swarms buzzing over dead animals caught in Meatgrinders, contrasted against areas of total, eerie insect silence.
+
+5. Stalker & Military Clutter (Environmental Storytelling)
+
+• Rusted Nuts, Bolts & Colored Cloth Strips: Scattered along safe paths left by previous stalkers—players can follow existing trails of bolts to navigate dangerous sectors, though anomalies occasionally shift.
+• Discarded Protective Gear: Torn rubberized suits, cracked gas masks, empty ampoule syringes, and abandoned lead canisters near anomaly borders.
+• Stalker Stashes & Markers: Painted symbols on brick walls, cairns of stones, or hollowed-out tree stumps used to hide extra gear or mark safe lanes.
+• Skeletal Remains: Flattened animal or human remains inside Mosquito Manges, serving as stark visual warnings before the player steps forward.
+Would you like a Rust/Bevy procedural placement strategy (e.g., Poisson disk sampling + anomaly exclusion zones) to scatter these assets naturally, or a sector-by-sector map layout (Perimeter → Plague Quarter → Quarry → Golden Sphere)?

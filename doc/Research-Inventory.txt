@@ -1,0 +1,43 @@
+To build a simulation based on Roadside Picnic, you need collectible artifacts ("swag"), stationary environmental hazards ("anomalies"), systemic zone phenomena, and stalker mechanics.
+
+1. Artifacts (Collectible Items)
+
+Artifacts are physical objects left behind by the Visitors. Some have practical human applications, while others are incomprehensible or lethal.
+• So-So (Etak / Batteries): Small black cylinders or discs that generate endless electrical energy and self-replicate under certain conditions; used to power vehicles and devices.
+• Empty (Hydraulic / Spacers): Two copper-colored discs separated by ~18 inches of empty space that resist any force trying to push them together or pull them apart.
+• Full Empty: An Empty containing a viscous, luminescent blue liquid inside the gap; far rarer and heavier than a standard Empty.
+• Bracelets: Metallic rings that emit radiation or stimulate biological processes, boosting human health and metabolism.
+• Black Sparks (Black Sprays): Black beads or droplets that absorb and delay light, creating a visual lag when moved or illuminated.
+• Pins & Needles: Small crystalline or metallic objects that emit faint colored flashes or magnetic pulses; their true purpose is unknown.
+• Itchers: Objects that induce severe psychological distress, panic, and aggressive barking or howling behavior in dogs and humans nearby.
+• Wriggling Magnet: A constantly vibrating, oscillating magnetic object.
+• Spinning Ring (Perpetual Ring): A white metal ring that spins endlessly at high speed on any flat surface without friction loss.
+• Sponges: Porous objects capable of absorbing and neutralizing certain Zone toxins or radiation.
+• Lobster Eyes: Glassy, iridescent spheres with unknown optical properties.
+• Rattling Napkins / White Ring: Strange, non-reactive curiosities with no discovered utility.
+• Death Lamp: A cylindrical device that emits invisible rays lethal to all biological organisms within range.
+• Golden Sphere (Golden Ball): A heavy, warm, golden sphere located deep in the Zone that telepathically reads a person's deepest, truest subconscious desire and grants it—requiring a human sacrifice to bypass its guardian anomaly. [1] (https://pid.bungie.org/Roadside_Picnic_Artifacts.html), [2] (https://stalker.fandom.com/wiki/Roadside_Picnic)
+
+2. Anomalies (Localized Hazards)
+
+Anomalies are stationary or semi-stationary pockets where the laws of physics break down. [1] (https://scholarworks.calstate.edu/downloads/sf268585f), [2] (https://stalker.fandom.com/wiki/Roadside_Picnic)
+• Mosquito Mange ("Graviconcentrate"): An invisible pocket of extreme gravity (thousands of Gs) that crushes anything entering it into a flat, dense pancake. [1] (https://stalker.fandom.com/wiki/Roadside_Picnic)
+• Meatgrinder: An invisible, lethal spatial distortion that violently twists, compresses, and tears apart any matter inside it; after triggering, it goes dormant briefly before recharging. [1] (https://stalker.fandom.com/wiki/Roadside_Picnic)
+• Hell Slime (Witch's Jelly): A corrosive, glowing fluid found in basements and low-lying areas that dissolves organic tissue and solid matter on contact, turning bones into rubbery jelly; can be collected in specialized ceramic/glass containers. [1] (https://www.youtube.com/watch?v=_C8yAeVWCxY&t=666), [2] (https://pid.bungie.org/Roadside_Picnic_Artifacts.html)
+• Burning Fuzz: A plant-like or fibrous growth on metal and wires that ignites or burns on contact (note: on r/stalker, fans point out that the novel treats the fibrous plant material and a separate late-book burning heat-haze anomaly as distinct phenomena). [1] (https://www.reddit.com/r/stalker/comments/1g9quwr/i_created_a_simple_document_to_categorize_all/)
+• Silver Web: Delicate, nearly invisible metallic threads hanging across paths; touching them causes delayed, fatal cardiac arrest.
+• Jolly Ghosts: Localized pockets of swirling air, light, or sudden thermal/kinetic bursts that disorient or burn trespassers. [1] (https://pid.bungie.org/Roadside_Picnic_Artifacts.html)
+• Shadows / Time-Lags: Zones where shadows point toward the sun or where time and gravity fluctuate unpredictably.
+• Greenish / Blueish Lightning & Fire: Spontaneous, localized electrical discharges and cold or intense flames. [1] (https://pid.bungie.org/Roadside_Picnic_Artifacts.html), [2] (https://stalker.fandom.com/wiki/Roadside_Picnic)
+
+3. Systemic Zone Mechanics & Simulation Rules
+
+To make a simulation feel authentic to the book rather than just a generic shooter, incorporate these core world rules:
+• Nuts & Bolts (Detection): Most anomalies are invisible. Stalkers throw metal nuts and bolts ahead of themselves to test gravity, air density, and trigger thresholds before stepping forward.
+• Day vs. Night Cycle: Stalkers infiltrate at night to avoid UN/military patrols, searchlights, and automated turrets, relying on infrared goggles, night vision, and sensory intuition.
+• Containment & Economy: Artifacts are smuggled out past military cordons and sold either legally to the International Institute for Extraterrestrial Cultures or illegally on the black market via middlemen.
+• The "Emigration" Effect (Long-Term Debuffs): Anyone who lives near a Zone and moves away triggers localized disasters, bad luck, and severe statistical anomalies wherever they relocate.
+• Genetic Mutation: Prolonged Zone exposure does not give stalkers superpowers; instead, their children develop non-human traits (such as Red's daughter, "Monkey," who grows thick golden fur and loses human speech).
+• The "Living Dead" (Replicas): Deceased people buried near the Zone sometimes rise as autonomous, mindless biological replicas that walk back to their former homes.
+• Protective Gear: Specialized heavy rubberized suits, respirators, and lead/ceramic transport canisters are required to survive contamination and transport volatile items like Hell Slime. [1] (https://dsq-sds.org/article/id/6341/), [2] (https://stalker.fandom.com/wiki/Roadside_Picnic), [3] (https://pid.bungie.org/Roadside_Picnic_Artifacts.html), [4] (https://www.supersummary.com/roadside-picnic/summary/)
+What kind of simulation are you building (e.g., text-based survival, 2D/3D game, or economic/agent-based model), and would you like stat blocks or state-machine rules for these items?

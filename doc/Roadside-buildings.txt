@@ -1,0 +1,36 @@
+The Harmont Zone in Roadside Picnic is built from recognizable, everyday industrial and suburban landmarks distorted by the Visitation. Grouping these into distinct Points of Interest (POIs) makes it easy to structure sectors, loot tiers, and anomaly density in your 3D world.
+
+1. The Perimeter & Entry Points
+
+• The UN Cordon & Concrete Wall: A massive fortified barrier of concrete slabs, electrified barbed wire, minefields, and watchtowers with sweeping searchlights separating Harmont from the Zone.
+• The Old Railway Embankment: Overgrown, warped train tracks running through a gap in the perimeter; a classic stealth entry route flanked by drainage ditches and tall reeds.
+• Abandoned Forward Checkpoints: Sandbagged bunkers, rusted turnstiles, and collapsed wooden observation posts left behind when the military pulled the perimeter back.
+
+2. Residential & Suburban Sites
+
+• The Plague Quarter (Abandoned Suburbs): Blocks of silent, evacuated two-story wooden and brick houses, overgrown front yards, white picket fences, and untouched interiors (set tables, dusty radios, children's toys).
+• The Harmont Cemetery: Located near the edge of the Zone; shattered headstones, sunken graves, and disturbed earth where the "Living Dead" (replicas) originate.
+• The Old Schoolhouse / Town Clinic: Brick civic buildings with smashed windows, collapsed roofs, and basement corridors filled with stagnant water and Hell Slime.
+
+3. Industrial & Commercial Sites
+
+• The Garage / Auto-Repair Depot: A sprawling concrete-and-corrugated-iron complex with rusted hydraulic lifts, inspection pits (high risk for Hell Slime), wrecked trucks, and tool sheds.
+• The Brick Factory & Smokestacks: Half-collapsed kilns, drying sheds, and towering chimneys wrapped in dangling cables and Burning Fuzz.
+• The Substation & Transformer Yard: A maze of rusted electrical transformers, ceramic insulators, and fallen high-voltage pylons—a hotspot for So-So batteries and electrical anomalies.
+• Abandoned Grain Silos & Freight Warehouses: Dark, cavernous interiors where Silver Webs hang invisibly between roof beams and rusted shelving.
+
+4. Deep Zone Landmarks (High Danger / End-Game)
+
+• The Sand & Clay Quarry (The Pit): A massive, tiered open-pit excavation flooded at the bottom with oily water and thick mud bogs; home to wrecked excavators, crushed dump trucks, and dense clusters of Mosquito Manges.
+• The Roundhouse & Railyard: A dilapidated locomotive turntable and rusted train sheds housing twisted, melted rolling stock.
+• The "Golden Sphere" Amphitheater / Crater: The deepest, eerie clearing near the Quarry where the terrain flattens into smooth, glassy slag, guarded by an invisible Meatgrinder directly on the approach path.
+
+Suggested Level Progression & Risk Tiers
+
+
+Zone Tier	Key Sites	Primary Hazards	Typical Loot
+1. Outer Rim	Railway Embankment, Cordon Gap, Cemetery	UN patrols, searchlights, feral dogs, sparse Mosquito Manges	Pins, Rattling Napkins, So-So batteries
+2. Mid Zone	Plague Quarter, Garage Depot, Substation	Hell Slime in basements/pits, Silver Webs, Burning Fuzz	Bracelets, Black Sparks, Itchers, Empties
+3. Deep Zone	Brick Factory, Sand Quarry, Crater	Dense Meatgrinders, mud bogs, severe Zone contamination	Full Empties, Death Lamps, Golden Sphere
+
+Would you like to design modular building kits/greybox layouts for one of these sites (e.g., the Garage Depot or Sand Quarry), or create a Bevy sector-streaming and loot-spawning table?

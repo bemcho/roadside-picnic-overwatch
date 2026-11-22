@@ -1,0 +1,5 @@
+The CSV contains 14 ordered locations progressing from the town of Harmont to the core of the Zone, structured for direct import into mapping tools or spreadsheets:
+• Spatial Positioning: Sequential order (Order_From_Town), zone sector classification, and normalized X/Y map coordinates (0–100 scale matching the visual diagram).
+• Lore & Hazards: Book-accurate descriptions, specific anomalies (such as Mosquito Balds, Silver Cobweb, Witches' Jelly, and The Meat Grinder), and associated artifacts.
+• Route Waypoints: Explicit step-by-step sequence numbers for both Chapter 1 (Kirill's motorized run) and Chapter 4 (Redrick and Arthur's trek to the Golden Sphere).
+Would you like me to also generate a GeoJSON file with real-world projected coordinates (e.g., mapped onto a remote Canadian mining town) so you can load it directly into Google My Maps, QGIS, or Leaflet?

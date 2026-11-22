@@ -1,0 +1,50 @@
+Based strictly on the text of the novel Roadside Picnic, there are no real-world GPS coordinates, street addresses, or compass bearings. However, the Strugatsky brothers provide a clear relative spatial sequence for both the global phenomenon and the local Harmont map so you can lay out the landmarks in exact order.
+
+1. Global Positioning: The Pilman Radiant
+
+In the prologue, Dr. Valentine Pilman explains that all six Visitation Zones form a smooth, continuous curve across the globe (corresponding to a point between Earth and the star Deneb in the constellation Cygnus).
+In the text, the only explicitly named global coordinates/regions along this curve are:
+• Harmont (an unnamed English-speaking country—implied to be Canada via dollars, Royal Armoured Corps, and local slang—located on the edge of the primary Zone).
+• Five other unnamed Zones distributed along a single smooth planetary trajectory (the novel itself does not name Siberia, Uganda, or the South Pacific; those come from secondary adaptations).
+
+2. Local Map: Harmont to the Core (In Spatial Order)
+
+Every location in the book sits along a linear progression starting from the safe town center, crossing the border, and moving deeper into the Harmont Zone.
+
+A. Outside the Zone (The Town of Harmont)
+
+1. The "Clean" Districts / New Harmont: The outer residential areas where evacuated residents and UN personnel live safely away from the border.
+2. The Plague Quarter: The dilapidated, abandoned neighborhood immediately bordering the Zone where people refused to evacuate (and where strange mutations/resurrections occur).
+3. The Borscht (The Gutter): A seedy tavern in Harmont located near the edge of town, serving as the primary meeting spot for stalkers and black-market buyers.
+4. The International Institute for Extraterrestrial Cultures: A 13-story research building situated directly on the boundary line. Its upper floors have thick leaded-glass windows looking directly out over the entire Zone.
+5. The Perimeter / Cordon: The heavily fortified boundary line separating Harmont from the Zone, consisting of barbed wire, concrete walls, searchlights, and armed UN guard posts.
+
+B. Inside the Zone (Outer Rim to Center)
+
+6. The Abandoned Suburbs / Old Town: Just inside the perimeter; empty, crumbling houses and overgrown yards left behind after the Visitation.
+7. The Old Factory / Industrial Ruins: A decaying industrial sector on the near side of the Zone filled with rusted machinery, trenches, and early anomalies (such as "mosquito balds" and "hell slime").
+8. The Highway / Asphalt Road: A broken, cracked road running through the middle of the Zone that stalkers use as a primary navigational landmark and path for their "boot" (all-terrain vehicle).
+9. The Garage: A ruined transport depot along the road inside the Zone, used by Redrick Schuhart as a mid-way staging point and hiding spot.
+10. The Marsh / Swamp: A treacherous, wet lowland area deeper inside the Zone, notorious for invisible gravity traps and pools of lethal "witches' jelly."
+11. The Hills / Ridge: Elevated terrain beyond the marsh that overlooks the innermost basin of the Zone.
+12. The Quarry (The Core): A massive, deep excavation pit at the far end of the Zone. It is guarded by the invisible "Meat Grinder" anomaly at its entrance and houses the Golden Sphere at its center.
+
+Mapping Tip for the Book's Layout
+
+If you are drawing this on a flat map:
+• Place Harmont on one side, separated by a hard boundary line (The Perimeter) with The Institute sitting right on that border.
+• Draw the Harmont Zone as a relatively compact area (the text notes you can see almost the entire Zone from the 13th floor of the Institute).
+• Run a broken road from the Perimeter past the Old Factory and Garage, curving around the Marsh and leading straight to The Quarry at the far back edge.
+Would you like me to map out the exact step-by-step path Redrick takes during his first trip (Chapter 1) or his final trip to the Golden Sphere (Chapter 4) so you can trace his route across these landmarks?
+
+
+
+
+Visual Comparison for Your Map
+
+
+Map Element	Chapter 1 Route	Chapter 4 Route
+Entry Point	Official Institute Gate	Illegal breach near Plague Quarter
+Mode of Travel	Motorized "Boot" (Vehicle)	On foot (crawling/walking)
+Primary Path	Broken Asphalt Highway	Ditches → Railway → Marsh → Ridge
+Deepest Point	The Garage (Mid-Zone)	The Quarry / Golden Sphere (Core)

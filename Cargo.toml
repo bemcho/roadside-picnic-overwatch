@@ -1,0 +1,36 @@
+[package]
+name = "roadside-picnic"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Game engine — the only engine in this project.
+#
+# `3d` + `ui` instead of default features keeps the build lean; `audio` is
+# needed for ambient sound, `wav` for the synthesized WAV loop. Audio on
+# Linux requires ALSA dev libraries (`libasound2-dev`), which are installed
+# on this machine. `ktx2` + `zstd_rust` load the GLB textures that
+# tools/compress_glb_textures.py precompiles to BC7/BC5 with mip chains.
+bevy = { version = "0.20.1", default-features = false, features = ["3d", "ui", "audio", "wav", "jpeg", "ktx2", "zstd_rust"] }
+
+[features]
+# Offline meshlet preprocessing of dense UHD scans for Bevy's virtual geometry
+# (slow, pulls meshopt + metis); only used by `examples/meshletize.rs`.
+meshlet_processor = ["bevy/meshlet_processor"]
+
+[[example]]
+name = "meshletize"
+required-features = ["meshlet_processor"]
+
+# --- Release build: prioritize runtime speed. ---
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+# --- Dev build: small amount of optimization for our code, full for dependencies. ---
+# Makes running the game via `cargo run` actually playable while keeping rebuilds fast.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

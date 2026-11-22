@@ -1,0 +1,43 @@
+For a 3D game, you will want to translate the novel's literary concepts into concrete physics behaviors, shaders, audio cues, and inventory systems.
+
+1. Core 3D Gameplay Loop & Player Systems
+
+• Physics-Based Probing (Nuts & Bolts): Give the player an infinite or craftable pouch of metal nuts tied to cloth strips (for visibility). Throwing them triggers real-time physics interactions—sudden downward acceleration, mid-air suspension, or violent twisting—revealing invisible anomalies.
+• Sensory Detection (No HUD Radars): Avoid standard mini-maps. Use diegetic cues:
+	• Audio: Subtle low-frequency hums, static crackles, or sudden dead silence near anomalies.
+	• Visual Shaders: Slight chromatic aberration, heat-haze refraction, or shadows pointing toward the light source instead of away.
+• Stealth & Perimeter Crossing: Implement a day/night cycle with UN perimeter patrols, searchlights, automated acoustic/motion sensors, and mud-bog terrain that slows movement and increases stamina drain.
+• Diegetic Containment & Backpack Weight: High-tier artifacts require specialized containers (e.g., ceramic jars for Hell Slime, lead-lined cases for Death Lamps). Carrying unshielded artifacts applies continuous AoE debuffs to the player and nearby AI.
+
+2. 3D Anomaly Implementation (Physics & Shaders)
+
+
+Anomaly	3D Visuals & Audio	Physics & Trigger Logic
+Mosquito Mange	Nearly invisible; subtle air refraction shader; heavy bass thrum when a bolt enters.	High-multiplier downward force vector (F = m * 500g). Crushes ragdolls/objects flat; deals instant fatal crush damage.
+Meatgrinder	Faint dust swirl; sharp snapping sound upon activation.	State Machine: Idle → Triggered (applies rapid rotational torque + inward implosion force for 2s) → Cooldown (10s safe window to sprint past).
+Hell Slime	Viscous, glowing emerald fluid pooled in basements/ditches; soft bubbling audio.	Continuous acidic DoT; ignores standard boots unless wearing rubberized waders; extractable via syringe/ceramic flask.
+Silver Web	Ultra-thin specular strands catching flashlight beams at specific grazing angles.	Zero immediate impact; starts an invisible 60-second timer resulting in sudden cardiac arrest (instant death) unless treated with rare cardiac stimulants.
+Burning Fuzz	Dry, moss-like strands hanging from rusted metal/wires; faint crackling.	Ignites on rapid movement (high velocity threshold), dealing fire damage; safe to pass if crouching/moving slowly.
+Jolly Ghosts	Erratic, floating light orbs or sudden gusts of wind kicking up leaves.	Dynamic patrol spline; emits random thermal bursts or disorienting camera shake/blur on proximity.
+
+
+3. Artifact Mechanics & Player Utility
+
+
+Artifact	3D Mesh / Shader Idea	Gameplay Effect / Risk
+So-So (Etak)	Small matte-black cylinder; faint blue arc when grounded.	Infinite battery charge for flashlights, night vision, and powered tools. High sell value.
+Empty / Full Empty	Two copper discs floating 0.5m apart with rigid constraint (Full adds swirling blue liquid shader).	Very heavy; blocks bullets/shrapnel passing between discs; high scientific payout.
+Black Sparks	Cluster of dark beads with a custom post-process motion-trail / light-delay shader.	Absorbs flashlight beams nearby, blinding the player's light source while carried unshielded.
+Itchers	Jagged, vibrating metallic shard.	Emits an invisible radius that panics mutant dogs/wildlife and causes auditory hallucinations and stamina drain in humans.
+Bracelets	Tarnished metallic ring.	Passively regenerates stamina and minor health, but slowly increases long-term "Zone Contamination" meter.
+Death Lamp	Dark, perforated cylinder.	Emits an invisible lethal AoE sphere (kills NPCs, wildlife, and the player through walls unless sealed in a heavy lead cask).
+Golden Sphere	Heavy, warm gold sphere emitting soft volumetric light.	End-game objective; guarded by a lethal Meatgrinder that only enters Cooldown if an NPC or co-op partner triggers it first.
+
+
+4. Meta-Progression & World Systems
+
+• Factions & Economy:
+	• The Institute: Pays reliably for intact artifacts and scientific readings, unlocking better suits, detectors, and containment flasks.
+	• Black Market (Borscht / Bar): Pays higher cash for illegal/dangerous items (like Hell Slime or Itchers) and sells untraceable gear, bribes, and forged passes.
+• Contamination & Long-Term Consequences: Instead of standard radiation that clears with a pill, track cumulative Zone Exposure. High exposure triggers hallucinations, attracts anomalies, and unlocks darker narrative endings rather than just lowering HP.
+Which game engine are you using (Unreal Engine 5, Unity, or Godot), and would you like pseudocode/blueprint logic for the nut-throwing anomaly detection or a level design layout for your first Zone sector?
