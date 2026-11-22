@@ -1,8 +1,8 @@
 //! Skeletal animation of the stalker: Crawl, Idle, Walk, Run, and Jump clips
 //! baked into the rigged model (see `tools/rig_stalker.py`), cross-faded by
-//! gait. Crawling also pitches the whole body face-down onto the ground. The
-//! clips leave the trench coat's bones alone: its skirt swings with the
-//! stalker's motion and the wind.
+//! gait. Crawling also pitches the whole body face-down onto the ground. A rig
+//! built with coat bones (`--coat`) keeps them out of the clips: the skirt
+//! swings with the stalker's motion and the wind. The soldier rig has none.
 
 use std::f32::consts::TAU;
 use std::time::Duration;

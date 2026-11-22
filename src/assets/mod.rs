@@ -13,7 +13,8 @@ use bevy::prelude::*;
 use bevy::shader::Shader;
 
 pub const SPLASH_HANGAR: &str = "textures/splash/hangar.png";
-pub const STALKER_MODEL: &str = "models/stalker/uhd/stalker_rigged.glb";
+/// The player's stalker: the soldier scan, rigged by `tools/rig_stalker.py`.
+pub const STALKER_MODEL: &str = "models/soldier/uhd/soldier_rigged.glb";
 pub const TERRAIN_SHADER: &str = "shaders/terrain.wesl";
 pub const WATER_SHADER: &str = "shaders/water.wesl";
 pub const CUTAWAY_SHADER: &str = "shaders/cutaway.wesl";

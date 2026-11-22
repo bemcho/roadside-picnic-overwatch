@@ -19,20 +19,6 @@ pub(super) struct SplashJoint {
     bone: Bone,
     rest: Quat,
     rig_from_joint: Quat,
-    /// The rig binds with outstretched arms; the clips, and the splash, hang
-    /// them from the shoulders by this turn in rig axes.
-    hang: Quat,
-}
-
-impl Bone {
-    fn hang(self) -> Quat {
-        match self {
-            Bone::UpperArm(side) | Bone::Forearm(side) | Bone::Hand(side) => {
-                Quat::from_rotation_z(-side * std::f32::consts::FRAC_PI_2)
-            }
-            _ => Quat::IDENTITY,
-        }
-    }
 }
 
 #[derive(Component)]
@@ -148,7 +134,6 @@ fn bind_joints(
             bone,
             rest: joint.rotation,
             rig_from_joint,
-            hang: bone.hang(),
         });
     }
     let mut motion = IdleMotion {
@@ -180,13 +165,6 @@ pub(super) fn move_stalker(
     for (joint, mut transform) in &mut joints {
         let a = motion.angles(joint.bone, weight, breath) * (std::f32::consts::PI / 180.0);
         let turn = Quat::from_euler(EulerRot::YXZ, a.y, a.x, a.z);
-        // The upper arm turns the whole arm down; the lower joints inherit
-        // that, so their gestures act in the hanging arm's frame.
-        let turn = match joint.bone {
-            Bone::UpperArm(_) => turn * joint.hang,
-            Bone::Forearm(_) | Bone::Hand(_) => joint.hang.inverse() * turn * joint.hang,
-            _ => turn,
-        };
         transform.rotation =
             joint.rest * joint.rig_from_joint.inverse() * turn * joint.rig_from_joint;
     }

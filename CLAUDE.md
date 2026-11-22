@@ -62,8 +62,11 @@ Hover descriptions (`ui/tooltip.rs`) pick, in order, a `Describe`d entity
 The stalker surveys an `Explored` grid within 150 m as they travel.
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
-in `drive_vehicle`. A yellow ring (`ui/locator.rs`) marks the stalker, or the
-car they drive, once the camera pulls back past ~18 m, never under 34 px wide.
+in `drive_vehicle`. A yellow ring (`ui/locator.rs`) lies on the ground around
+the stalker, or the car they drive, at every zoom: its vertices follow the
+rendered terrain (or the water when wading), it never shrinks under 34 px wide,
+a relative depth bias keeps it over road slabs and stones, and it pulses while
+the stalker stands still.
 
 ## Procedural content
 
@@ -144,7 +147,7 @@ car they drive, once the camera pulls back past ~18 m, never under 34 px wide.
   4–10 s that come and go. It leans and stirs the trees, bends the imported weeds and
   bushes in `shaders/plant_wind.wesl` (each vertex by its height above the
   instance's root), sways the nearest plant's full scan from the root, drifts and churns the ground fog,
-  and swings the stalker's coat.
+  and swings the coat of a rig built with coat bones (the soldier has none).
 - **Plants** (`src/world/plants.rs`): dry weeds (dry grass, dandelion,
   ragweed) favor dry ground, shrubs (shrub, bramble, dog rose, elder, juniper,
   wormwood) favor woodland, thornbushes the uplands, and damp weeds (hogweed,
@@ -325,15 +328,20 @@ car they drive, once the camera pulls back past ~18 m, never under 34 px wide.
   with distance. Footfalls follow accepted travel and attack sounds follow
   chase, lunge, and hit events. M mutes both positional and non-positional audio.
   Playback follows the system's default audio output.
-- **Stalker model** (`assets/models/stalker/uhd/stalker_rigged.glb`) is the UHD Tripo
-  scan rigged in headless Blender by `tools/rig_stalker.py` (its docstring has the UHD
-  command): it binds in a T-pose that the clips hang from the shoulders, and adds eight
-  coat bones (`CoatFront/Back/Left/Right.1/.2`) that no clip keys. The script also bakes
-  the Crawl/Idle/Jump/Run/Walk clips (glTF animation indices 0–4, sorted by name).
-  `src/player/animation.rs` cross-fades them by `Gait`, pitches the body face-down while
-  crawling (the Crawl clip is posed standing) and swings the coat against the air and in
-  gusts; the splash hangs the arms the same way. Edit motion in the script and
-  regenerate rather than hand-editing the GLB.
+- **Stalker model** (`STALKER_MODEL`: `assets/models/soldier/uhd/soldier_rigged.glb`)
+  is the UHD Tripo soldier scan (~2M triangles, 4K normal-mapped PBR) rigged in
+  headless Blender by `tools/rig_stalker.py` (its docstring has the soldier command).
+  It binds in the scan's own arms-down pose. Its arms hang against the body, where
+  distance weights would give the torso's sides to the arms, so bone heat runs on the
+  `medium/` scan of the same soldier and `--weights-from` copies those weights onto
+  the full mesh. The script also bakes the Crawl/Idle/Jump/Run/Walk clips (glTF
+  animation indices 0–4, sorted by name). `src/player/animation.rs` cross-fades them
+  by `Gait` and pitches the body face-down while crawling (the Crawl clip is posed
+  standing); the splash poses the same rig. The older trench-coat stalker
+  (`models/stalker/uhd/stalker_rigged.glb`, T-pose bind with `--coat` bones that
+  `swing_coat` drives) is no longer loaded. Edit motion in the script and regenerate
+  rather than hand-editing the GLB. Preview clips with
+  `~/Projects/agentic/agentic-tooling/media/glb-preview`.
 - **Sky & lighting** (`src/world/mod.rs`, `weather.rs`) use Bevy's physical `Atmosphere` with
   a `SunDisk` lit at `lux::RAW_SUNLIGHT` and a moon at `MOON_LUX`; the camera runs HDR at
   `Exposure { ev100: 13.0 }` by day, eased toward 9.0 at night by `light_the_sky`. Tune light

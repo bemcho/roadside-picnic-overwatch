@@ -495,7 +495,8 @@ about two of every three 24 s slots, veering it a little while they blow.
   (its scene keeps the scan's own materials),
 - `ground_fog::update_ground_fog` drifts the fog with the wind and churns it in
   gusts,
-- `player::animation::swing_coat` swings the stalker's coat bones.
+- `player::animation::swing_coat` swings coat bones when the rig has them
+  (`rig_stalker.py --coat`; the soldier rig has none).
 
 ## UI and player-facing text
 
@@ -516,6 +517,12 @@ Useful query relationships:
   outline (`places::structure_on_ray`; the hall uses its cut-away box), then the
   named ground under it (`places::place_at`). Places outside the `Explored`
   survey grid show only their kind.
+- the locator ring (`ui/locator.rs`) is a world-space mesh, not a UI node: each
+  frame `update_locator` lays its vertices on `Terrain::mesh_height_at` plus
+  `water_depth_at` around the `Player` (wider while `Driving`), widens it to
+  a minimum size in screen pixels, and pulses it while the player's ground
+  position stays put. Its material's `depth_bias` is relative to depth on the
+  float depth buffer, so it shows over road slabs at every zoom.
 
 ## Audio
 

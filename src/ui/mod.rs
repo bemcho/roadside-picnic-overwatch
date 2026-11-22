@@ -70,7 +70,10 @@ impl Plugin for UiPlugin {
             curtain::CurtainPlugin,
             FrameTimeDiagnosticsPlugin::new(20),
         ))
-        .add_systems(OnEnter(AppState::InGame), spawn_hud)
+        .add_systems(
+            OnEnter(AppState::InGame),
+            (spawn_hud, locator::spawn_locator),
+        )
         .add_systems(OnExit(AppState::InGame), despawn_hud)
         .add_systems(
             Update,
@@ -236,7 +239,6 @@ fn spawn_hud(mut commands: Commands) {
         ));
 
         tooltip::spawn_tooltip(hud);
-        locator::spawn_locator(hud);
 
         hud.spawn((
             ArtifactReadout,

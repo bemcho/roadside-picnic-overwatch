@@ -6,6 +6,15 @@ Medium runtime build (raw Tripo export, grounded, front faces -Y):
   npx @gltf-transform/cli@4 resize rigged.glb assets/models/stalker/medium/stalker.glb \
       --width 2048 --height 2048
 
+Soldier build, the player model (assets/models/soldier/uhd/soldier.glb: glTF +Z front,
+arms hanging against the body, unrigged, normal mapped, ~2M triangles). Bone heat runs
+on the medium scan of the same model and its weights are copied onto the full mesh:
+  blender -b --factory-startup --python-exit-code 1 --python tools/rig_stalker.py -- \
+      assets/models/soldier/uhd/soldier.glb assets/models/soldier/uhd/soldier_rigged.glb \
+      --height 0.977325 --weights-from assets/models/soldier/medium/soldier.glb \
+      --image-format AUTO
+  python3 tools/compress_glb_textures.py assets/models/soldier/uhd/soldier_rigged.glb
+
 UHD build (assets/models/stalker/uhd/stalker.glb: glTF +X front, arms outstretched,
 unrigged, 8192 px JPEG). Keep the full geometry and texture; the output is the source
 mesh skinned as-is:
@@ -25,6 +34,9 @@ Blender coords: Z up, model front faces -Y, character's left is +X (glTF: front 
                   carry the trench-coat skirt. They stay in rest pose in every clip.
   --weights       heat (Blender bone heat, medium) or proximity (distance to bone
                   segments, for ~1M-triangle meshes where heat is too slow).
+  --weights-from  a lighter scan of the same model: bone heat runs on it and the
+                  weights are copied onto the full mesh. Use it when the arms hang
+                  against the body, where proximity gives the torso's sides to the arms.
   --image-format  JPEG re-encodes at quality 88; AUTO keeps the source image bytes.
 """
 import argparse
@@ -45,10 +57,13 @@ def parse_args():
     p.add_argument('--t-pose', action='store_true')
     p.add_argument('--coat', action='store_true')
     p.add_argument('--weights', choices=('heat', 'proximity'), default='heat')
+    p.add_argument('--weights-from')
     p.add_argument('--image-format', choices=('JPEG', 'AUTO'), default='JPEG')
     args = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     if args.coat and args.weights != 'proximity':
         p.error('--coat needs --weights proximity')
+    if args.weights_from and args.weights != 'heat':
+        p.error('--weights-from computes heat weights')
     return args
 
 
@@ -57,18 +72,6 @@ FPS = 30
 bpy.ops.wm.read_factory_settings(use_empty=True)
 sc = bpy.context.scene
 sc.render.fps = FPS
-bpy.ops.import_scene.gltf(filepath=A.src)
-mesh = next(o for o in sc.objects if o.type == 'MESH')
-for o in list(sc.objects):
-    if o is not mesh and o.type == 'EMPTY':
-        mesh.parent = None
-bpy.context.view_layer.objects.active = mesh
-mesh.select_set(True)
-bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
-bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-for o in list(sc.objects):
-    if o is not mesh:
-        bpy.data.objects.remove(o)
 
 
 def vertex_array(obj):
@@ -77,21 +80,43 @@ def vertex_array(obj):
     return co.reshape(-1, 3)
 
 
-def apply_mesh_transform():
+def apply_transform(obj):
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
 
 
-if A.yaw_degrees:
-    mesh.rotation_mode = 'XYZ'  # glTF imports use quaternions, which would ignore rotation_euler
-    mesh.rotation_euler.z = math.radians(A.yaw_degrees)
-    apply_mesh_transform()
+def import_scan(path):
+    """Import a scan's mesh with its transforms applied, turned by --yaw-degrees and
+    grounded at --height."""
+    before = set(sc.objects)
+    bpy.ops.import_scene.gltf(filepath=path)
+    imported = [o for o in sc.objects if o not in before]
+    obj = next(o for o in imported if o.type == 'MESH')
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.parent_clear(type='CLEAR_KEEP_TRANSFORM')
+    apply_transform(obj)
+    for o in imported:
+        if o is not obj:
+            bpy.data.objects.remove(o)
+    if A.yaw_degrees:
+        obj.rotation_mode = 'XYZ'  # glTF imports use quaternions, which would ignore rotation_euler
+        obj.rotation_euler.z = math.radians(A.yaw_degrees)
+        apply_transform(obj)
+    if A.height:
+        z = vertex_array(obj)[:, 2]
+        s = A.height / (z.max() - z.min())
+        obj.scale = (s, s, s)
+        obj.location.z = -z.min() * s
+        apply_transform(obj)
+    return obj
+
+
+mesh = import_scan(A.src)
 V = vertex_array(mesh)
-if A.height:
-    s = A.height / (V[:, 2].max() - V[:, 2].min())
-    mesh.scale = (s, s, s)
-    mesh.location.z = -V[:, 2].min() * s
-    apply_mesh_transform()
-    V = vertex_array(mesh)
 H = V[:, 2].max()
 
 
@@ -207,7 +232,7 @@ for b in eb:
 bpy.ops.object.mode_set(mode='OBJECT')
 
 
-def heat_weights():
+def heat_weights(mesh):
     """Blender bone-heat weights, computed on a welded copy scaled 10x (small meshes only)."""
     bpy.ops.object.select_all(action='DESELECT')
     mesh.select_set(True)
@@ -322,8 +347,37 @@ def apply_proximity_weights():
     mesh.parent = rig
 
 
-if A.weights == 'heat':
-    heat_weights()
+def transfer_heat_weights():
+    """Bone heat on the lighter scan, copied onto the nearest surface of the full mesh.
+
+    Heat only reaches skin that can see the bone, so the torso beside a hanging arm
+    stays with the torso. Bone heat is too slow for the full mesh itself.
+    """
+    proxy = import_scan(A.weights_from)
+    heat_weights(proxy)
+    for group in proxy.vertex_groups:
+        mesh.vertex_groups.new(name=group.name)
+    copy = mesh.modifiers.new('Weights', 'DATA_TRANSFER')
+    copy.object = proxy
+    copy.use_vert_data = True
+    copy.data_types_verts = {'VGROUP_WEIGHTS'}
+    copy.vert_mapping = 'POLYINTERP_NEAREST'
+    copy.layers_vgroup_select_src = 'ALL'
+    copy.layers_vgroup_select_dst = 'NAME'
+    bpy.ops.object.select_all(action='DESELECT')
+    bpy.context.view_layer.objects.active = mesh
+    bpy.ops.object.modifier_apply(modifier=copy.name)
+    bpy.data.objects.remove(proxy)
+    mod = mesh.modifiers.new('Armature', 'ARMATURE')
+    mod.object = rig
+    mesh.parent = rig
+    print('TRANSFERRED', len(mesh.vertex_groups), 'bone weights onto', len(mesh.data.vertices), 'vertices')
+
+
+if A.weights_from:
+    transfer_heat_weights()
+elif A.weights == 'heat':
+    heat_weights(mesh)
 else:
     apply_proximity_weights()
 
@@ -500,8 +554,15 @@ for pb in rig.pose.bones:
     pb.rotation_quaternion = Quaternion()
     pb.location = Vector()
 
+# Bake tangents for normal maps, or Bevy generates them for every vertex at load.
+normal_mapped = any(
+    node.type == 'NORMAL_MAP'
+    for slot in mesh.material_slots if slot.material and slot.material.node_tree
+    for node in slot.material.node_tree.nodes
+)
 bpy.ops.export_scene.gltf(
     filepath=A.dst, export_format='GLB', export_animation_mode='ACTIONS',
+    export_tangents=normal_mapped,
     export_image_format=A.image_format, export_jpeg_quality=88, export_apply=False,
     # Sampling writes a channel for every bone; without it only keyed bones (not the coat) get one.
     export_force_sampling=not A.coat, export_optimize_animation_size=False,
