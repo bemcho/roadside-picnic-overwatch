@@ -42,6 +42,9 @@ use bevy::camera::visibility::VisibilityRange;
 use bevy::light::atmosphere::ScatteringMedium;
 use bevy::light::{Atmosphere, SunDisk, light_consts::lux};
 use bevy::prelude::*;
+use bevy::render::RenderApp;
+use bevy::render::mesh::allocator::MeshAllocatorSettings;
+use bevy::render::slab_allocator::SlabAllocatorSettings;
 use bevy::transform::TransformSystems;
 use bevy::world_serialization::WorldInstanceReady;
 
@@ -55,6 +58,8 @@ use water::WaterMaterial;
 
 /// Atmosphere density relative to Earth; thicker air reads as Zone haze.
 const HAZE: f32 = 2.5;
+
+const MIB: u64 = 1024 * 1024;
 
 /// Spawns the base world (terrain, sun, ambience) when entering the Zone,
 /// and tears it down when leaving.
@@ -81,6 +86,9 @@ struct LandscapeMaterials {
 
 impl Plugin for WorldPlugin {
     fn build(&self, app: &mut App) {
+        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
+            render_app.insert_resource(mesh_allocator_settings());
+        }
         app.add_plugins((
             MaterialPlugin::<TerrainMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
@@ -172,6 +180,7 @@ impl Plugin for WorldPlugin {
                 tree_fall::pick_tree_to_break,
                 tree_fall::break_selected_trees,
                 canopy::update_canopy_motion,
+                canopy::stream_close_trees,
             )
                 .chain()
                 .before(TransformSystems::Propagate)
@@ -223,6 +232,22 @@ fn near_anchor(tile: IVec2, anchors: &[IVec2], radius: i32) -> bool {
     anchors
         .iter()
         .any(|anchor| (tile - *anchor).abs().max_element() <= radius)
+}
+
+/// Bevy grows a shared vertex slab 1.5x at a time up to 512 MiB, holding the
+/// old and the new buffer while it copies, and puts meshes up to 256 MiB in
+/// those slabs. On a 6 GB card that spike ran out of memory, so the UHD scans
+/// get buffers of their own (freed whole when they unload) and shared slabs
+/// stay small.
+fn mesh_allocator_settings() -> MeshAllocatorSettings {
+    MeshAllocatorSettings {
+        slab_allocator_settings: SlabAllocatorSettings {
+            max_slab_size: 128 * MIB,
+            large_threshold: 32 * MIB,
+            ..default()
+        },
+        ..default()
+    }
 }
 
 fn detail_range(distance: f32, fade: f32) -> VisibilityRange {

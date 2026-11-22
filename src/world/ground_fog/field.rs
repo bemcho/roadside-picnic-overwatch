@@ -1,14 +1,19 @@
 //! The ground fog's map of the Zone: the surface the fog rests on (land or
-//! open water) and how readily fog gathers there. Fog favors water and its
-//! banks, vegetated ground, hollows where cold air pools, and low elevations.
-//! Sampled from the distant terrain tiles while the landscape is prepared.
+//! open water) and where fog gathers: over water and its banks (the marsh,
+//! the coast and the lake), in the quarry basin and in the three dense woods.
+//! The rest of the map stays clear, even in saturated air. Sampled from the
+//! distant terrain tiles while the landscape is prepared.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::VertexAttributeValues;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use super::super::terrain::{SCENIC_TILE_RADIUS, TILE_SIZE, TerrainGrid, WaterVertex, smoothstep};
+use super::super::canopy::wood;
+use super::super::terrain::{
+    QUARRY_CENTER, QUARRY_RADII, SCENIC_TILE_RADIUS, TILE_SIZE, TerrainGrid, WaterVertex,
+    smoothstep,
+};
 
 /// Matches the distant tiles' vertex spacing, in meters.
 const SPACING: f32 = 8.0;
@@ -28,7 +33,6 @@ pub(super) fn origin() -> Vec2 {
 pub(in crate::world) struct FogField {
     surface: Vec<f32>,
     wet: Vec<f32>,
-    exposed: Vec<f32>,
 }
 
 impl Default for FogField {
@@ -36,14 +40,13 @@ impl Default for FogField {
         Self {
             surface: vec![UNMAPPED; SIZE * SIZE],
             wet: vec![0.0; SIZE * SIZE],
-            exposed: vec![1.0; SIZE * SIZE],
         }
     }
 }
 
 impl FogField {
     /// Records one distant tile's vertices: surface height (water level where
-    /// flooded), wetness, and exposed earth from the terrain's shader weights.
+    /// flooded) and wetness from the terrain's shader weights.
     pub(in crate::world) fn add_tile(
         &mut self,
         grid: TerrainGrid,
@@ -71,23 +74,20 @@ impl FogField {
             let index = cell.y as usize * SIZE + cell.x as usize;
             self.surface[index] = position[1] + water.depth.max(0.0);
             self.wet[index] = weight[1].max(f32::from(water.depth > 0.0));
-            self.exposed[index] = weight[0];
         }
     }
 
-    /// Per texel: surface height (coarse, remainder) and fog affinity.
+    /// Per texel: surface height (coarse, remainder) and fog affinity, 0
+    /// wherever fog must not form.
     fn texels(&self) -> Vec<[f32; 4]> {
-        let pooled = box_blur(&self.surface, 12);
         let damp = box_blur(&self.wet, 4);
         (0..SIZE * SIZE)
             .map(|index| {
                 let surface = self.surface[index];
+                let cell = Vec2::new((index % SIZE) as f32, (index / SIZE) as f32);
+                let at = origin() + cell * SPACING;
                 let water = self.wet[index].max(damp[index] * 1.6).min(1.0);
-                let plants = 1.0 - self.exposed[index];
-                let hollow = smoothstep(0.5, 7.0, pooled[index] - surface);
-                let lowland = 1.0 - smoothstep(4.0, 40.0, surface);
-                let affinity =
-                    (0.45 * water + 0.2 * plants + 0.25 * hollow + 0.2 * lowland).clamp(0.0, 1.0);
+                let affinity = water.max(quarry_basin(at)).max(0.8 * wood(at));
                 let coarse = (surface / HEIGHT_STEP).round() * HEIGHT_STEP;
                 [coarse, surface - coarse, affinity, 1.0]
             })
@@ -113,6 +113,12 @@ impl FogField {
             RenderAssetUsages::RENDER_WORLD,
         )
     }
+}
+
+/// 1 on the quarry's floor and benches, easing to 0 at its rim.
+fn quarry_basin(at: Vec2) -> f32 {
+    let from_center = (at - Vec2::from(QUARRY_CENTER)) / Vec2::from(QUARRY_RADII);
+    1.0 - smoothstep(0.75, 1.0, from_center.length())
 }
 
 /// Mean over a `(2 * radius + 1)²` square, clamped at the edges.
@@ -154,41 +160,70 @@ fn half_float(value: f32) -> u16 {
 
 #[cfg(test)]
 mod tests {
+    use super::super::super::canopy::WOODS;
     use super::super::super::hydrology::{SWAMP, WATER_LEVEL};
-    use super::super::super::terrain::Terrain;
+    use super::super::super::terrain::{BASE, Terrain};
+    use super::super::super::town::PLAZA;
     use super::*;
 
-    fn texel(texels: &[[f32; 4]], at: Vec2) -> [f32; 4] {
-        let cell = ((at - origin()) / SPACING).round().as_uvec2();
-        texels[cell.y as usize * SIZE + cell.x as usize]
-    }
-
-    #[test]
-    fn fog_rests_on_open_water_and_favors_it_over_mountain_tops() {
-        let terrain = Terrain::new();
-        // The deepest of the marsh's pools, and a summit of the mountains
-        // north of the Zone's ridge.
-        let depth = |at: Vec2| terrain.water_depth_at(at.x, at.y);
-        let lake = (-30..=30)
-            .flat_map(|i| (-30..=30).map(move |j| SWAMP + Vec2::new(i as f32, j as f32) * 6.0))
-            .max_by(|a, b| depth(*a).total_cmp(&depth(*b)))
-            .expect("the marsh has pools");
-        let summit = Vec2::new(-744.0, 400.0);
+    /// The texels at `points`, from a field holding just their tiles.
+    fn texels_at(terrain: &Terrain, points: &[Vec2]) -> Vec<[f32; 4]> {
         let mut field = FogField::default();
-        for at in [lake, summit] {
-            let grid = TerrainGrid::distant((at / TILE_SIZE).floor().as_ivec2());
+        for at in points {
+            let grid = TerrainGrid::distant((*at / TILE_SIZE).floor().as_ivec2());
             let (ground, water) = terrain.build_grid(grid);
             field.add_tile(grid, &ground, &water);
         }
         let texels = field.texels();
-        let lake = texel(&texels, lake);
-        let peak = texel(&texels, summit);
-        assert!((lake[0] + lake[1] - WATER_LEVEL).abs() < 0.05, "{lake:?}");
-        assert!(lake[1].abs() <= HEIGHT_STEP * 0.5);
-        assert!(
-            lake[2] > 0.7 && peak[2] < 0.3,
-            "lake {lake:?} peak {peak:?}"
-        );
+        points
+            .iter()
+            .map(|at| {
+                let cell = ((*at - origin()) / SPACING).round().as_uvec2();
+                texels[cell.y as usize * SIZE + cell.x as usize]
+            })
+            .collect()
+    }
+
+    /// The deepest of the marsh's pools.
+    fn marsh_pool(terrain: &Terrain) -> Vec2 {
+        let depth = |at: Vec2| terrain.water_depth_at(at.x, at.y);
+        (-30..=30)
+            .flat_map(|i| (-30..=30).map(move |j| SWAMP + Vec2::new(i as f32, j as f32) * 6.0))
+            .max_by(|a, b| depth(*a).total_cmp(&depth(*b)))
+            .expect("the marsh has pools")
+    }
+
+    #[test]
+    fn fog_rests_on_open_water() {
+        let terrain = Terrain::new();
+        let [pool] = texels_at(&terrain, &[marsh_pool(&terrain)])[..] else {
+            unreachable!("one point in, one texel out");
+        };
+        assert!((pool[0] + pool[1] - WATER_LEVEL).abs() < 0.05, "{pool:?}");
+        assert!(pool[1].abs() <= HEIGHT_STEP * 0.5);
+    }
+
+    #[test]
+    fn fog_gathers_only_over_water_the_quarry_and_the_woods() {
+        let terrain = Terrain::new();
+        let foggy = [
+            ("marsh pool", marsh_pool(&terrain)),
+            ("quarry floor", Vec2::from(QUARRY_CENTER)),
+            ("north wood", WOODS[2].0),
+        ];
+        let clear = [
+            ("mountain summit", Vec2::new(-744.0, 400.0)),
+            ("hangar", Vec2::from(BASE)),
+            ("town plaza", PLAZA),
+        ];
+        let points: Vec<_> = foggy.iter().chain(&clear).map(|(_, at)| *at).collect();
+        let texels = texels_at(&terrain, &points);
+        for ((name, _), texel) in foggy.iter().zip(&texels) {
+            assert!(texel[2] > 0.5, "{name} should gather fog: {texel:?}");
+        }
+        for ((name, _), texel) in clear.iter().zip(&texels[foggy.len()..]) {
+            assert!(texel[2] < 0.05, "{name} should stay clear: {texel:?}");
+        }
     }
 
     #[test]

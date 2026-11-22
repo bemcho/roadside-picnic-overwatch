@@ -1,7 +1,7 @@
 //! The map's trees: imported, textured models growing in the landmark groves,
 //! three dense woods and around the hangar. There are no procedural trees.
 //! Each shows its light crown-card model, and the full UHD scan when the
-//! camera stands right by it.
+//! camera stands right by it. The scans stream in only near the camera.
 
 use std::f32::consts::TAU;
 
@@ -10,18 +10,19 @@ use bevy::gltf::GltfMaterial;
 use bevy::light::NotShadowCaster;
 use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::prelude::*;
+use bevy::world_serialization::WorldInstanceReady;
 
 use crate::assets::{self, PreloadedAssets};
 use crate::player::PlayerCamera;
 
 use super::collision::{Collider, Pillar};
 use super::cordon::{inside_yard, near_wall_or_checkpoint, shelterbelt};
-use super::detail_range;
 use super::hydrology::SWAMP;
 use super::terrain::{
     BALD_CENTER, BASE, QUARRY_CENTER, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep,
 };
 use super::weather::Wind;
+use super::{detail_range, range_scene_meshes};
 
 const SEED: u32 = 0xD4EA_9021;
 const SHADOW_ENTER: f32 = 48.0;
@@ -30,6 +31,10 @@ const SHADOW_EXIT: f32 = 55.0;
 /// is far too dense to show more than the nearest few.
 const UHD_RANGE: f32 = 8.0;
 const UHD_FADE: f32 = 4.0;
+/// A scan starts loading this far from the camera (measured to the tree's
+/// middle, like its visibility range), and unloads a few meters further out.
+const UHD_LOAD: f32 = UHD_RANGE + UHD_FADE + 4.0;
+const UHD_DROP: f32 = UHD_LOAD + 5.0;
 /// Three dense woods on the Harmont map, clear of the sites and the railway.
 pub(super) const WOODS: [(Vec2, f32); 3] = [
     (Vec2::new(-336.0, 559.0), 150.0),
@@ -310,6 +315,8 @@ pub(super) struct CanopyVisual {
     rest: Quat,
     phase: f32,
     bend: f32,
+    /// The species' full scan.
+    close: &'static str,
 }
 
 impl CanopyVisual {
@@ -324,6 +331,7 @@ impl CanopyVisual {
             } else {
                 0.0
             },
+            close: tree.species.model().close,
         }
     }
 
@@ -348,22 +356,19 @@ impl CanopyVisual {
     }
 }
 
-/// A species' crown-card model and its full scan: mesh and material each.
-#[derive(Default)]
-struct TreeLooks {
-    far: (Handle<Mesh>, Handle<StandardMaterial>),
-    close: (Handle<Mesh>, Handle<StandardMaterial>),
-}
-
+/// Each species' crown-card mesh and material.
 #[derive(Resource, Default)]
-pub(super) struct CanopyModels([TreeLooks; MODELS.len()]);
+pub(super) struct CanopyModels([(Handle<Mesh>, Handle<StandardMaterial>); MODELS.len()]);
 
+/// The tree's full scan, a child entity loaded while the camera is near.
+#[derive(Component)]
+pub(super) struct CloseScan(Entity);
+
+/// Preloads the crown-card models; the full scans stream in near the camera.
 pub(super) fn preload_canopies(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
     for spec in &MODELS {
-        for path in [spec.path, spec.close] {
-            let (mesh, paint) = assets::load_single_primitive(&server, path);
-            preloaded.0.extend([mesh.untyped(), paint.untyped()]);
-        }
+        let (mesh, paint) = assets::load_single_primitive(&server, spec.path);
+        preloaded.0.extend([mesh.untyped(), paint.untyped()]);
     }
 }
 
@@ -383,10 +388,7 @@ pub(super) fn prepare_canopy_materials(
             materials.add(standard_material_from_gltf_material(paint)),
         )
     };
-    commands.insert_resource(CanopyModels(MODELS.map(|spec| TreeLooks {
-        far: look(spec.path),
-        close: look(spec.close),
-    })));
+    commands.insert_resource(CanopyModels(MODELS.map(|spec| look(spec.path))));
 }
 
 pub(super) fn spawn_canopies(
@@ -394,31 +396,93 @@ pub(super) fn spawn_canopies(
     models: &CanopyModels,
     sites: &[ForestTree],
 ) {
-    let close_range = VisibilityRange {
+    for &tree in sites {
+        let (mesh, paint) = &models.0[tree.species as usize];
+        let distance = tree.species.model().draw_distance;
+        parent.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(paint.clone()),
+            tree.pose,
+            detail_range(distance, 25.0),
+            CanopyVisual::new(tree),
+            NotShadowCaster,
+        ));
+    }
+}
+
+/// Distance from `camera` to the middle of the tree standing at `pose`.
+fn scan_distance(pose: &Transform, camera: Vec3) -> f32 {
+    pose.transform_point(Vec3::Y * 0.5).distance(camera)
+}
+
+fn close_range() -> VisibilityRange {
+    VisibilityRange {
         end_margin: UHD_RANGE..UHD_RANGE + UHD_FADE,
         use_aabb: true,
         ..default()
+    }
+}
+
+type StreamedTree<'a> = (
+    Entity,
+    &'a CanopyVisual,
+    &'a Transform,
+    &'a mut VisibilityRange,
+    Option<&'a CloseScan>,
+);
+
+/// Loads a tree's full scan as the camera comes near and drops it once the
+/// camera moves away, so only the scans in view take GPU memory. The scan is
+/// a child, so it sways and falls with the tree.
+pub(super) fn stream_close_trees(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    camera: Single<&Transform, With<PlayerCamera>>,
+    mut trees: Query<StreamedTree, Without<PlayerCamera>>,
+) {
+    for (tree, visual, pose, mut range, scan) in &mut trees {
+        let distance = scan_distance(pose, camera.translation);
+        match scan {
+            None if distance < UHD_LOAD => {
+                let scan = commands
+                    .spawn((
+                        WorldAssetRoot(
+                            server.load(GltfAssetLabel::Scene(0).from_asset(visual.close)),
+                        ),
+                        close_range(),
+                        Visibility::Hidden,
+                        ChildOf(tree),
+                    ))
+                    .observe(range_scene_meshes)
+                    .observe(reveal_close_tree)
+                    .id();
+                commands.entity(tree).insert(CloseScan(scan));
+            }
+            Some(&CloseScan(scan)) if distance > UHD_DROP => {
+                commands.entity(scan).despawn();
+                commands.entity(tree).remove::<CloseScan>();
+                range.start_margin = 0.0..0.0;
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Shows a loaded full scan and lets the crown-card model fade out where
+/// the scan fades in. Until then the crown-card model stays, so the tree
+/// never vanishes while its scan loads.
+fn reveal_close_tree(
+    ready: On<WorldInstanceReady>,
+    parents: Query<&ChildOf>,
+    mut ranges: Query<&mut VisibilityRange, With<CanopyVisual>>,
+    mut commands: Commands,
+) {
+    commands.entity(ready.entity).insert(Visibility::Inherited);
+    let Ok(tree) = parents.get(ready.entity) else {
+        return;
     };
-    for &tree in sites {
-        let looks = &models.0[tree.species as usize];
-        let distance = tree.species.model().draw_distance;
-        parent
-            .spawn((
-                Mesh3d(looks.far.0.clone()),
-                MeshMaterial3d(looks.far.1.clone()),
-                tree.pose,
-                VisibilityRange {
-                    start_margin: close_range.end_margin.clone(),
-                    ..detail_range(distance, 25.0)
-                },
-                CanopyVisual::new(tree),
-                NotShadowCaster,
-            ))
-            .with_child((
-                Mesh3d(looks.close.0.clone()),
-                MeshMaterial3d(looks.close.1.clone()),
-                close_range.clone(),
-            ));
+    if let Ok(mut range) = ranges.get_mut(tree.parent()) {
+        range.start_margin = close_range().end_margin;
     }
 }
 
@@ -449,8 +513,78 @@ pub(super) fn update_canopy_motion(
 
 #[cfg(test)]
 mod tests {
+    use bevy::asset::AssetPlugin;
+    use bevy::world_serialization::WorldAsset;
+
     use super::*;
     use crate::world::terrain::base_tile;
+
+    /// An app streaming the scan of a tree at `pose`, viewed from the origin.
+    fn streaming(pose: Transform) -> (App, Entity, Entity) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<WorldAsset>()
+            .add_systems(Update, stream_close_trees);
+        let camera = app
+            .world_mut()
+            .spawn((PlayerCamera, Transform::IDENTITY))
+            .id();
+        let tree = app
+            .world_mut()
+            .spawn((
+                CanopyVisual {
+                    rest: Quat::IDENTITY,
+                    phase: 0.0,
+                    bend: 0.0,
+                    close: assets::TREE_SMALL_UHD,
+                },
+                pose,
+                detail_range(125.0, 25.0),
+            ))
+            .id();
+        (app, camera, tree)
+    }
+
+    fn start_margin(app: &App, tree: Entity) -> std::ops::Range<f32> {
+        let range = app.world().entity(tree).get::<VisibilityRange>();
+        range.expect("tree range").start_margin.clone()
+    }
+
+    #[test]
+    fn full_scans_stream_in_near_the_camera_and_out_past_a_margin() {
+        // A 10 m tree whose middle stands 30 m from the camera.
+        let pose = Transform::from_xyz(30.0, 0.0, 0.0).with_scale(Vec3::splat(10.0));
+        let (mut app, camera, tree) = streaming(pose);
+        let mut view_from = |x: f32| {
+            app.world_mut()
+                .entity_mut(camera)
+                .insert(Transform::from_xyz(x, 5.0, 0.0));
+            app.update();
+            app.world()
+                .entity(tree)
+                .get::<CloseScan>()
+                .map(|scan| scan.0)
+        };
+        assert_eq!(view_from(0.0), None, "far trees load no scan");
+        let scan = view_from(20.0).expect("a near tree loads its scan");
+        assert_eq!(view_from(12.0), Some(scan), "kept inside the margin");
+        assert_eq!(view_from(0.0), None, "dropped past the margin");
+        assert!(app.world().get_entity(scan).is_err());
+        assert_eq!(start_margin(&app, tree), 0.0..0.0, "the crown cards show");
+    }
+
+    #[test]
+    fn a_loading_scan_stays_hidden_under_its_tree() {
+        let pose = Transform::from_xyz(3.0, 0.0, 0.0).with_scale(Vec3::splat(12.0));
+        let (mut app, _, tree) = streaming(pose);
+        app.update();
+        let world = app.world();
+        let scan = world.entity(tree).get::<CloseScan>().expect("scan").0;
+        let scan = world.entity(scan);
+        assert_eq!(scan.get::<ChildOf>().map(ChildOf::parent), Some(tree));
+        assert_eq!(scan.get::<Visibility>(), Some(&Visibility::Hidden));
+        assert_eq!(start_margin(&app, tree), 0.0..0.0, "crown cards wait");
+    }
 
     #[test]
     fn the_hangar_shelterbelt_adds_all_species_without_filling_the_yard() {
@@ -506,6 +640,7 @@ mod tests {
                     rest: Quat::IDENTITY,
                     phase: 1.0,
                     bend: 0.02,
+                    close: assets::TREE_SMALL_UHD,
                 },
                 Transform::from_translation(root),
                 NotShadowCaster,

@@ -111,9 +111,11 @@ car they drive, once the camera pulls back past ~18 m, never under 34 px wide.
   between half the armored car's height and its roof (1.25–2.6 m), and visibility
   inside ranges 1–5 two-metre ground tiles, so a crawling stalker disappears while
   a standing one shows chest-up. The fog field texture, built from the distant
-  terrain tiles while the landscape loads, stores the surface height and a fog
-  affinity: water and its banks, vegetation, hollows and low ground. Saturated
-  air (`Weather::fog`) spreads it; drifting banks, billows and wind break it up.
+  terrain tiles while the landscape loads, stores the surface height and where
+  fog may gather: over water and its banks (the marsh, the coast and the lake),
+  in the quarry basin and in the three dense woods. Saturated air
+  (`Weather::fog`) spreads it there; the rest of the map stays clear even in
+  saturated air. Drifting banks fray its edges, and billows and wind break it up.
   The sun and moon light it through the atmosphere with shadows and forward
   scattering. The hangar hall stays clear, and the fog thins out above ~140 m of
   camera height. Bevy's distance fog adds the regional 10–16-tile cloud shelf
@@ -127,7 +129,9 @@ car they drive, once the camera pulls back past ~18 m, never under 34 px wide.
   ~500-triangle primitive each: simplified textured wood and, for living
   trees, cutout crown faces baked from the supplied models. Within 8 m of the
   camera a tree swaps to its full scan (`trees/uhd/`, ~1.9M triangles), a
-  child entity that crossfades by `VisibilityRange` and sways with it.
+  child entity that crossfades by `VisibilityRange` and sways with it. The
+  scans are not preloaded: `stream_close_trees` loads a tree's scan as the
+  camera nears (16 m from the tree's middle) and drops it 5 m further out.
   `src/world/canopy.rs` fits the roots and trunks, limits
   shadows to nearby trees, and sways some living trees without moving their
   colliders. Individual trees can randomly snap and fall while in view

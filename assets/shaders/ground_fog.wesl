@@ -111,13 +111,16 @@ fn outside_hall(xz: vec2<f32>) -> f32 {
 }
 
 // Fog at `p`, `h` meters above the surface, where the field's affinity is
-// `affinity`. Moist air favors damp, low, vegetated ground; drifting banks
-// break it up, and billows roughen the top.
+// `affinity`. Fog forms only where the field allows it (water and its banks,
+// the quarry, the woods) and only in moist air; drifting banks break it up
+// and fray its edges, and billows roughen the top.
 fn sample_fog(p: vec3<f32>, h: f32, affinity: f32) -> FogSample {
     let w = p.xz + ground.wind.xy;
-    let moist = ground.weather.x + 0.5 * (affinity - 0.45);
     let banks = noise2(w / 90.0) * 0.65 + noise2(w / 31.0) * 0.35;
-    let coverage = smoothstep(0.12, 0.5, moist + 0.4 * (banks - 0.5));
+    let place = smoothstep(0.15, 0.55, affinity + 0.25 * (banks - 0.5));
+    // Water gets the thickest layer.
+    let moist = ground.weather.x + 0.2 * (affinity - 0.5);
+    let coverage = place * smoothstep(0.12, 0.5, moist + 0.4 * (banks - 0.5));
     // Even saturated air leaves thinner and thicker banks.
     let swell = noise2(w / 150.0 + 41.7);
     let thickness = clamp(0.3 + 0.45 * (moist - 0.6) + 1.1 * (swell - 0.5), 0.0, 1.0);

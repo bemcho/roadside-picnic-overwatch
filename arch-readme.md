@@ -167,7 +167,7 @@ PostUpdate, before Transform propagation
   shared creature rig pose
   artifact idle motion
   tree fall
-  canopy motion
+  canopy motion, UHD tree scan streaming
 
 Last
   mute processing
@@ -275,8 +275,11 @@ The fog field (`ground_fog/field.rs`) is a 513x513 `Rgba16Float` texture
 covering the 4,096 m scenic square at 8 m. `prepare_landscape` fills it from the
 distant tiles' vertices. It stores the surface height (water level where
 flooded, split into coarse and remainder halves for precision) and a fog
-affinity: water and its banks, vegetation, hollows below their 96 m
-surroundings, and low elevation. The layer's top lies between 1.25 and 2.6 m
+affinity, which is zero except where fog may gather: water and its banks (the
+marsh, the coast and the lake basin), the quarry basin and the three dense
+woods (`canopy::wood`). `sample_fog` multiplies the layer by that place mask,
+frayed by the drifting banks noise, so saturated air (`Weather::fog`) decides
+when fog forms and the field decides where. The layer's top lies between 1.25 and 2.6 m
 above that surface, and visibility inside spans 1 to 5 two-metre ground tiles.
 The hangar hall is a fog-free box. The density fades out above 140-520 m of
 camera height.
@@ -647,6 +650,16 @@ Important paths:
     the frame rate from about 26 FPS to 7. Write only on a real change, or put
     per-frame values in a shared `ShaderBuffer` (`plants::bend_plants`) or the
     view globals.
+
+24. **Stream UHD scans and keep large meshes out of shared slabs.**
+    Bevy grows a shared vertex slab 1.5x at a time, holding the old and the new
+    buffer while it copies; at the default 512 MiB cap that spike ran a 6 GB
+    card out of memory ("general mesh slab ... is invalid", then OutOfMemory).
+    `world::mesh_allocator_settings` caps shared slabs at 128 MiB and gives any
+    mesh over 32 MiB its own buffer. Load dense scans only near the view
+    (`canopy::stream_close_trees`, `plants::stream_full_plants`) rather than
+    preloading them; wgpu keeps freed memory pooled for the next scan, so
+    `nvidia-smi` stays level after a scan unloads instead of dropping.
 
 ## How to add a static site model
 
