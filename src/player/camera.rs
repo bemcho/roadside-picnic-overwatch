@@ -342,6 +342,7 @@ pub(super) fn grab_cursor_while_orbiting(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::BASE;
 
     #[test]
     fn vehicle_alignment_eases_along_the_short_arc() {
@@ -362,7 +363,7 @@ mod tests {
     #[test]
     fn chase_focus_and_zoom_ease_but_respawn_resets_follow() {
         let terrain = Terrain::new();
-        let base = Vec3::new(40.0, terrain.height_at(40.0, -128.0), -128.0);
+        let base = Vec3::new(BASE.0, terrain.height_at(BASE.0, BASE.1), BASE.1);
         let mut app = App::new();
         let mut time = Time::<()>::default();
         time.advance_by(std::time::Duration::from_secs_f32(0.05));

@@ -49,7 +49,7 @@ const YARD_VEHICLES: &[YardVehicle] = &[
     YardVehicle {
         name: "Parked freight train",
         path: assets::VEHICLE_TRAIN,
-        center: Vec2::new(20.0, -162.0),
+        center: Vec2::new(BASE.0 - 20.0, BASE.1 - 34.0),
         scale: 40.0,
         yaw: 0.0,
         pillars: include!("pillars/vehicle_train.rs"),
@@ -57,7 +57,7 @@ const YARD_VEHICLES: &[YardVehicle] = &[
     YardVehicle {
         name: "Tracked crawler",
         path: assets::VEHICLE_CRAWLER,
-        center: Vec2::new(55.0, -162.0),
+        center: Vec2::new(BASE.0 + 15.0, BASE.1 - 34.0),
         scale: 8.0,
         yaw: 0.03,
         pillars: include!("pillars/vehicle_crawler.rs"),
@@ -65,7 +65,7 @@ const YARD_VEHICLES: &[YardVehicle] = &[
     YardVehicle {
         name: "Quarry vehicle",
         path: assets::VEHICLE_QUARRY,
-        center: Vec2::new(69.0, -162.0),
+        center: Vec2::new(BASE.0 + 29.0, BASE.1 - 34.0),
         scale: 9.0,
         yaw: -0.05,
         pillars: include!("pillars/vehicle_quarry.rs"),
@@ -73,7 +73,7 @@ const YARD_VEHICLES: &[YardVehicle] = &[
     YardVehicle {
         name: "Sedan",
         path: assets::VEHICLE_SEDAN,
-        center: Vec2::new(82.0, -162.0),
+        center: Vec2::new(BASE.0 + 42.0, BASE.1 - 34.0),
         scale: 6.0,
         yaw: -0.08,
         pillars: include!("pillars/vehicle_sedan.rs"),

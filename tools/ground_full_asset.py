@@ -2,6 +2,10 @@
 
 Use for full-quality single-primitive display assets:
     python3 tools/ground_full_asset.py input.glb assets/models/artifacts/input.glb
+
+`--center` also centers the footprint (x, z) on the origin in the vertex data and drops
+the mesh node's translation, for assets loaded by mesh (`load_single_primitive`), which
+ignores node transforms. It only moves positions, so it works on KTX2-compressed GLBs.
 """
 
 import argparse
@@ -10,7 +14,7 @@ import struct
 from pathlib import Path
 
 
-def prepare(source: Path, output: Path) -> None:
+def prepare(source: Path, output: Path, center: bool = False) -> None:
     data = source.read_bytes()
     magic, version, _, json_len, json_kind = struct.unpack_from("<4sIIII", data)
     if (magic, version, json_kind) != (b"glTF", 2, 0x4E4F534A):
@@ -30,20 +34,23 @@ def prepare(source: Path, output: Path) -> None:
         raise ValueError("Expected float VEC3 positions")
     view = document["bufferViews"][position["bufferView"]]
     stride = view.get("byteStride", 12)
-    if stride != 12 or position.get("byteOffset", 0) != 0:
-        raise ValueError("Expected tightly packed VEC3 positions")
-
-    start = view.get("byteOffset", 0)
-    ys = [
-        struct.unpack_from("<f", binary, start + i * stride + 4)[0]
-        for i in range(position["count"])
-    ]
-    base = min(ys)
-    if base != 0.0:
-        for i, y in enumerate(ys):
-            struct.pack_into("<f", binary, start + i * stride + 4, y - base)
-        position["min"][1] -= base
-        position["max"][1] -= base
+    start = view.get("byteOffset", 0) + position.get("byteOffset", 0)
+    count = position["count"]
+    points = [struct.unpack_from("<3f", binary, start + i * stride) for i in range(count)]
+    shift = [0.0, -min(p[1] for p in points), 0.0]
+    if center:
+        for axis in (0, 2):
+            values = [p[axis] for p in points]
+            shift[axis] = -(min(values) + max(values)) / 2
+        for node in document.get("nodes", []):
+            if "mesh" in node:
+                node.pop("translation", None)
+    if any(shift):
+        for i, p in enumerate(points):
+            struct.pack_into("<3f", binary, start + i * stride, *(v + d for v, d in zip(p, shift)))
+        for axis in range(3):
+            position["min"][axis] += shift[axis]
+            position["max"][axis] += shift[axis]
 
     metadata = json.dumps(document, separators=(",", ":")).encode()
     metadata += b" " * (-len(metadata) % 4)
@@ -61,12 +68,13 @@ def prepare(source: Path, output: Path) -> None:
         + struct.pack("<II", len(binary), binary_kind)
         + binary
     )
-    print(f"{source.name}: shifted Y by {-base:.6f}; wrote {output}")
+    print(f"{source.name}: shifted by {[round(d, 6) for d in shift]}; wrote {output}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("source", type=Path)
     parser.add_argument("output", type=Path)
+    parser.add_argument("--center", action="store_true", help="also center the footprint")
     arguments = parser.parse_args()
-    prepare(arguments.source, arguments.output)
+    prepare(arguments.source, arguments.output, arguments.center)

@@ -615,11 +615,17 @@ mod tests {
             let motion = Wildlife::new(kind, route, None);
             let mut pose = motion.initial_pose(&terrain);
             let origin = pose.translation.xz();
+            // The levelest open approach, so a jump clears the strike as on flat ground.
+            let rise = |direction: Vec2| {
+                (terrain.mesh_height_at(origin + direction * 10.0) - terrain.mesh_height_at(origin))
+                    .abs()
+            };
             let heading = (0..24)
                 .map(|i| Vec2::from_angle(i as f32 * TAU / 24.0))
-                .find(|&direction| {
+                .filter(|&direction| {
                     (-12..24).all(|n| traversable(&terrain, origin + direction * (n as f32 * 0.5)))
                 })
+                .min_by(|a, b| rise(*a).total_cmp(&rise(*b)))
                 .expect("an open approach beside the patrol");
             pose.rotation = Quat::from_rotation_y(heading.x.atan2(heading.y));
             let mut app = App::new();

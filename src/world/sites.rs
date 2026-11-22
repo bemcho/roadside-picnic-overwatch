@@ -17,14 +17,15 @@ use crate::assets::{self, PreloadedAssets};
 
 use super::collision::{Collider, Pillar};
 use super::cordon;
+use super::map::map;
 use super::places::Place;
 use super::roads;
 use super::terrain::{TILE_SIZE, landform_height, lerp, smoothstep};
+use super::town;
 use super::{StreamAnchor, WorldRoot, detail_range};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Kind {
-    NewHarmont,
     Institute,
     Borscht,
     Tavern,
@@ -190,7 +191,6 @@ mod grounds {
 
     use super::Relief;
 
-    pub(super) const TOWN: Relief = include!("pillars/uhd_town_harmont_ground.rs");
     pub(super) const PLAGUE: Relief = include!("pillars/uhd_plague_quarter_ground.rs");
     pub(super) const SUBURBS: Relief = include!("pillars/uhd_abandoned_suburbs_ground.rs");
     pub(super) const HIGHWAY: Relief = include!("pillars/uhd_highway_ground.rs");
@@ -200,6 +200,7 @@ mod grounds {
     pub(super) const CRATER: Relief = include!("pillars/uhd_crater_amphitheater_ground.rs");
     pub(super) const QUARRY_RIM: Relief = include!("pillars/uhd_quarry_pit_ground.rs");
     pub(super) const GOLDEN_SPHERE: Relief = include!("pillars/uhd_core_ground.rs");
+    pub(super) const SWAMP_FLATS: Relief = include!("pillars/uhd_swamp_ground.rs");
 }
 use grounds::*;
 
@@ -207,18 +208,6 @@ const KIND_COUNT: usize = Kind::GoldenSphere as usize + 1;
 
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
 const MODELS: [Model; KIND_COUNT] = [
-    model!(
-        "New Harmont",
-        "landmarks",
-        "town-harmont",
-        170.0,
-        Ground::Relief(&TOWN),
-        (0.478, 0.491),
-        0.183,
-        Z,
-        true,
-        "town_harmont"
-    ),
     model!(
         "International Institute",
         "landmarks",
@@ -448,15 +437,16 @@ const MODELS: [Model; KIND_COUNT] = [
         true,
         "marsh"
     ),
-    // A sheet of swamp pieces on one ground plane: the open mud faces the road.
+    // The swamp board's pieces regrouped on one ground (`tools/swamp_pieces.json`):
+    // the mud bog and plank puddle face the road, the trees stand behind.
     model!(
         "Witches' jelly flats",
         "landmarks",
         "swamp",
-        60.0,
-        Ground::Level(-0.597),
-        (0.593, 0.756),
-        0.61,
+        25.0,
+        Ground::Relief(&SWAMP_FLATS),
+        (0.946, 0.860),
+        0.346,
         X,
         false,
         "swamp"
@@ -514,8 +504,8 @@ const MODELS: [Model; KIND_COUNT] = [
 const TRAIN_SCALE: f32 = 40.0;
 const TRAIN_PAD: f32 = 32.0;
 /// The embankment the freight train came off, and where the train lies.
-const DERAILED_RAIL: usize = 27;
-const DERAILED_TRAIN_CENTER: Vec2 = Vec2::new(-606.0, -330.0);
+const DERAILED_RAIL: usize = 25;
+const DERAILED_TRAIN_CENTER: Vec2 = Vec2::new(114.3, -641.5);
 const TRAIN_YAW_OFFSET: f32 = 0.18;
 const TRAIN_ROLL: f32 = 0.10;
 const TRAIN_LIFT: f32 = 0.45;
@@ -539,10 +529,10 @@ pub(super) struct Landmark {
 }
 
 impl Landmark {
-    const fn new(kind: Kind, x: f32, z: f32, junction: Vec2) -> Self {
+    const fn new(kind: Kind, center: Vec2, junction: Vec2) -> Self {
         Self {
             kind,
-            center: Vec2::new(x, z),
+            center,
             junction,
         }
     }
@@ -669,42 +659,44 @@ impl Landmark {
 
 use Kind::*;
 
-pub(super) const LANDMARKS: [Landmark; 33] = [
+/// Every site where the Harmont map shows it (`map` pixels), facing the road
+/// it is reached from. New Harmont itself is the town (`town.rs`).
+pub(super) const LANDMARKS: [Landmark; 32] = [
     // Harmont, on the hangar's side of the Perimeter.
-    Landmark::new(NewHarmont, 720.0, 640.0, roads::TOWN),
-    Landmark::new(Institute, -10.0, 25.0, roads::INSTITUTE),
-    Landmark::new(Borscht, 560.0, -900.0, roads::BORSCHT),
-    Landmark::new(Tavern, 460.0, -950.0, roads::TAVERN),
-    Landmark::new(PlagueQuarter, 490.0, -150.0, roads::PLAGUE),
-    Landmark::new(SuburbanHouse, 600.0, -20.0, roads::HOUSES),
-    Landmark::new(SuburbanHouse, 670.0, -200.0, roads::HARMONT_WEST),
-    Landmark::new(Schoolhouse, 260.0, 20.0, roads::SCHOOL),
-    Landmark::new(Cemetery, 730.0, -280.0, roads::CEMETERY),
+    Landmark::new(Institute, map(349.5, 170.5), roads::INSTITUTE),
+    Landmark::new(Borscht, map(264.0, 561.5), roads::BORSCHT),
+    Landmark::new(Tavern, map(223.5, 608.0), roads::TAVERN),
+    Landmark::new(PlagueQuarter, map(195.0, 425.5), roads::PLAGUE),
+    Landmark::new(SuburbanHouse, map(150.0, 429.0), roads::HOUSES),
+    Landmark::new(SuburbanHouse, map(150.0, 451.0), roads::HOUSES),
+    Landmark::new(Schoolhouse, map(250.0, 450.0), roads::SCHOOL),
+    Landmark::new(Cemetery, map(200.0, 636.0), roads::CEMETERY),
+    Landmark::new(MotorPool, map(344.5, 300.0), roads::MOTOR_POOL),
     // The Zone, from the Perimeter to the quarry.
-    Landmark::new(AbandonedSuburbs, -250.0, -750.0, roads::SUBURBS),
-    Landmark::new(Cemetery, -300.0, -620.0, roads::SUBURBS),
-    Landmark::new(SuburbanHouse, -270.0, 760.0, roads::NORTH_SUBURBS),
-    Landmark::new(SuburbanHouse, -420.0, 760.0, roads::NORTH_SUBURBS),
-    Landmark::new(MotorPool, -185.0, -95.0, roads::MOTOR_POOL),
-    Landmark::new(Highway, -390.0, -115.0, roads::HIGHWAY),
-    Landmark::new(Substation, -420.0, 95.0, roads::SUBSTATION),
-    Landmark::new(BrickFactory, -280.0, 150.0, roads::BRICKWORKS),
-    Landmark::new(OldFactory, -413.0, 160.0, roads::FACTORY),
-    Landmark::new(Silos, -480.0, 290.0, roads::SILOS),
-    Landmark::new(Garage, -606.0, 152.0, roads::GARAGE),
-    Landmark::new(AbandonedSubstation, -820.0, 250.0, roads::RAIL_NORTH),
-    Landmark::new(AbandonedSubstation, -480.0, -560.0, roads::DITCHES),
-    Landmark::new(Railway, -710.0, 250.0, roads::RAIL_NORTH),
-    Landmark::new(Railway, -790.0, 792.0, roads::RAIL_FAR_NORTH),
-    Landmark::new(Locomotive, -755.0, 560.0, roads::LOCOMOTIVE),
-    Landmark::new(Marsh, -680.0, -660.0, roads::MARSH),
-    Landmark::new(Railway, -510.0, -1100.0, roads::RAIL_SOUTH),
-    Landmark::new(Railway, -624.0, -330.0, roads::RAIL_DERAILMENT),
-    Landmark::new(SwampFlats, -860.0, -650.0, roads::SWAMP),
-    Landmark::new(Crater, -1000.0, -760.0, roads::CRATER),
-    Landmark::new(Ridge, -1013.0, -8.0, roads::RIDGE),
-    Landmark::new(QuarryRim, -1185.0, -170.0, roads::QUARRY),
-    Landmark::new(GoldenSphere, -1360.0, -170.0, roads::GOLDEN_SPHERE),
+    Landmark::new(AbandonedSuburbs, map(555.0, 561.0), roads::SUBURBS),
+    Landmark::new(Cemetery, map(560.0, 481.5), roads::SUBURBS_CEMETERY),
+    Landmark::new(AbandonedSuburbs, map(535.0, 229.0), roads::NORTH_SUBURBS),
+    Landmark::new(SuburbanHouse, map(520.0, 329.0), roads::NORTH_HOUSES),
+    Landmark::new(SuburbanHouse, map(532.0, 352.0), roads::NORTH_HOUSES),
+    Landmark::new(Highway, map(607.0, 367.0), roads::HIGHWAY),
+    Landmark::new(OldFactory, map(650.5, 282.0), roads::FACTORY),
+    Landmark::new(BrickFactory, map(698.0, 257.5), roads::BRICKWORKS),
+    Landmark::new(Silos, map(634.5, 318.0), roads::SILOS),
+    Landmark::new(Substation, map(739.0, 290.0), roads::SUBSTATION),
+    Landmark::new(Garage, map(791.0, 307.0), roads::GARAGE),
+    Landmark::new(AbandonedSubstation, map(803.0, 341.5), roads::RAIL_NORTH),
+    Landmark::new(Railway, map(821.0, 351.5), roads::RAIL_NORTH),
+    Landmark::new(Locomotive, map(927.5, 153.0), roads::LOCOMOTIVE),
+    Landmark::new(AbandonedSubstation, map(910.5, 145.5), roads::LOCOMOTIVE),
+    Landmark::new(Marsh, map(877.0, 451.0), roads::MARSH),
+    Landmark::new(Railway, map(665.0, 652.5), roads::RAIL_SOUTH),
+    Landmark::new(Railway, map(907.0, 435.0), roads::EMBANKMENT),
+    Landmark::new(SwampFlats, map(775.0, 673.0), roads::SWAMP),
+    Landmark::new(Crater, map(880.0, 724.0), roads::CRATER),
+    Landmark::new(Ridge, map(1039.5, 395.0), roads::RIDGE),
+    // Back from the track: the pit reaches the scan's front edge.
+    Landmark::new(QuarryRim, map(1142.0, 320.0), roads::QUARRY),
+    Landmark::new(GoldenSphere, map(1216.5, 348.0), roads::GOLDEN_SPHERE),
 ];
 
 /// Every site and the derailed train as a rough upright cylinder around the
@@ -758,11 +750,13 @@ pub(super) fn foundation(at: Vec2) -> Option<(f32, f32)> {
         .into_iter()
         .filter_map(|site| site.foundation(at))
         .chain(train)
+        .chain(town::foundation(at))
         .reduce(|best, next| if next.1 > best.1 { next } else { best })
 }
 
 pub(super) fn clear_footprint(at: Vec2, clearance: f32) -> bool {
-    at.distance_squared(DERAILED_TRAIN_CENTER) < (TRAIN_PAD + clearance).powi(2)
+    town::clear_footprint(at, clearance)
+        || at.distance_squared(DERAILED_TRAIN_CENTER) < (TRAIN_PAD + clearance).powi(2)
         || LANDMARKS
             .into_iter()
             .any(|site| at.distance_squared(site.center) < (site.footprint() + clearance).powi(2))
@@ -999,7 +993,7 @@ mod tests {
         for site in LANDMARKS {
             let harmont = matches!(
                 site.kind,
-                NewHarmont | Institute | Borscht | Tavern | PlagueQuarter | Schoolhouse
+                Institute | Borscht | Tavern | PlagueQuarter | Schoolhouse | MotorPool
             );
             let margin = site.footprint() + 20.0;
             let clear = (site.center.x - cordon::PERIMETER_X).abs() > margin;
@@ -1037,22 +1031,14 @@ mod tests {
                 pair[1]
             );
         }
-        // Harmont from north to south, and the Marsh south of the road.
-        assert!(at(NewHarmont).y > at(PlagueQuarter).y);
+        // Harmont from north to south, and the Marsh south of the highway.
+        assert!(at(Institute).y > at(PlagueQuarter).y);
         assert!(at(PlagueQuarter).y > at(Borscht).y);
-        assert!(at(Marsh).y < at(Highway).y - 400.0);
+        assert!(at(Marsh).y < at(Highway).y - 150.0);
         assert!(at(OldFactory).y > at(Highway).y);
-        // The Institute stands on the Perimeter, on Harmont's side.
-        assert!((0.0..90.0).contains(&(at(Institute).x - cordon::PERIMETER_X)));
-        for kind in [
-            NewHarmont,
-            Institute,
-            Borscht,
-            PlagueQuarter,
-            Garage,
-            Marsh,
-            Ridge,
-        ] {
+        // The Institute stands north of the hangar, on Harmont's side.
+        assert!(at(Institute).x > cordon::PERIMETER_X && at(Institute).y > 400.0);
+        for kind in [Institute, Borscht, PlagueQuarter, Garage, Marsh, Ridge] {
             assert!(kind.is_landmark());
         }
     }
@@ -1107,7 +1093,7 @@ mod tests {
 
     #[test]
     fn relief_sampling_matches_the_grid() {
-        let relief = &TOWN;
+        let relief = &PLAGUE;
         let at = relief.min + relief.cell * Vec2::new(10.5, 20.5);
         assert!((relief.height(at) - relief.heights[20 * RELIEF_SIZE + 10]).abs() < 1e-6);
         let far = relief.min - Vec2::splat(5.0);

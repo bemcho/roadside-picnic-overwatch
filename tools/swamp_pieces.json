@@ -1,0 +1,13 @@
+{
+  "about": "Witches' jelly flats: the swamp board scan rebuilt as one grounded diorama. Front (+X, toward the road): mud bog and plank puddle; middle: slime ditch row and overgrowth; back: dead birch grove and petrified trees. Swatch cards and wireframe previews are left out. Apply with agentic-tooling media/glb-components/glb_components.py compose.",
+  "min_tris": 200,
+  "groups": [
+    {"name": "dead birch grove", "ids": [1], "cut": [[[-0.12, -0.19, -0.76], [0.04, 0.6, -0.645]]], "at": [-0.765, -0.505]},
+    {"name": "petrified trees", "ids": [0], "at": [-0.715, 0.51]},
+    {"name": "small overgrowth", "ids": [7], "at": [-0.715, 0.0]},
+    {"name": "slime ditch row", "ids": [3, 9, 10, 12, 13], "at": [-0.06, -0.265]},
+    {"name": "overgrowth", "ids": [4], "at": [-0.215, 0.605]},
+    {"name": "mud bog", "ids": [2], "cut": [[[-1, -1, 0.34], [1, -0.165, 0.52]]], "level": true, "at": [0.655, -0.51]},
+    {"name": "plank puddle", "ids": [6], "level": true, "spin": 90, "at": [0.62, 0.235]}
+  ]
+}

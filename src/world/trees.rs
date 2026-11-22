@@ -200,7 +200,8 @@ mod tests {
         let terrain = Terrain::new();
         let sites = all_sites(&terrain);
         assert_eq!(sites, all_sites(&terrain));
-        assert!((12..=140).contains(&sites.len()), "{} stands", sites.len());
+        // The three dense woods hold undergrowth stands too.
+        assert!((12..=200).contains(&sites.len()), "{} stands", sites.len());
         assert!(
             sites
                 .iter()
@@ -238,7 +239,7 @@ mod tests {
             }
         }
         // The highway's centerline and the quarry floor are barren.
-        assert_eq!(terrain.woodland_at(-285.0, -67.0), 0.0);
+        assert_eq!(terrain.woodland_at(577.2, 78.0), 0.0);
         let quarry = Vec2::from(crate::world::terrain::QUARRY_CENTER);
         assert_eq!(terrain.woodland_at(quarry.x, quarry.y + 60.0), 0.0);
     }

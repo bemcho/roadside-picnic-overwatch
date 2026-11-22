@@ -34,6 +34,11 @@ pub const TREE_BIG: &str = "models/trees/medium/tree_big.glb";
 pub const TREE_VERY_TALL: &str = "models/trees/medium/tree_veryhigh.glb";
 pub const TREE_BIRCH: &str = "models/trees/medium/tree_birch.glb";
 pub const TREE_DEAD: &str = "models/trees/medium/tree_dead.glb";
+pub const TREE_SMALL_UHD: &str = "models/trees/uhd/tree_small.glb";
+pub const TREE_BIG_UHD: &str = "models/trees/uhd/tree_big.glb";
+pub const TREE_VERY_TALL_UHD: &str = "models/trees/uhd/tree_veryhigh.glb";
+pub const TREE_BIRCH_UHD: &str = "models/trees/uhd/tree_birch.glb";
+pub const TREE_DEAD_UHD: &str = "models/trees/uhd/tree_dead.glb";
 pub const FROSTWOLF: &str = "models/animals/medium/frostwolf.glb";
 pub const HEXADEER: &str = "models/animals/medium/hexadeer.glb";
 pub const SKYGLIDER: &str = "models/animals/medium/skyglider.glb";
@@ -64,17 +69,49 @@ pub const HANGAR_TABLE: &str = "models/props/medium/table.glb";
 pub const HANGAR_TOILET: &str = "models/props/medium/toilet.glb";
 pub const HANGAR_TOOLS: &str = "models/props/medium/tools.glb";
 pub const HANGAR_WORKSHOP: &str = "models/props/medium/workshop.glb";
-pub const BUSH_UHD_SHRUB: &str = "models/plants/uhd/shrub.glb";
-pub const BUSH_UHD_THORNBUSH: &str = "models/plants/uhd/thornbush.glb";
-pub const BUSH_SHRUB_VARIANTS: [&str; 6] = [
-    "models/plants/medium/bramble.glb",
-    "models/plants/medium/dogrose.glb",
-    "models/plants/medium/elder.glb",
-    "models/plants/medium/juniper.glb",
-    "models/plants/medium/wormwood.glb",
-    "models/plants/medium/shrub.glb",
+
+/// An imported plant's far, near and full-scan models, in one shared frame.
+pub struct PlantModel {
+    pub far: &'static str,
+    pub near: &'static str,
+    pub full: Option<&'static str>,
+}
+
+macro_rules! plant {
+    ($name:literal) => {
+        plant!($name, Some(concat!("models/plants/uhd/", $name, ".glb")))
+    };
+    ($name:literal, $full:expr) => {
+        PlantModel {
+            far: concat!("models/plants/low/", $name, ".glb"),
+            near: concat!("models/plants/medium/", $name, ".glb"),
+            full: $full,
+        }
+    };
+}
+
+// Ragweed's and henbane's scans carry no textures, so they have no full scan.
+pub const DRY_WEEDS: [PlantModel; 3] = [
+    plant!("drygrass"),
+    plant!("dandelion"),
+    plant!("ragweed", None),
 ];
-pub const BUSH_MEDIUM_THORNBUSH: &str = "models/plants/medium/thornbush.glb";
+pub const GLOWWEEDS: [PlantModel; 1] = [plant!("glowweed")];
+pub const DAMP_WEEDS: [PlantModel; 4] = [
+    plant!("hogweed"),
+    plant!("burdock"),
+    plant!("henbane", None),
+    plant!("thistle"),
+];
+pub const SHRUBS: [PlantModel; 6] = [
+    plant!("shrub"),
+    plant!("bramble"),
+    plant!("dogrose"),
+    plant!("elder"),
+    plant!("juniper"),
+    plant!("wormwood"),
+];
+pub const THORNBUSHES: [PlantModel; 1] = [plant!("thornbush")];
 pub const ARTIFACTS: [&str; 14] = [
     "models/artifacts/medium/artifact-death-lamp.glb",
     "models/artifacts/medium/artifact-golden-sphere.glb",
@@ -141,7 +178,6 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         VEHICLE_QUARRY,
         VEHICLE_SEDAN,
         VEHICLE_TRAIN,
-        BUSH_MEDIUM_THORNBUSH,
     ];
     let albedo = [TERRAIN_GRASS_ALBEDO, TERRAIN_EARTH_ALBEDO];
     let data_maps = [
@@ -151,11 +187,6 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         TERRAIN_EARTH_SURFACE,
     ];
     assets.0.extend(scenes.map(|path| {
-        server
-            .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
-            .untyped()
-    }));
-    assets.0.extend(BUSH_SHRUB_VARIANTS.map(|path| {
         server
             .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(path))
             .untyped()

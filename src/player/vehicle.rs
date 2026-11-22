@@ -722,7 +722,7 @@ mod tests {
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
-    use crate::world::FORD_X;
+    use crate::world::{BASE, SWAMP};
 
     #[test]
     fn road_boost_preserves_steering_ford_limits_and_reverse_speed() {
@@ -765,8 +765,9 @@ mod tests {
     #[test]
     fn live_terrain_road_mask_selects_the_faster_forward_speed() {
         let terrain = Terrain::new();
-        let off_road = Vec2::new(40.0, -128.0);
-        let road = Vec2::new(39.0, -68.0);
+        let off_road = Vec2::new(BASE.0, BASE.1);
+        // On the drive north from the yard gate.
+        let road = Vec2::new(BASE.0 - 1.0, BASE.1 + 120.0);
         assert!(terrain.road_mask(off_road.x, off_road.y) < 0.05);
         assert!(terrain.road_mask(road.x, road.y) > 0.99);
 
@@ -788,7 +789,7 @@ mod tests {
     #[test]
     fn throttle_eases_in_and_fast_steering_stays_gentle() {
         let terrain = Terrain::new();
-        let origin = Vec2::new(40.0, -128.0);
+        let origin = Vec2::new(BASE.0, BASE.1);
         let support = contact::sample(origin, Quat::IDENTITY, |at| terrain.mesh_height_at(at));
         let mut at =
             Transform::from_xyz(origin.x, support.height, origin.y).with_rotation(support.rotation);
@@ -874,7 +875,7 @@ mod tests {
     #[test]
     fn throttle_spins_blocked_wheels_in_either_direction_but_braking_stops_them() {
         let terrain = Terrain::new();
-        let origin = Vec2::new(40.0, -128.0);
+        let origin = Vec2::new(BASE.0, BASE.1);
         let support = contact::sample(origin, Quat::IDENTITY, |at| terrain.mesh_height_at(at));
         let rest =
             Transform::from_xyz(origin.x, support.height, origin.y).with_rotation(support.rotation);
@@ -921,7 +922,7 @@ mod tests {
 
     #[test]
     fn enters_drives_and_exits_with_one_press_each() {
-        let flat = Vec2::new(40.0, -128.0);
+        let flat = Vec2::new(BASE.0, BASE.1);
         let terrain = Terrain::new();
         let floor = terrain.height_at(flat.x, flat.y);
         let mut app = App::new();
@@ -1039,7 +1040,7 @@ mod tests {
     fn an_unsupported_vehicle_falls_on_earth_even_when_unoccupied() {
         let mut app = App::new();
         let terrain = Terrain::new();
-        let ground = terrain.height_at(40.0, -128.0);
+        let ground = terrain.height_at(BASE.0, BASE.1);
         app.add_plugins(MinimalPlugins)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
                 50,
@@ -1051,7 +1052,7 @@ mod tests {
             .world_mut()
             .spawn((
                 Vehicle::default(),
-                Transform::from_xyz(40.0, ground + 8.0, -128.0),
+                Transform::from_xyz(BASE.0, ground + 8.0, BASE.1),
             ))
             .id();
         app.update();
@@ -1083,8 +1084,8 @@ mod tests {
     #[test]
     fn throttle_and_brakes_cannot_hold_the_car_on_a_mountain_wall() {
         let terrain = Terrain::new();
-        // The north face of the mountain south of the ridge.
-        let from = Vec2::new(-1030.0, -300.0);
+        // The north face of the mountain south of the pass.
+        let from = Vec2::new(-800.0, -290.0);
         let yaw = Quat::from_rotation_y(PI);
         let support = contact::sample(from, yaw, |at| terrain.mesh_height_at(at));
         assert!(support.up().z > MAX_GRIP_GRADE * support.up().y);
@@ -1163,8 +1164,22 @@ mod tests {
         assert_eq!(order.steer(at.xz()), None, "arrival clears the order");
     }
 
+    /// The deepest pool of the marsh, and dry land due south of it.
+    fn deep_pool_and_its_south_shore(terrain: &Terrain) -> (Vec2, Vec2) {
+        let depth = |at: Vec2| terrain.water_depth_at(at.x, at.y);
+        let pool = (-30..=30)
+            .flat_map(|i| (-30..=30).map(move |j| SWAMP + Vec2::new(i as f32, j as f32) * 6.0))
+            .max_by(|a, b| depth(*a).total_cmp(&depth(*b)))
+            .expect("the marsh has pools");
+        let shore = (1..)
+            .map(|step| pool - Vec2::Y * step as f32 * 2.0)
+            .find(|&at| (0..8).all(|k| depth(at - Vec2::Y * k as f32 * 2.0) <= 0.0))
+            .expect("dry land south of the pool");
+        (pool, shore - Vec2::Y * 12.0)
+    }
+
     #[test]
-    fn drives_through_the_ford_but_stops_at_the_deep_channel() {
+    fn drives_into_the_marsh_but_stops_at_a_deep_pool() {
         let mut app = App::new();
         app.add_plugins(MinimalPlugins)
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
@@ -1175,27 +1190,16 @@ mod tests {
             .add_systems(Update, drive_vehicle);
         let terrain = Terrain::new();
         let start = |x: f32, z: f32| Transform::from_xyz(x, terrain.height_at(x, z), z);
+        let (pool, shore) = deep_pool_and_its_south_shore(&terrain);
+        assert!(terrain.water_depth_at(pool.x, pool.y) > FORD_DEPTH + 0.3);
         let vehicle = app
             .world_mut()
-            .spawn((Vehicle::default(), start(FORD_X, 330.0)))
+            .spawn((Vehicle::default(), start(shore.x, shore.y)))
             .id();
         app.world_mut()
             .spawn((Player::default(), Transform::default(), Driving(vehicle)));
         press(&mut app, KeyCode::KeyW);
-        for _ in 0..180 {
-            app.update();
-        }
-        let at = app
-            .world()
-            .get::<Transform>(vehicle)
-            .expect("ford traversal")
-            .translation;
-        assert!(at.z > 420.0, "car never crossed the ford: {at}");
-
-        app.world_mut()
-            .entity_mut(vehicle)
-            .insert((Vehicle::default(), start(FORD_X + 65.0, 310.0)));
-        for _ in 0..150 {
+        for _ in 0..500 {
             app.update();
         }
         let at = app
@@ -1203,7 +1207,8 @@ mod tests {
             .get::<Transform>(vehicle)
             .expect("at the bank")
             .translation;
-        assert!((340.0..362.0).contains(&at.z), "car stopped at {at}");
+        assert!(at.z > shore.y + 5.0, "car never set off: {at}");
+        assert!(at.z < pool.y, "car drove into the deep pool: {at}");
         assert!(terrain.water_depth_at(at.x, at.z) <= FORD_DEPTH);
         assert_eq!(
             app.world()
@@ -1239,8 +1244,8 @@ mod tests {
     #[test]
     fn a_blocked_driver_side_exits_on_the_other_side() {
         let terrain = Terrain::new();
-        let y = terrain.height_at(40.0, -128.0);
-        let at = Transform::from_xyz(40.0, y, -128.0);
+        let y = terrain.height_at(BASE.0, BASE.1);
+        let at = Transform::from_xyz(BASE.0, y, BASE.1);
         let exit = exit_position(&at, &terrain, |point| point.x < at.translation.x);
         assert!(exit.is_some_and(|point| point.x < at.translation.x - HALF_EXTENTS.x));
         assert!(exit_position(&at, &terrain, |_| false).is_none());

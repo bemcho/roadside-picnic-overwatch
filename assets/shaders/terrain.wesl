@@ -120,9 +120,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let luminance = dot(albedo, vec3<f32>(0.2126, 0.7152, 0.0722));
     albedo = mix(albedo, vec3<f32>(luminance) * vec3<f32>(0.72, 0.74, 0.70), ash * 0.9);
     let road_uv = clamp((p.xz - road_bounds.xy) * road_bounds.zw, vec2<f32>(0.0), vec2<f32>(1.0));
-    let road = textureSampleLevel(road_surface, ground_sampler, road_uv, 0.0).rg;
+    // Road mask: red gravel, green tire ruts, blue asphalt.
+    let road = textureSampleLevel(road_surface, ground_sampler, road_uv, 0.0).rgb;
     let gravel = (vec3<f32>(0.23, 0.184, 0.124) + earth * 0.48) * (1.0 - road.g * 0.34);
     albedo = mix(albedo, gravel, road.r);
+    // Weathered asphalt, grained by the earth map.
+    let tar = vec3<f32>(0.052, 0.053, 0.057) + dot(earth, vec3<f32>(0.2126, 0.7152, 0.0722)) * 0.2;
+    albedo = mix(albedo, tar, road.b);
     albedo *= mix(vec3<f32>(1.0), vec3<f32>(0.48, 0.56, 0.42), wetness);
     let alpine = smoothstep(32.0, 100.0, p.y);
     albedo = mix(albedo, vec3<f32>(0.62, 0.81, 1.06) * (luminance + 0.038), alpine * 0.74);
@@ -145,6 +149,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         ground_normal(earth_normal, earth_uv, weights, normal, earth_axes),
         exposed,
     ));
+    // Asphalt lies flatter than the ground's texture.
+    pbr_input.N = normalize(mix(pbr_input.N, normal, road.b * 0.7));
 
     var out: FragmentOutput;
 @if(PREPASS_PIPELINE) {

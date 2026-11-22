@@ -7,13 +7,18 @@ mod cordon;
 mod ground_fog;
 mod hydrology;
 mod landscape;
+mod map;
+mod marsh;
+mod old_road;
 mod places;
 mod plants;
+mod railway;
 mod roads;
 mod scenery;
 mod sites;
 mod terrain;
 mod terrain_material;
+mod town;
 mod tree_fall;
 mod trees;
 mod water;
@@ -25,8 +30,10 @@ pub(crate) use collision::STEP_HEIGHT;
 pub use collision::{Body, Collider, Pillar, push_out};
 pub(crate) use ground_fog::{CAMERA_FAR, camera_distance_fog, camera_fog};
 #[cfg(test)]
-pub(crate) use hydrology::FORD_X;
+pub(crate) use hydrology::SWAMP;
 pub use places::{Describe, Explored, Place, place_at, structure_on_ray};
+#[cfg(test)]
+pub(crate) use terrain::BASE;
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
 pub use weather::{Sky, Weather, Wind, WorldClock};
 pub(crate) use wildlife::{CreatureSound, Cue as CreatureCue, Kind as CreatureKind};
@@ -93,6 +100,11 @@ impl Plugin for WorldPlugin {
                 wildlife::preload_wildlife,
                 cordon::preload_cordon,
                 sites::preload_sites,
+                town::preload_town,
+                railway::preload_railway,
+                plants::preload_plants,
+                old_road::preload_old_roads,
+                marsh::preload_marsh,
             ),
         )
         .add_systems(
@@ -102,11 +114,15 @@ impl Plugin for WorldPlugin {
                 (weather::start_clock, spawn_sky).chain(),
                 places::start_survey,
                 base::spawn_base,
-                plants::prepare_plant_materials,
+                plants::prepare_plant_looks,
                 tree_fall::start_break_clock,
                 wildlife::spawn_wildlife,
                 cordon::prepare_cordon,
                 sites::spawn_sites,
+                town::spawn_town,
+                railway::spawn_railway,
+                old_road::spawn_old_roads,
+                marsh::spawn_marsh,
             ),
         )
         .add_systems(Update, mipmap_filtered_textures)
@@ -115,7 +131,7 @@ impl Plugin for WorldPlugin {
             (
                 weather::advance_clock,
                 weather::blow_wind,
-                (plants::bend_plants, plants::sway_bushes),
+                (plants::bend_plants, plants::sway_full_plants),
                 weather::light_the_sky,
                 places::survey_around_stalker,
                 ground_fog::update_ground_fog,
@@ -149,7 +165,7 @@ impl Plugin for WorldPlugin {
         .add_systems(
             PostUpdate,
             (
-                plants::stream_full_bushes,
+                plants::stream_full_plants,
                 base::stream_full_artifacts,
                 base::animate_artifacts,
                 tree_fall::animate_falling_trees,
@@ -332,7 +348,7 @@ fn despawn_world(mut commands: Commands, roots: Query<Entity, With<WorldRoot>>) 
     }
     commands.remove_resource::<Scenery>();
     commands.remove_resource::<cordon::Cordon>();
-    commands.remove_resource::<plants::PlantMaterials>();
+    commands.remove_resource::<plants::PlantLooks>();
     commands.remove_resource::<tree_fall::TreeBreakClock>();
 }
 

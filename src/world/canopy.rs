@@ -1,8 +1,11 @@
-//! The map's trees: imported, textured models growing in the landmark groves
-//! and around the hangar. There are no procedural trees.
+//! The map's trees: imported, textured models growing in the landmark groves,
+//! three dense woods and around the hangar. There are no procedural trees.
+//! Each shows its light crown-card model, and the full UHD scan when the
+//! camera stands right by it.
 
 use std::f32::consts::TAU;
 
+use bevy::camera::visibility::VisibilityRange;
 use bevy::gltf::GltfMaterial;
 use bevy::light::NotShadowCaster;
 use bevy::pbr::gltf::standard_material_from_gltf_material;
@@ -14,7 +17,7 @@ use crate::player::PlayerCamera;
 use super::collision::{Collider, Pillar};
 use super::cordon::{inside_yard, near_wall_or_checkpoint, shelterbelt};
 use super::detail_range;
-use super::hydrology::{LAKE, SWAMP};
+use super::hydrology::SWAMP;
 use super::terrain::{
     BALD_CENTER, BASE, QUARRY_CENTER, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep,
 };
@@ -23,10 +26,19 @@ use super::weather::Wind;
 const SEED: u32 = 0xD4EA_9021;
 const SHADOW_ENTER: f32 = 48.0;
 const SHADOW_EXIT: f32 = 55.0;
-const LANDMARK_GROVES: [(Vec2, f32); 4] = [
+/// The UHD scan replaces the crown-card model this close to the camera; it
+/// is far too dense to show more than the nearest few.
+const UHD_RANGE: f32 = 8.0;
+const UHD_FADE: f32 = 4.0;
+/// Three dense woods on the Harmont map, clear of the sites and the railway.
+pub(super) const WOODS: [(Vec2, f32); 3] = [
+    (Vec2::new(-336.0, 559.0), 150.0),
+    (Vec2::new(300.0, -720.0), 120.0),
+    (Vec2::new(348.0, 631.0), 140.0),
+];
+const LANDMARK_GROVES: [(Vec2, f32); 3] = [
     (Vec2::new(QUARRY_CENTER.0, QUARRY_CENTER.1), 102.0),
     (Vec2::new(BALD_CENTER.0, BALD_CENTER.1), 68.0),
-    (LAKE, 174.0),
     (SWAMP, 136.0),
 ];
 
@@ -37,6 +49,18 @@ pub(super) fn near_landmark(at: Vec2) -> bool {
             .into_iter()
             .any(|(center, radius)| at.distance_squared(center) <= radius * radius)
         || super::sites::grove(at) > 0.0
+        || wood(at) > 0.0
+}
+
+/// How deep into one of the dense woods `at` lies, from 0.0 to 1.0.
+pub(super) fn wood(at: Vec2) -> f32 {
+    WOODS.into_iter().fold(0.0, |amount, (center, radius)| {
+        amount.max(smoothstep(
+            1.0,
+            0.45,
+            at.distance_squared(center) / (radius * radius),
+        ))
+    })
 }
 
 pub(super) fn landmark_grove(at: Vec2) -> f32 {
@@ -76,6 +100,8 @@ impl Species {
 
 struct TreeModel {
     path: &'static str,
+    /// The full scan, in the same frame as `path`.
+    close: &'static str,
     scale: (f32, f32),
     footprint: f32,
     wind_bend: f32,
@@ -86,6 +112,7 @@ struct TreeModel {
 const MODELS: [TreeModel; Species::ALL.len()] = [
     TreeModel {
         path: assets::TREE_SMALL,
+        close: assets::TREE_SMALL_UHD,
         scale: (4.8, 7.5),
         footprint: 0.34,
         wind_bend: 0.034,
@@ -100,6 +127,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
     },
     TreeModel {
         path: assets::TREE_BIG,
+        close: assets::TREE_BIG_UHD,
         scale: (13.5, 19.5),
         footprint: 0.22,
         wind_bend: 0.017,
@@ -114,6 +142,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
     },
     TreeModel {
         path: assets::TREE_VERY_TALL,
+        close: assets::TREE_VERY_TALL_UHD,
         scale: (25.5, 33.5),
         footprint: 0.05,
         wind_bend: 0.021,
@@ -128,6 +157,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
     },
     TreeModel {
         path: assets::TREE_BIRCH,
+        close: assets::TREE_BIRCH_UHD,
         scale: (10.0, 15.0),
         footprint: 0.047,
         wind_bend: 0.028,
@@ -142,6 +172,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
     },
     TreeModel {
         path: assets::TREE_DEAD,
+        close: assets::TREE_DEAD_UHD,
         scale: (9.5, 14.5),
         footprint: 0.22,
         wind_bend: 0.0,
@@ -167,7 +198,8 @@ impl ForestTree {
     /// away from them stays treeless.
     pub(super) fn at_tree_spot(terrain: &Terrain, spot: Transform, seed: u32) -> Option<Self> {
         let roll = |n| lattice_hash(seed as i32, 0, SEED + n);
-        if !near_landmark(spot.translation.xz()) || roll(0) >= 0.6 {
+        let at = spot.translation.xz();
+        if !near_landmark(at) || roll(0) >= 0.6 + 0.4 * wood(at) {
             return None;
         }
         let choice = roll(1);
@@ -316,13 +348,22 @@ impl CanopyVisual {
     }
 }
 
+/// A species' crown-card model and its full scan: mesh and material each.
+#[derive(Default)]
+struct TreeLooks {
+    far: (Handle<Mesh>, Handle<StandardMaterial>),
+    close: (Handle<Mesh>, Handle<StandardMaterial>),
+}
+
 #[derive(Resource, Default)]
-pub(super) struct CanopyModels([(Handle<Mesh>, Handle<StandardMaterial>); MODELS.len()]);
+pub(super) struct CanopyModels([TreeLooks; MODELS.len()]);
 
 pub(super) fn preload_canopies(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
     for spec in &MODELS {
-        let (mesh, paint) = assets::load_single_primitive(&server, spec.path);
-        preloaded.0.extend([mesh.untyped(), paint.untyped()]);
+        for path in [spec.path, spec.close] {
+            let (mesh, paint) = assets::load_single_primitive(&server, path);
+            preloaded.0.extend([mesh.untyped(), paint.untyped()]);
+        }
     }
 }
 
@@ -332,8 +373,8 @@ pub(super) fn prepare_canopy_materials(
     paints: Res<Assets<GltfMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.insert_resource(CanopyModels(MODELS.map(|spec| {
-        let (mesh, paint) = assets::load_single_primitive(&server, spec.path);
+    let mut look = |path| {
+        let (mesh, paint) = assets::load_single_primitive(&server, path);
         let paint = paints
             .get(&paint)
             .expect("tree materials finish preloading before the Zone opens");
@@ -341,6 +382,10 @@ pub(super) fn prepare_canopy_materials(
             mesh,
             materials.add(standard_material_from_gltf_material(paint)),
         )
+    };
+    commands.insert_resource(CanopyModels(MODELS.map(|spec| TreeLooks {
+        far: look(spec.path),
+        close: look(spec.close),
     })));
 }
 
@@ -349,17 +394,31 @@ pub(super) fn spawn_canopies(
     models: &CanopyModels,
     sites: &[ForestTree],
 ) {
+    let close_range = VisibilityRange {
+        end_margin: UHD_RANGE..UHD_RANGE + UHD_FADE,
+        use_aabb: true,
+        ..default()
+    };
     for &tree in sites {
-        let (mesh, paint) = &models.0[tree.species as usize];
+        let looks = &models.0[tree.species as usize];
         let distance = tree.species.model().draw_distance;
-        parent.spawn((
-            Mesh3d(mesh.clone()),
-            MeshMaterial3d(paint.clone()),
-            tree.pose,
-            detail_range(distance, 25.0),
-            CanopyVisual::new(tree),
-            NotShadowCaster,
-        ));
+        parent
+            .spawn((
+                Mesh3d(looks.far.0.clone()),
+                MeshMaterial3d(looks.far.1.clone()),
+                tree.pose,
+                VisibilityRange {
+                    start_margin: close_range.end_margin.clone(),
+                    ..detail_range(distance, 25.0)
+                },
+                CanopyVisual::new(tree),
+                NotShadowCaster,
+            ))
+            .with_child((
+                Mesh3d(looks.close.0.clone()),
+                MeshMaterial3d(looks.close.1.clone()),
+                close_range.clone(),
+            ));
     }
 }
 
@@ -391,17 +450,18 @@ pub(super) fn update_canopy_motion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::terrain::base_tile;
 
     #[test]
     fn the_hangar_shelterbelt_adds_all_species_without_filling_the_yard() {
         let terrain = Terrain::new();
         let mut trees = Vec::new();
-        for z in -3..=0 {
+        for z in -2..=1 {
             for x in -2..=2 {
-                trees.extend(hangar_trees(&terrain, IVec2::new(x, z)));
+                trees.extend(hangar_trees(&terrain, base_tile() + IVec2::new(x, z)));
             }
         }
-        assert!((45..=85).contains(&trees.len()), "{} trees", trees.len());
+        assert!((60..=110).contains(&trees.len()), "{} trees", trees.len());
         assert!(
             trees
                 .iter()

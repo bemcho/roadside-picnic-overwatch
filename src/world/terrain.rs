@@ -63,28 +63,36 @@ impl TerrainGrid {
 /// Fixed noise seed.
 const SEED: u32 = 0x1972_2016;
 
-/// The quarry at the far end of the Zone: an elliptical excavation holding the
-/// quarry rim and the Golden Sphere's pit.
-pub(super) const QUARRY_CENTER: (f32, f32) = (-1270.0, -170.0);
-pub(super) const QUARRY_RADII: (f32, f32) = (190.0, 130.0);
-const QUARRY_DEPTH: f32 = 8.0;
+/// The quarry at the map's east edge (map px 1235, 375): a terraced oval pit
+/// holding the Meat Grinder on its west rim and the Golden Sphere below.
+pub(super) const QUARRY_CENTER: (f32, f32) = (-1272.0, 19.0);
+pub(super) const QUARRY_RADII: (f32, f32) = (320.0, 530.0);
+const QUARRY_DEPTH: f32 = 32.0;
+const QUARRY_BENCHES: f32 = 3.0;
 
 /// The bald hill: a scorched, bare mound among the industrial ruins.
-pub(super) const BALD_CENTER: (f32, f32) = (-220.0, 40.0);
+pub(super) const BALD_CENTER: (f32, f32) = (288.0, 283.0);
 const BALD_HEIGHT: f32 = 12.0;
 pub(super) const BALD_SIGMA: f32 = 22.0;
 
-/// The marsh: a broad, stagnant lowland south of the highway.
-pub(super) const MARSH_CENTER: (f32, f32) = (-720.0, -860.0);
-pub(super) const MARSH_RADIUS: f32 = 170.0;
+/// The marsh: a broad, stagnant lowland between the railway and the hills,
+/// south of the Chapter 4 track.
+pub(super) const MARSH_CENTER: (f32, f32) = (-330.0, -420.0);
+pub(super) const MARSH_RADII: (f32, f32) = (280.0, 250.0);
 const MARSH_DEPTH: f32 = 2.5;
 
-/// The Institute's hangar on the Harmont side of the Perimeter, on a levelled
-/// pad (wide enough for the whole hall) that fades back into the hills.
-pub const BASE: (f32, f32) = (40.0, -128.0);
+/// The Institute's hangar in Harmont, south of the Institute by the Perimeter
+/// gate (map px 355, 430), on a levelled pad that fades back into the land.
+pub const BASE: (f32, f32) = (840.0, -113.0);
+
+/// The terrain tile holding the hangar, for test fixtures.
+#[cfg(test)]
+pub(super) fn base_tile() -> IVec2 {
+    (Vec2::from(BASE) / TILE_SIZE).floor().as_ivec2()
+}
 
 /// Where the stalker starts and respawns: inside the hangar, facing its bay.
-pub const SPAWN: (f32, f32) = (40.0, -123.0);
+pub const SPAWN: (f32, f32) = (840.0, -108.0);
 
 /// Deterministic terrain model. Pure math until [`Terrain::build_grid`] is
 /// called — insert as a resource so any system can sample the ground.
@@ -267,9 +275,7 @@ impl Terrain {
         let qdz = (z - QUARRY_CENTER.1) / QUARRY_RADII.1;
         let quarry = smoothstep(1.12, 0.85, (qdx * qdx + qdz * qdz).sqrt());
 
-        let mdx = (x - MARSH_CENTER.0) / MARSH_RADIUS;
-        let mdz = (z - MARSH_CENTER.1) / MARSH_RADIUS;
-        let marsh = smoothstep(1.0, 0.6, (mdx * mdx + mdz * mdz).sqrt());
+        let marsh = smoothstep(1.0, 0.6, marsh_distance(x, z));
 
         let bdx = x - BALD_CENTER.0;
         let bdz = z - BALD_CENTER.1;
@@ -394,7 +400,17 @@ fn edge_segment(at: Vec2) -> Option<(Vec2, Vec2, f32)> {
 }
 
 fn regional_height(x: f32, z: f32) -> f32 {
-    hills(x, z) + mountains(x, z) + frontier_relief(x, z)
+    let lowland = 1.0 - 0.85 * smoothstep(1.3, 0.6, marsh_distance(x, z));
+    hills(x, z) * lowland + mountains(x, z) + frontier_relief(x, z)
+}
+
+/// Distance from the marsh's middle, in marsh radii.
+pub(super) fn marsh_distance(x: f32, z: f32) -> f32 {
+    Vec2::new(
+        (x - MARSH_CENTER.0) / MARSH_RADII.0,
+        (z - MARSH_CENTER.1) / MARSH_RADII.1,
+    )
+    .length()
 }
 
 /// The land with the sites' level pads and the dioramas' own ground on it,
@@ -418,17 +434,18 @@ pub(super) fn landform_height(x: f32, z: f32) -> f32 {
     let bd2 = bdx * bdx + bdz * bdz;
     h += BALD_HEIGHT * (-bd2 / (2.0 * BALD_SIGMA * BALD_SIGMA)).exp();
 
-    // Marsh: broad, nearly flat depression.
-    let mdx = (x - MARSH_CENTER.0) / MARSH_RADIUS;
-    let mdz = (z - MARSH_CENTER.1) / MARSH_RADIUS;
-    let marsh_d = (mdx * mdx + mdz * mdz).sqrt();
+    // Marsh: a broad lowland, flattened and sunk.
+    let marsh_d = marsh_distance(x, z);
     h -= MARSH_DEPTH * smoothstep(1.0, 0.35, marsh_d);
 
-    // Quarry: excavated bowl with a raised lip and micro-relief on the floor.
+    // Quarry: benches stepping down to the floor, a raised lip and
+    // micro-relief on the floor.
     let qdx = (x - QUARRY_CENTER.0) / QUARRY_RADII.0;
     let qdz = (z - QUARRY_CENTER.1) / QUARRY_RADII.1;
     let quarry_d = (qdx * qdx + qdz * qdz).sqrt();
-    let cut = QUARRY_DEPTH * smoothstep(1.08, 0.64, quarry_d);
+    let benches = smoothstep(1.06, 0.3, quarry_d) * QUARRY_BENCHES;
+    let cut =
+        QUARRY_DEPTH * (benches.floor() + smoothstep(0.62, 1.0, benches.fract())) / QUARRY_BENCHES;
     let lip = 0.9 * (-((quarry_d - 1.08) / 0.13).powi(2)).exp();
     let floor_noise = if quarry_d < 0.9 {
         (value_noise(x * 0.3, z * 0.3, SEED + 11) - 0.5) * 0.9 * smoothstep(0.9, 0.2, quarry_d)
@@ -438,27 +455,29 @@ pub(super) fn landform_height(x: f32, z: f32) -> f32 {
     h - cut + lip + floor_noise
 }
 
+/// Rolling country: flat-ish town land in Harmont, the suburbs' low hills in
+/// the Zone, and higher ground north and south of the map's frame.
 fn hills(x: f32, z: f32) -> f32 {
-    let local = 6.5 * fbm(x, z, SEED, 3, 1.0 / 48.0);
-    let highlands = smoothstep(150.0, 330.0, x.abs().max(z.abs()));
-    if highlands > 0.0 {
-        local + highlands * 17.0 * fbm(x, z, SEED + 4, 3, 1.0 / 225.0)
-    } else {
-        local
-    }
+    let wild = smoothstep(730.0, 640.0, x).max(smoothstep(820.0, 980.0, z.abs()));
+    let local = lerp(3.0, 6.5, wild) * fbm(x, z, SEED, 3, 1.0 / 48.0);
+    let rolling = lerp(0.15, 0.6, wild).max(smoothstep(820.0, 980.0, z.abs()));
+    local + rolling * 17.0 * fbm(x, z, SEED + 4, 3, 1.0 / 225.0)
 }
 
+/// Hills beyond the map's frame, north and south, clear of the railway and
+/// the Perimeter.
 fn frontier_relief(x: f32, z: f32) -> f32 {
     let p = Vec2::new(x, z);
-    if p.abs().max_element() < 740.0 {
+    if z.abs() < 1000.0 {
         return 0.0;
     }
     [
-        (Vec2::new(-1440.0, -1080.0), Vec2::new(480.0, 390.0), 86.0),
-        (Vec2::new(1280.0, 990.0), Vec2::new(410.0, 440.0), 107.0),
-        (Vec2::new(-1150.0, 1370.0), Vec2::new(460.0, 345.0), 118.0),
-        (Vec2::new(-2130.0, 1580.0), Vec2::new(560.0, 470.0), 102.0),
-        (Vec2::new(860.0, 2250.0), Vec2::new(620.0, 455.0), 99.0),
+        (Vec2::new(-1500.0, 1350.0), Vec2::new(360.0, 330.0), 118.0),
+        (Vec2::new(250.0, 1450.0), Vec2::new(420.0, 290.0), 99.0),
+        (Vec2::new(1350.0, 1330.0), Vec2::new(380.0, 320.0), 107.0),
+        (Vec2::new(-1150.0, -1350.0), Vec2::new(420.0, 330.0), 104.0),
+        (Vec2::new(-250.0, -1450.0), Vec2::new(330.0, 270.0), 86.0),
+        (Vec2::new(1300.0, -1350.0), Vec2::new(380.0, 330.0), 96.0),
     ]
     .into_iter()
     .map(|(center, radii, height)| {
@@ -467,21 +486,14 @@ fn frontier_relief(x: f32, z: f32) -> f32 {
     .sum()
 }
 
-/// The ridge between the marsh and the quarry, and the hills north of the
-/// suburbs: center, radii and summit height.
-const MOUNTAINS: [(Vec2, Vec2, f32); 6] = [
-    (Vec2::new(-1070.0, 420.0), Vec2::new(170.0, 280.0), 165.0),
-    (Vec2::new(-1170.0, 900.0), Vec2::new(220.0, 260.0), 190.0),
-    (Vec2::new(-1030.0, -450.0), Vec2::new(160.0, 230.0), 140.0),
-    (Vec2::new(-1100.0, -1050.0), Vec2::new(200.0, 260.0), 150.0),
-    (Vec2::new(-70.0, 1150.0), Vec2::new(260.0, 230.0), 150.0),
-    (Vec2::new(-460.0, 1200.0), Vec2::new(220.0, 240.0), 170.0),
+/// The Hills / Ridge between the railway and the quarry, north and south of
+/// the pass the Chapter 4 track climbs: center, radii and summit height.
+const MOUNTAINS: [(Vec2, Vec2, f32); 2] = [
+    (Vec2::new(-744.0, 400.0), Vec2::new(180.0, 270.0), 130.0),
+    (Vec2::new(-805.0, -440.0), Vec2::new(140.0, 290.0), 120.0),
 ];
 
 fn mountains(x: f32, z: f32) -> f32 {
-    if x.abs() < 300.0 && z < 364.0 {
-        return 0.0;
-    }
     let p = Vec2::new(x, z);
     let mut summit: f32 = 0.0;
     for (center, radii, height) in MOUNTAINS {
@@ -610,8 +622,8 @@ mod tests {
     #[test]
     fn road_is_flatter_than_its_surroundings() {
         let terrain = Terrain::new();
-        let mid = (-285.0, -67.0); // on the highway's centerline
-        let off = (-285.0, -30.0); // well off the road
+        let mid = (577.2, 78.0); // on the highway's centerline
+        let off = (577.2, 40.0); // well off the road
         let normal_on = terrain.normal_at(mid.0, mid.1);
         let normal_off = terrain.normal_at(off.0, off.1);
         let slope_on = normal_on.xz().length() / normal_on.y;

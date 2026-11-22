@@ -97,7 +97,6 @@ pub const KIND_SITE: &str = "Site";
 pub const KIND_BUILDING: &str = "Building";
 pub const KIND_SWAMP: &str = "Swamp";
 pub const KIND_LAKE: &str = "Lake";
-pub const KIND_RIVER: &str = "River";
 pub const KIND_COAST: &str = "Coast";
 pub const KIND_WILDLIFE: &str = "Wildlife";
 pub const KIND_MUTANT: &str = "Mutant";
@@ -111,12 +110,13 @@ pub fn unexplored(kind: &str) -> String {
     format!("Unexplored {}", kind.to_lowercase())
 }
 
+pub const TOWN: Entry = Entry {
+    title: "New Harmont",
+    description: "The clean districts around the old square, where the evacuated and the UN staff live as far from the Zone as the town allows.",
+};
+
 /// Indexed like the world's site kinds.
-pub const SITE_COPY: [Entry; 25] = [
-    Entry {
-        title: "New Harmont",
-        description: "The clean districts, where the evacuated and the UN staff live as far from the Zone as the town allows.",
-    },
+pub const SITE_COPY: [Entry; 24] = [
     Entry {
         title: "International Institute",
         description: "Thirteen storeys on the Perimeter itself. From its leaded top-floor windows you can see almost the whole Zone.",
@@ -249,23 +249,7 @@ pub const SWAMP: Entry = Entry {
 };
 pub const LAKE: Entry = Entry {
     title: "Lake",
-    description: "Still, dark water fed by the river. Mist lies on it most mornings.",
-};
-pub const WEST_LAKE: Entry = Entry {
-    title: "West lake",
-    description: "A broad basin lake beyond the western ridge.",
-};
-pub const RIVER: Entry = Entry {
-    title: "River",
-    description: "The main river winds down into the lake. Too deep to cross except at the fords.",
-};
-pub const FORD: Entry = Entry {
-    title: "Ford",
-    description: "A shallow gravel crossing. The armored car can make it.",
-};
-pub const TRIBUTARY: Entry = Entry {
-    title: "Northern stream",
-    description: "A cold stream off the northern hills that joins the river.",
+    description: "A broad basin lake beyond the quarry, past the edge of the map.",
 };
 pub const COAST: Entry = Entry {
     title: "Coast",

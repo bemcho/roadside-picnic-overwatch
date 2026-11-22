@@ -190,15 +190,12 @@ fn describe(place: Place) -> (&'static str, &'static Entry) {
         Place::Hangar => (text::KIND_BUILDING, &text::HANGAR),
         Place::Checkpoint => (text::KIND_BUILDING, &text::CHECKPOINT),
         Place::Yard => (text::KIND_SITE, &text::YARD),
+        Place::Town => (text::KIND_LANDMARK, &text::TOWN),
         Place::Quarry => (text::KIND_LANDMARK, &text::QUARRY),
         Place::BaldHill => (text::KIND_LANDMARK, &text::BALD_HILL),
         Place::StagnantFlats => (text::KIND_SWAMP, &text::STAGNANT_FLATS),
         Place::Swamp => (text::KIND_SWAMP, &text::SWAMP),
         Place::Lake => (text::KIND_LAKE, &text::LAKE),
-        Place::WestLake => (text::KIND_LAKE, &text::WEST_LAKE),
-        Place::River => (text::KIND_RIVER, &text::RIVER),
-        Place::Ford => (text::KIND_RIVER, &text::FORD),
-        Place::Tributary => (text::KIND_RIVER, &text::TRIBUTARY),
         Place::Coast => (text::KIND_COAST, &text::COAST),
         Place::Creature(kind) => {
             let label = match kind {
@@ -225,7 +222,8 @@ mod tests {
     #[test]
     fn the_pointer_names_a_creature_before_the_ground_behind_it() {
         let terrain = Terrain::new();
-        let ground = Vec2::new(40.0, -80.0);
+        // In the hangar yard, in front of the hall.
+        let ground = Vec2::from(crate::world::SPAWN) + Vec2::new(0.0, 43.0);
         let feet = ground.extend(terrain.mesh_height_at(ground)).xzy();
         let eye = feet + Vec3::new(0.0, 30.0, 30.0);
         let ray = Ray3d::new(
@@ -252,7 +250,7 @@ mod tests {
     #[test]
     fn each_kind_of_place_has_its_own_label() {
         assert_eq!(describe(Place::Swamp).0, text::KIND_SWAMP);
-        assert_eq!(describe(Place::Ford).1.title, text::FORD.title);
+        assert_eq!(describe(Place::Lake).1.title, text::LAKE.title);
         assert_eq!(
             describe(Place::Creature(CreatureKind::Mutt)).0,
             text::KIND_MUTANT

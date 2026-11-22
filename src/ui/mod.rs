@@ -4,6 +4,7 @@
 //! never hardcode display strings in systems.
 
 mod curtain;
+mod locator;
 mod splash;
 pub mod text;
 mod tooltip;
@@ -83,6 +84,7 @@ impl Plugin for UiPlugin {
                 update_artifact_readout,
                 update_free_camera_banner,
                 tooltip::update_tooltip,
+                locator::update_locator,
             )
                 .run_if(in_state(AppState::InGame)),
         )
@@ -234,6 +236,7 @@ fn spawn_hud(mut commands: Commands) {
         ));
 
         tooltip::spawn_tooltip(hud);
+        locator::spawn_locator(hud);
 
         hud.spawn((
             ArtifactReadout,

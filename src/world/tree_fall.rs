@@ -193,7 +193,7 @@ mod tests {
 
     #[test]
     fn a_fallen_tree_falls_and_stays_gone_across_chunk_reload() {
-        let tile = IVec2::new(0, -2);
+        let tile = crate::world::terrain::base_tile() + IVec2::NEG_Y;
         let terrain = Terrain::new();
         let (mut sites, _, _) = scenery::build_tile(&terrain, tile);
         sites.undergrowth.clear();

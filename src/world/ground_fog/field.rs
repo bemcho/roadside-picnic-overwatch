@@ -154,7 +154,7 @@ fn half_float(value: f32) -> u16 {
 
 #[cfg(test)]
 mod tests {
-    use super::super::super::hydrology::{LAKE, WATER_LEVEL};
+    use super::super::super::hydrology::{SWAMP, WATER_LEVEL};
     use super::super::super::terrain::Terrain;
     use super::*;
 
@@ -166,16 +166,22 @@ mod tests {
     #[test]
     fn fog_rests_on_open_water_and_favors_it_over_mountain_tops() {
         let terrain = Terrain::new();
-        // The summit of the ridge north of the railway.
-        let summit = Vec2::new(-1070.0, 420.0);
+        // The deepest of the marsh's pools, and a summit of the mountains
+        // north of the Zone's ridge.
+        let depth = |at: Vec2| terrain.water_depth_at(at.x, at.y);
+        let lake = (-30..=30)
+            .flat_map(|i| (-30..=30).map(move |j| SWAMP + Vec2::new(i as f32, j as f32) * 6.0))
+            .max_by(|a, b| depth(*a).total_cmp(&depth(*b)))
+            .expect("the marsh has pools");
+        let summit = Vec2::new(-744.0, 400.0);
         let mut field = FogField::default();
-        for at in [LAKE, summit] {
+        for at in [lake, summit] {
             let grid = TerrainGrid::distant((at / TILE_SIZE).floor().as_ivec2());
             let (ground, water) = terrain.build_grid(grid);
             field.add_tile(grid, &ground, &water);
         }
         let texels = field.texels();
-        let lake = texel(&texels, LAKE);
+        let lake = texel(&texels, lake);
         let peak = texel(&texels, summit);
         assert!((lake[0] + lake[1] - WATER_LEVEL).abs() < 0.05, "{lake:?}");
         assert!(lake[1].abs() <= HEIGHT_STEP * 0.5);

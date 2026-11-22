@@ -18,7 +18,7 @@ use super::{StreamAnchor, WorldRoot, anchor_tiles, detail_range, near_anchor, ne
 
 const YARD_MIN: Vec2 = Vec2::new(BASE.0 - 64.0, BASE.1 - 64.0);
 const YARD_MAX: Vec2 = Vec2::new(BASE.0 + 64.0, BASE.1 + 60.0);
-const GATE_CENTER: f32 = 39.0;
+const GATE_CENTER: f32 = BASE.0 - 1.0;
 pub(super) const GATE: Vec2 = Vec2::new(GATE_CENTER, YARD_MAX.y);
 const GATE_HALF: f32 = 8.0;
 pub(super) const CHECKPOINT: Vec2 = Vec2::new(GATE_CENTER - 13.6, YARD_MAX.y - 8.2);
@@ -28,14 +28,14 @@ const CHECKPOINT_DATUM: f32 = -0.41;
 /// The Perimeter: the UN wall between Harmont, on the hangar's side (+X), and
 /// the Zone (-X). Seen from above with +Z up, the Zone lies to the right, as on
 /// the Harmont map.
-pub(crate) const PERIMETER_X: f32 = -70.0;
-/// The official Institute gate, where the highway leaves Harmont.
-pub(super) const PERIMETER_GATE: Vec2 = Vec2::new(PERIMETER_X, -38.0);
+pub(crate) const PERIMETER_X: f32 = 700.0;
+/// The official Institute gate, where the highway leaves Harmont (map px 413, 350).
+pub(super) const PERIMETER_GATE: Vec2 = Vec2::new(PERIMETER_X, 79.0);
 const PERIMETER_GATE_HALF: f32 = 12.0;
 /// The checkpoint guarding the Perimeter gate, on the Harmont side.
-pub(super) const PERIMETER_CHECKPOINT: Vec2 = Vec2::new(PERIMETER_X + 14.0, -56.0);
-/// The stalkers' illegal breach in the Perimeter, south of the gate.
-pub(super) const BREACH: Vec2 = Vec2::new(PERIMETER_X, -500.0);
+pub(super) const PERIMETER_CHECKPOINT: Vec2 = Vec2::new(PERIMETER_X + 14.0, 61.0);
+/// The stalkers' illegal breach in the Perimeter, south of the gate (map px 410, 510).
+pub(super) const BREACH: Vec2 = Vec2::new(PERIMETER_X, -305.0);
 const BREACH_HALF: f32 = 9.0;
 const EDGE: f32 = HALF_SIZE - 4.0;
 const WALL_HEIGHT_SCALE: f32 = 7.4;
@@ -683,7 +683,8 @@ mod tests {
     #[test]
     fn wall_profiles_track_the_rendered_floor_and_rise_above_deep_crossings() {
         let terrain = Terrain::new();
-        let river = (175..480)
+        // The east lake reaches across the far edge.
+        let river = (600..920)
             .map(|z| Vec2::new(-EDGE, z as f32))
             .max_by(|&a, &b| {
                 floor_point(&terrain, a)

@@ -62,7 +62,8 @@ Hover descriptions (`ui/tooltip.rs`) pick, in order, a `Describe`d entity
 The stalker surveys an `Explored` grid within 150 m as they travel.
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
-in `drive_vehicle`.
+in `drive_vehicle`. A yellow ring (`ui/locator.rs`) marks the stalker, or the
+car they drive, once the camera pulls back past ~18 m, never under 34 px wide.
 
 ## Procedural content
 
@@ -72,7 +73,11 @@ in `drive_vehicle`.
   (`src/world/roads.rs`) follows the Harmont map: Harmont's streets, the highway
   from the Perimeter gate past the factories and the Garage, the railway tracks,
   the Chapter 4 track through the breach, the marsh road and the quarry. Roads
-  are graded over the sited land (pads and dioramas), then paved.
+  are graded over the sited land (pads and dioramas), then paved. Each route
+  is dirt, old asphalt (`Surface::Asphalt`: the highway, Harmont's main road,
+  the Institute and Plague roads) or New Harmont's smooth streets
+  (`Surface::Street`); the road mask texture holds gravel (R), tire ruts (G)
+  and asphalt (B), and `terrain.wesl` paints weathered asphalt from B.
   The same network keeps vegetation off the lanes and paints a world-space
   gravel and tire-rut mask independent of terrain LOD. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
@@ -87,11 +92,11 @@ in `drive_vehicle`.
   checked in, only the extracted maps in `assets/textures/terrain`. The shader blends irregular
   patches over the terrain masks, uses the heights for shallow parallax, and adds
   snow on high, gentler slopes.
-- **Water** (`src/world/{hydrology,water}.rs`): the main river crosses the map
-  into a lake north of Harmont and is joined by a tributary in the Zone; the
-  marsh in the Zone's south has shallow pools between drier hummocks. Use `Terrain::water_depth_at` for traversal. Walk and
-  drive through the shallows; deep water stops you. The main dirt track crosses
-  at a vehicle-depth ford.
+- **Water** (`src/world/{hydrology,water}.rs`): the Harmont map has no river.
+  The Zone's water is the marsh (`hydrology::SWAMP`): shallow pools between
+  drier hummocks; the lake and the sea lie beyond the map's edges. Use
+  `Terrain::water_depth_at` for traversal. Walk and drive through the
+  shallows; deep water stops you.
 - **Day/night and weather** (`src/world/weather.rs`): a 24-minute day (hold T to
   time-lapse) moves the sun and a full moon (a second, dim `DirectionalLight` with
   its own disk) by solar geometry; whichever is up casts shadows, and exposure
@@ -117,9 +122,12 @@ in `drive_vehicle`.
 - **Scenery** (`src/world/scenery.rs`): textured rock outcrops and reeds are drawn
   in chunk batches. Every tree is an imported model: saplings, broadleaves, tall
   conifers, birches, and dead trees (`assets/models/trees/medium/`) grow around
-  the hangar and in the named landmark groves; open country has no trees. Their GLBs use one ~500-triangle primitive each: simplified
-  textured wood and, for living trees, cutout crown faces baked from the
-  supplied models.
+  the hangar, in the named landmark groves and in three dense woods
+  (`canopy::WOODS`); open country has no trees. Their GLBs use one
+  ~500-triangle primitive each: simplified textured wood and, for living
+  trees, cutout crown faces baked from the supplied models. Within 8 m of the
+  camera a tree swaps to its full scan (`trees/uhd/`, ~1.9M triangles), a
+  child entity that crossfades by `VisibilityRange` and sways with it.
   `src/world/canopy.rs` fits the roots and trunks, limits
   shadows to nearby trees, and sways some living trees without moving their
   colliders. Individual trees can randomly snap and fall while in view
@@ -129,22 +137,27 @@ in `drive_vehicle`.
   Camera frusta and distance ranges cull scenery detail independently of
   collision and leave the terrain skyline visible.
 - **Wind** (`src/world/weather.rs`, `Wind`): the day's breeze with gusts of
-  4–10 s that come and go. It leans and stirs the trees, sways imported bushes
-  from the root, bends the batched ground cover in `shaders/plant_wind.wesl`
-  (vertex color alpha = height above the root), drifts and churns the ground fog,
+  4–10 s that come and go. It leans and stirs the trees, bends the imported weeds and
+  bushes in `shaders/plant_wind.wesl` (each vertex by its height above the
+  instance's root), sways the nearest plant's full scan from the root, drifts and churns the ground fog,
   and swings the stalker's coat.
-- **Plants** (`src/world/plants.rs`): dry grass and thornbushes favor dry ground,
-  shrubs favor woodland, and hogweed and emissive glowweed favor damp ground.
-  Each dry-grass placement seeds a patch of up to ten procedural plants, while
-  bushes and weeds seed up to 100 and spread across a proportional radius. The
-  root of every shrub or thorn patch uses an imported PBR model: byte-identical
-  4K UHD shrub/thornbush GLBs render within 8 m, then crossfade to 1536 px
-  medium variants through about 70 m. The remaining patch plants use small,
-  frustum-culled mesh batches, grown on a worker thread as chunks stream in
-  (one tile is spawned per frame), not an
-  entity per plant. Ground cover has no collision or shadows. The rear and
-  sides of the hangar form a dense shelterbelt; the central yard and roads stay
-  clear.
+- **Plants** (`src/world/plants.rs`): dry weeds (dry grass, dandelion,
+  ragweed) favor dry ground, shrubs (shrub, bramble, dog rose, elder, juniper,
+  wormwood) favor woodland, thornbushes the uplands, and damp weeds (hogweed,
+  burdock, henbane, thistle) and emissive glowweed favor damp ground. There is
+  no procedural plant geometry: every plant is an imported model with three
+  tiers in one frame (`assets::PlantModel`): a light, texture-free far mesh
+  (`plants/low/`, 400–600 triangles, built by `tools/build_far_lod.py`) drawn
+  with the near model's material out to 66 m (plus the camera's reach), the
+  textured `medium/` model within 30 m of the camera, and the full `uhd/` scan
+  for the plant nearest the stalker within 8 m (henbane and ragweed have no
+  textured scan). The multipart UHD scans differ in shape from their medium
+  models, so their swap shows. Plants sharing a model draw as one GPU
+  instance batch. Each dry-weed seed grows a patch of up to 5 plants, other
+  weeds and bushes up to 15 (a third of that in the hangar shelterbelt); sites
+  are computed on a worker thread as chunks stream in and one tile is spawned
+  per frame. Plants have no collision or shadows. The rear and sides of the
+  hangar form a dense shelterbelt; the central yard and roads stay clear.
 - **Vegetation** (`src/world/trees.rs`): four extracted, textured vegetation clusters
   (`assets/models/vegetation/medium/*.glb`) are scattered only around landmarks, on a jittered grid,
   weighted by `Terrain::woodland_at` (off-road, outside the quarry, sparse above
@@ -165,7 +178,7 @@ in `drive_vehicle`.
   the Zone, with the Institute gate on the highway (guarded by a second
   checkpoint) and the stalkers' breach on the Chapter 4 track; `in_zone` tells
   the sides apart. A separate continuous wall marks the map's edge; the panels
-  follow the rendered terrain and stay above the water at river crossings. Wall meshes and solid collision stream in nearby terrain tiles.
+  follow the rendered terrain and stay above the water. Wall meshes and solid collision stream in nearby terrain tiles.
   Keep the staging area and driveway clear; the tree and bush shelterbelt is
   concentrated behind the hangar and along the sides.
   The wall repeats one panel thousands of times, so it keeps its medium model:
@@ -174,8 +187,11 @@ in `drive_vehicle`.
   `tools/prepare_plant_asset.py`. Both checkpoints use the UHD scan; re-measure
   `src/world/pillars/uhd_checkpoint.rs` with `tools/sample_landmark_ground.py`.
 - **Sites** (`src/world/sites.rs`): the Harmont map from `doc/` (map, layout
-  notes and landmark CSV) as one registry of 33 placements of the UHD landmark
-  and site scans. Harmont lies on the hangar's side of the Perimeter (+X): New
+  notes and landmark CSV) as one registry of 32 placements of the UHD landmark
+  and site scans. `src/world/map.rs` lays `doc/Roadside_map.jpg` over the world
+  at 2.4 m per pixel (`map(px, py)`: x = (705 - px) * 2.4, z = (383 - py) * 2.4)
+  and holds the map's railway line, so placements can be checked against the
+  image. Harmont lies on the hangar's side of the Perimeter (+X): New
   Harmont, the Institute on the Perimeter, the Plague Quarter, the Borscht and
   the roadhouse, the school, houses and cemetery. The Zone lies beyond it (-X),
   deepening toward the quarry: abandoned suburbs, the factories, highway,
@@ -192,6 +208,25 @@ in `drive_vehicle`.
   footprint around any `StreamAnchor`. Build a stand-in from the JPEG source
   with glTF Transform `simplify --ratio 0.02 --error 0.002` and `resize --width
   1024 --height 1024`, then compress; never ground or recenter it.
+- **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town
+  scan (`assets/models/harmont/`) line a street grid around a paved downtown
+  plaza on one level town pad; each shows its full scan near the view and a
+  light version farther out.
+- **Railway** (`src/world/railway.rs`): the old line from south to north
+  (`map::RAILWAY`) is laid from the railway embankment scan
+  (`assets/models/railway/`): sleeper ladders end to end along the graded bed,
+  two rails on top and wreckage beside the line. `tools/align_kit_piece.py`
+  squares up each kit piece (+Z along the line, grounded at y = 0).
+- **Old roads** (`src/world/old_road.rs`): copies of the cracked-asphalt road
+  module (`assets/models/road/`, reassembled into one straight frame by
+  `tools/straighten_road_kit.py`) pave every `Surface::Asphalt` leg end to end,
+  pitched with the graded road; the full scan shows within 40 m, the
+  simplified `medium/` copy out to 900 m.
+- **Marsh props** (`src/world/marsh.rs`): dead trees, stumps, logs, fungus,
+  moss, rocks, mounds and debris from the swamp kit (`assets/models/swamp/`)
+  are scattered over the marsh; trees, stumps, logs and mounds may stand in
+  shallow pools, the rest keep to the hummocks. Props too tall to step over
+  carry a collider.
 - **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
   textured sources in `assets/models/{animals,birds}/medium/` share mesh handles
   and preserve the original PBR maps. Rebuild with glTF Transform `simplify

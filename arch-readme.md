@@ -84,14 +84,15 @@ flowchart LR
 | Places | `src/world/places.rs` | Named places at a point or along a ray, `Describe`, the `Explored` survey grid |
 | Streaming | `src/world/landscape.rs`, `scenery.rs` | Async terrain build, LOD swaps, 3x3 scenery/collider streaming |
 | Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
-| Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees (no procedural ones), wind sway, fall, ground cover |
+| Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
+| Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `old_road.rs`, `marsh.rs` | Harmont map overlay, New Harmont, kit-laid railway and asphalt roads, marsh props |
 | Wildlife | `src/world/wildlife/` | Shared rigs, gaits, flyers, predator/mutant AI, spatial cues |
 | Collision | `src/world/collision.rs`, `world/pillars/` | Static `Pillar` colliders and push-out behavior |
 | Audio | `src/audio/` | Synthesized ambience/effects and live audio sinks |
-| UI | `src/ui/` | Splash, entry curtain, HUD, FPS, weather line, controls, hover tooltips, pause |
+| UI | `src/ui/` | Splash, entry curtain, HUD, FPS, weather line, controls, hover tooltips, stalker locator ring, pause |
 | Zone loop | `src/zone/` | Current placeholder anomalies, collectible markers, run counters |
 | Asset tooling | `tools/` | Texture/GLB preparation, grounding, rigging, collision generation |
-| Shaders | `assets/shaders/` | Terrain, water, hangar cutaway and ground fog WESL entry points |
+| Shaders | `assets/shaders/` | Terrain, water, hangar cutaway, plant wind and ground fog WESL entry points |
 
 ## State and lifecycle
 
@@ -104,8 +105,8 @@ systems:
    `PreloadedAssets`.
 2. `world/landscape.rs` starts an asynchronous CPU task that builds the distant
    terrain, water, scenery layout, and streamed site data.
-3. The world preloads canopies, wildlife primitives, cordon assets, sites, and
-   materials.
+3. The world preloads canopies, wildlife primitives, cordon assets, sites, the
+   town, railway, old-road and marsh kits, plants, and materials.
 4. `ui/splash.rs` displays the hangar backdrop and repeatedly checks both the
    direct load state and recursive dependency state of every preload handle.
 5. `SplashPhase` becomes `Ready` only after the preload list is complete and
@@ -214,28 +215,34 @@ The async landscape build prepares coarse scenic terrain and all site/scenery
 layouts up front. Nearby ground tiles swap to their detailed mesh on demand.
 Collision, imported trees, and plants stream around the player in a 3x3 tile
 neighborhood rather than following the distant visual range. Colliders spawn
-with the tile; each tile's ground-cover meshes and bush sites are grown by a
-`plants::PendingPlants` task on the async compute pool, and
-`spawn_grown_plants` spawns at most one finished tile per frame to spread the
-mesh uploads.
-Bush and weed seeds expand into ten times as many visual plants as dry grass,
-with the patch radius widened proportionally. Each shrub/thorn patch root uses
-an imported PBR model: a full 4K UHD mesh within 8 m crossfades to a 1536 px
-medium variant through the near scenery range. Keeping the 4K source only on
-the active near bush avoids preloading every variant's GPU texture; all
-placements still pass the road, water, yard, and site-clearance filters before
-entering a batch.
+with the tile; each tile's plant sites are grown by a `plants::PendingPlants`
+task on the async compute pool, and `spawn_grown_plants` spawns at most one
+finished tile per frame to spread the spawns.
+Every weed and bush is an imported model (`assets::PlantModel`): an entity with
+the textured `medium/` mesh within 30 m of the camera and a child with the
+texture-free `low/` mesh (same material) out to the scenery range, so plants
+sharing a model draw as one GPU instance batch. `stream_full_plants` puts the
+full `uhd/` scan in place of the one plant nearest the stalker within 8 m and
+hides that plant once the scan is ready; only that scan's textures are loaded.
+Dry-weed seeds grow patches of up to 5 plants, other weeds and bushes up to 15;
+every placement passes the road, water, yard, and site-clearance filters.
 
 `RoadNetwork` indexes route segments by terrain tile. It produces both:
 
 1. a smooth graded height surface for walking/driving, and
-2. a world-space `Rg8Unorm` texture containing road and tire-rut masks.
+2. a world-space RGBA8 texture with gravel (R), tire-rut (G) and asphalt (B)
+   masks, which `terrain.wesl` turns into gravel, ruts and weathered asphalt.
+
+Each route has a `Surface`: dirt, `Asphalt` (the old roads, which
+`old_road.rs` also paves with copies of the road kit module) or `Street` (New
+Harmont's smooth streets).
 
 Road legs must connect to a real route vertex, stay below the grade and water
 thresholds tested in `world/roads.rs`, and avoid cutting through site pads.
 Leg endpoints take their level from the sited land, so a spur meets a building's
-pad or a diorama's front edge exactly. A river crossing needs banks above the
-water level: where the land lies below it, the river bed rises above the road.
+pad or a diorama's front edge exactly. Near tiles always stitch their edges
+at 8 m spacing, so a narrow road in a deep cut or fill dips where it crosses a
+tile edge; keep pits and steep relief back from the road (see the quarry rim).
 
 ## Fog and draw distance
 
@@ -477,10 +484,12 @@ about two of every three 24 s slots, veering it a little while they blow.
 `Wind::seconds` (the flutter clock) drive every consumer:
 
 - `canopy::update_canopy_motion` leans trees downwind and stirs them,
-- `plants::sway_bushes` sways each imported bush from its root,
-- `plants::bend_plants` feeds `shaders/plant_wind.wesl`, a vertex shader on the
-  ground-cover material: each vertex's color alpha holds its height above the
-  plant's root, so roots stay put and tips bend furthest,
+- `plants::bend_plants` writes the wind into one storage buffer shared by
+  every plant material, read by `shaders/plant_wind.wesl`, a vertex shader:
+  each vertex moves by its height above the instance's origin (the root), so
+  roots stay put and tips bend furthest,
+- `plants::sway_full_plants` sways the nearest plant's full scan from its root
+  (its scene keeps the scan's own materials),
 - `ground_fog::update_ground_fog` drifts the fog with the wind and churns it in
   gusts,
 - `player::animation::swing_coat` swings the stalker's coat bones.
@@ -631,6 +640,13 @@ Important paths:
     The stalker and (while zoomed in) the camera focus are anchors; scenery,
     ground LODs and cordon walls stream around each. Fog layers follow the
     `ViewFocus`. Add both markers' implications when adding a streamed system.
+
+23. **Do not change a widely shared material every frame.**
+    `Assets::get_mut` on a material marks it changed, and Bevy re-extracts and
+    re-specializes every mesh drawn with it. On the plants' materials that cut
+    the frame rate from about 26 FPS to 7. Write only on a real change, or put
+    per-frame values in a shared `ShaderBuffer` (`plants::bend_plants`) or the
+    view globals.
 
 ## How to add a static site model
 

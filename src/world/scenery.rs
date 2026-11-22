@@ -25,6 +25,8 @@ use super::trees::{self, TreeSite};
 
 const SEED: u32 = 0xD33D_305A;
 pub(super) const TREE_DENSITY: f32 = 0.25;
+/// Tree spots kept in the heart of a dense wood.
+const WOOD_DENSITY: f32 = 0.85;
 const BOULDER: &[Pillar] = &[Pillar {
     x: 0.0,
     z: 0.0,
@@ -130,7 +132,8 @@ fn sites_for_tile(terrain: &Terrain, tile: IVec2, cell: f32, kind: Kind) -> Vec<
             let scale = match kind {
                 Kind::Tree => {
                     let grove = forest_density(p.x, p.y).max(0.48 * canopy::landmark_grove(p));
-                    if chance > TREE_DENSITY * grove * terrain.woodland_at(p.x, p.y)
+                    let density = (TREE_DENSITY * grove).max(WOOD_DENSITY * canopy::wood(p));
+                    if chance > density * terrain.woodland_at(p.x, p.y)
                         || terrain.water_depth_at(p.x, p.y) > 0.0
                     {
                         continue;
@@ -246,6 +249,7 @@ pub(super) fn stream_scenery(
                 }
                 trees::spawn_trees(objects, &server, &sites.undergrowth);
                 super::sites::spawn_solids(objects, tile);
+                super::town::spawn_solids(objects, tile);
             })
             .id();
         scenery.active.insert(tile, entity);
@@ -449,11 +453,38 @@ mod tests {
     }
 
     #[test]
+    fn each_dense_wood_is_thick_with_trees() {
+        let terrain = Terrain::new();
+        for (center, radius) in canopy::WOODS {
+            let core = radius * 0.5;
+            let low = ((center - core) / TILE_SIZE).floor().as_ivec2();
+            let high = ((center + core) / TILE_SIZE).floor().as_ivec2();
+            let mut trees = 0;
+            for x in low.x..=high.x {
+                for z in low.y..=high.y {
+                    let (sites, _, _) = build_tile(&terrain, IVec2::new(x, z));
+                    trees += sites
+                        .canopies
+                        .iter()
+                        .filter(|tree| tree.pose.translation.xz().distance(center) < core)
+                        .count();
+                }
+            }
+            // About a tree every 12 m or closer across the wood's heart.
+            let spacing = (std::f32::consts::PI * core * core / trees.max(1) as f32).sqrt();
+            assert!(
+                spacing < 12.0,
+                "{trees} trees, {spacing} m apart at {center}"
+            );
+        }
+    }
+
+    #[test]
     fn open_country_away_from_landmarks_has_no_trees() {
         let terrain = Terrain::new();
-        let spots = sites_for_tile(&terrain, IVec2::new(-12, 3), 8.0, Kind::Tree);
+        let spots = sites_for_tile(&terrain, IVec2::new(-6, -9), 8.0, Kind::Tree);
         assert!(!spots.is_empty(), "the fixture has tree spots");
-        let (sites, _, _) = build_tile(&terrain, IVec2::new(-12, 3));
+        let (sites, _, _) = build_tile(&terrain, IVec2::new(-6, -9));
         assert!(sites.canopies.is_empty());
     }
 

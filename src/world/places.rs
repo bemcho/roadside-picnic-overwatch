@@ -11,6 +11,7 @@ use super::cordon;
 use super::hydrology::{Water, Wetlands};
 use super::sites::{self, Kind as SiteKind};
 use super::terrain::{self, BASE, HALF_SIZE, Terrain};
+use super::town;
 use super::wildlife::Kind as CreatureKind;
 
 /// A named place or thing the map can describe.
@@ -21,15 +22,12 @@ pub enum Place {
     Hangar,
     Checkpoint,
     Yard,
+    Town,
     Quarry,
     BaldHill,
     StagnantFlats,
     Swamp,
     Lake,
-    WestLake,
-    River,
-    Ford,
-    Tributary,
     Coast,
     Creature(CreatureKind),
     Vehicle,
@@ -71,19 +69,18 @@ pub fn place_at(at: Vec2) -> Option<Place> {
     if let Some(place) = sites::place_at(at) {
         return Some(place);
     }
-    if let Some(water) = Wetlands::at(at.x, at.y).water(at.x, at.y) {
+    if let Some(water) = Wetlands::at(at.x, at.y).water() {
         return Some(match water {
-            Water::River => Place::River,
-            Water::Ford => Place::Ford,
-            Water::Tributary => Place::Tributary,
             Water::Lake => Place::Lake,
-            Water::WestLake => Place::WestLake,
             Water::Swamp => Place::Swamp,
             Water::Coast => Place::Coast,
         });
     }
     if cordon::inside_yard(at) {
         return Some(Place::Yard);
+    }
+    if town::contains(at) {
+        return Some(Place::Town);
     }
     landform(at)
 }
@@ -94,7 +91,7 @@ fn landform(at: Vec2) -> Option<Place> {
         Some(Place::Quarry)
     } else if at.distance(Vec2::from(terrain::BALD_CENTER)) < terrain::BALD_SIGMA * 2.0 {
         Some(Place::BaldHill)
-    } else if at.distance(Vec2::from(terrain::MARSH_CENTER)) < terrain::MARSH_RADIUS {
+    } else if terrain::marsh_distance(at.x, at.y) < 1.0 {
         Some(Place::StagnantFlats)
     } else {
         None
@@ -119,6 +116,7 @@ pub fn structure_on_ray(terrain: &Terrain, ray: Ray3d, reach: f32) -> Option<(f3
     let hall = enter_box(ray, floor - corner, floor + corner + Vec3::Y * HALL_HEIGHT)
         .map(|t| (t, Place::Hangar));
     sites::outlines()
+        .chain(town::outlines())
         .chain(checkpoints)
         .filter_map(|(center, radius, height, place)| {
             let base = center.extend(terrain.mesh_height_at(center)).xzy();
@@ -236,21 +234,19 @@ pub(super) fn survey_around_stalker(
 
 #[cfg(test)]
 mod tests {
-    use super::super::hydrology::{FORD_X, LAKE, SWAMP};
+    use super::super::hydrology::SWAMP;
     use super::super::sites::LANDMARKS;
     use super::*;
 
     #[test]
     fn ground_points_name_the_hangar_water_and_sites() {
         assert_eq!(place_at(Vec2::from(BASE)), Some(Place::Hangar));
-        assert_eq!(place_at(LAKE), Some(Place::Lake));
-        assert_eq!(place_at(SWAMP), Some(Place::Swamp));
+        let swamp = (-20..20)
+            .map(|x| SWAMP + Vec2::new(x as f32 * 6.0, 0.0))
+            .find_map(place_at);
+        assert_eq!(swamp, Some(Place::Swamp));
         let site = LANDMARKS[0];
         assert!(matches!(place_at(site.center), Some(Place::Site(_))));
-        let ford = (-40..40)
-            .map(|z| Vec2::new(FORD_X, LAKE.y + z as f32 * 2.0))
-            .find_map(place_at);
-        assert_eq!(ford, Some(Place::Ford));
         assert_eq!(
             place_at(Vec2::from(terrain::BALD_CENTER)),
             Some(Place::BaldHill)
@@ -276,6 +272,6 @@ mod tests {
         assert!(explored.contains(Vec2::from(BASE)));
         assert!(explored.contains(start + Vec2::new(SURVEY_RANGE * 0.8, 0.0)));
         assert!(!explored.contains(start + Vec2::new(SURVEY_RANGE * 1.5, 0.0)));
-        assert!(!explored.contains(LAKE));
+        assert!(!explored.contains(SWAMP));
     }
 }
