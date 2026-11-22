@@ -37,6 +37,7 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **Right mouse drag** — rotate the camera
 - **Arrow keys / middle drag / screen edges** — roam the camera freely
 - **F** — toggle the free camera (hold the view where it is) and following the stalker
+- **C** — find the stalker: the camera returns to following them from wherever it roams
 - **Mouse pointer** — hover over a site, landmark, building, water, creature,
   the car or an exhibit for its description (unsurveyed places show only their kind)
 - **T** (hold) — time-lapse the day/night cycle (40× speed)
@@ -108,7 +109,7 @@ the stalker stands still.
   comes from the day's dew point (Magnus), so it peaks late at night and at dawn,
   or stays high on humid and rainy days. The HUD shows time, temperature,
   humidity and sky.
-- **Ground fog** (`src/world/ground_fog.rs`, `ground_fog/{field,render}.rs`,
+- **Ground fog and clouds** (`src/world/ground_fog.rs`, `ground_fog/{field,render}.rs`,
   `assets/shaders/ground_fog.wesl`): a custom render pass (after the main pass)
   raymarches a thin layer that follows the terrain or open water. Its top sits
   between half the armored car's height and its roof (1.25–2.6 m), and visibility
@@ -121,7 +122,12 @@ the stalker stands still.
   saturated air. Drifting banks fray its edges, and billows and wind break it up.
   The sun and moon light it through the atmosphere with shadows and forward
   scattering. The hangar hall stays clear, and the fog thins out above ~140 m of
-  camera height. Bevy's distance fog adds the regional 10–16-tile cloud shelf
+  camera height. The same pass marches three layers of cumulus whose bases lie
+  near 170 m, 450 m and 1,050 m: noise cells that drift with the wind, lit by
+  the sun through the atmosphere and darkened by rain. Their cover follows the
+  day's `Weather::cloud`, from a few puffs on clear days to the most on rainy
+  ones, and they blend with the ground fog in the order the ray meets them.
+  Bevy's distance fog adds the regional 10–16-tile cloud shelf
   over far low ground (shorter in humid air); the terrain shader masks it to low
   ground, and birds disable classic fog.
 - **Scenery** (`src/world/scenery.rs`): textured rock outcrops and reeds are drawn
@@ -171,7 +177,7 @@ the stalker stands still.
   the treeline and on the bald hill). Rebuild them from the packed source with
   `tools/prepare_vegetation_asset.py <source.glb> assets/models/vegetation/medium assets/textures/fauna`
   (run in headless Blender after `--`). It reuses the saved albedo, normal and
-  roughness PNGs; `--boards <image_3> <image_2> <image_1> <image_0>` rebuilds
+  roughness PNGs (`textures/fauna` is in the asset archive, see Asset tiers); `--boards <image_3> <image_2> <image_1> <image_0>` rebuilds
   512 px maps by combining swatches and close-ups from the reference sheets.
   The forest uses
   separate birch/petrified bark, and plants share the mud material at their bases.
@@ -199,8 +205,10 @@ the stalker stands still.
   at 2.4 m per pixel (`map(px, py)`: x = (705 - px) * 2.4, z = (383 - py) * 2.4)
   and holds the map's railway line, so placements can be checked against the
   image. Harmont lies on the hangar's side of the Perimeter (+X): New
-  Harmont, the Institute on the Perimeter, the Plague Quarter, the Borscht and
-  the roadhouse, the school, houses and cemetery. The Zone lies beyond it (-X),
+  Harmont, the Institute on the Perimeter, the Plague Quarter, the Borscht (the
+  stalkers' red-roofed tavern, stretched to twice its scan's width with
+  `Model::widened`) and the Old Borscht (Ernest's gutted first bar), the school,
+  houses and cemetery. The Zone lies beyond it (-X),
   deepening toward the quarry: abandoned suburbs, the factories, highway,
   Garage, railway with a locomotive and the derailed train, the marsh and
   witches' jelly flats, the ridge, the crater, the quarry rim and the Golden
@@ -267,7 +275,9 @@ the stalker stands still.
   sources are grounded by `tools/ground_full_asset.py`; already-grounded dense
   PBR scans are copied byte-for-byte. Every display has a 1536 px preview in
   `assets/models/artifacts/medium/`; within 8 m only the nearest preview is hidden
-  and its untouched full 4K PBR scene is streamed in. Do not replace the primary
+  and its `assets::ARTIFACTS` scene is streamed in. `ARTIFACTS` names the same
+  `medium/` files for now; the untouched 4K PBR scans are in the asset archive
+  (see Asset tiers). Do not replace the primary
   showcase artifact with an LOD. Bevy's glTF loader generates MikkTSpace
   tangents when a normal map needs them.
 - **Mutants** (`src/world/wildlife/mutants.rs`): bovines, chimeras, fleshdeer,
@@ -339,7 +349,8 @@ the stalker stands still.
   by `Gait` and pitches the body face-down while crawling (the Crawl clip is posed
   standing); the splash poses the same rig. The older trench-coat stalker
   (`models/stalker/uhd/stalker_rigged.glb`, T-pose bind with `--coat` bones that
-  `swing_coat` drives) is no longer loaded. Edit motion in the script and regenerate
+  `swing_coat` drives) is no longer loaded; it and the soldier's unrigged sources
+  are in the asset archive (see Asset tiers). Edit motion in the script and regenerate
   rather than hand-editing the GLB. Preview clips with
   `~/Projects/agentic/agentic-tooling/media/glb-preview`.
 - **Sky & lighting** (`src/world/mod.rs`, `weather.rs`) use Bevy's physical `Atmosphere` with
@@ -486,6 +497,14 @@ theirs in near the view and show `low/` stand-ins built from the same scans
 elsewhere. Other runtime paths in `src/assets/mod.rs` load `medium/`, with `uhd/`
 used for close-up swaps (e.g. the 4K shrub GLBs in `plants.rs`, the full
 artifact scenes within 8 m).
+
+`assets/` holds only files the game loads (every runtime path, `concat!`-built
+ones included, is a string in the release binary). Unused tiers and pipeline
+sources (reference boards, hangar parts, the old stalker, the soldier's
+unrigged scans, the 4K artifact scans) are in
+`~/Projects/agentic/RoadSide-Picnic/archived/roadside-picnic-unused-assets-2026-11-22.zip`, with sha256 sums in its `MANIFEST.txt`, and in the Git LFS
+history. Restore them from the repo root before re-running a pipeline that
+needs them: `unzip -n <zip> 'assets/*' -d .`.
 
 ### Further reading
 

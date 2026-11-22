@@ -36,8 +36,8 @@ const INDUSTRY_FORK: Vec2 = map(637.0, 359.0);
 // Where each place's drive leaves the road.
 pub(super) const INSTITUTE: Vec2 = Vec2::new(GATE.x, 470.0);
 pub(super) const MOTOR_POOL: Vec2 = Vec2::new(GATE.x, 199.0);
-pub(super) const BORSCHT: Vec2 = map(277.0, 566.0);
-pub(super) const TAVERN: Vec2 = map(232.0, 618.0);
+pub(super) const OLD_BORSCHT: Vec2 = map(277.0, 566.0);
+pub(super) const BORSCHT: Vec2 = map(232.0, 618.0);
 pub(super) const CEMETERY: Vec2 = map(205.0, 642.0);
 pub(super) const SCHOOL: Vec2 = map(250.0, 440.0);
 pub(super) const PLAGUE: Vec2 = map(195.0, 440.0);
@@ -137,7 +137,7 @@ const ROUTES: &[Route] = &[
         map(757.0, 333.0),
         GARAGE,
     ]),
-    // Harmont's main road, south along the Perimeter to the Borscht.
+    // Harmont's main road, south along the Perimeter to the old Borscht.
     asphalt(&[
         YARD_TURN,
         map(337.0, 362.0),
@@ -145,7 +145,7 @@ const ROUTES: &[Route] = &[
         map(307.0, 408.0),
         PLAGUE_FORK,
         map(292.0, 502.0),
-        BORSCHT,
+        OLD_BORSCHT,
     ]),
     // North past the motor pool to the Institute, and the avenue through
     // New Harmont's plaza.
@@ -157,7 +157,7 @@ const ROUTES: &[Route] = &[
     street(town::STREETS[2]),
     street(town::STREETS[3]),
     asphalt(&[PLAGUE_FORK, SCHOOL, PLAGUE, HOUSES]),
-    dirt(&[BORSCHT, BORSCHT_LANE, TAVERN, CEMETERY]),
+    dirt(&[OLD_BORSCHT, BORSCHT_LANE, BORSCHT, CEMETERY]),
     // Chapter 4: from the Borscht through the illegal breach, over the
     // railway, along the marsh and through the pass to the quarry.
     dirt(&[

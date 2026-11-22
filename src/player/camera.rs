@@ -1,6 +1,7 @@
 //! Tactical orbit camera: scroll zooms from over the shoulder out to the whole
 //! map (pitch steepens with the zoom), right-drag rotates, and the arrow keys,
-//! middle-drag or the screen edges roam freely; F returns to following the stalker.
+//! middle-drag or the screen edges roam freely; F toggles the free camera, and C
+//! always finds the stalker again.
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -175,7 +176,8 @@ fn zoom_pitch(distance: f32) -> f32 {
 }
 
 /// Roams the view with the arrow keys, a middle-button drag or the window edges.
-/// F toggles between the free camera (held where it is) and following the stalker.
+/// F toggles between the free camera (held where it is) and following the
+/// stalker; C always brings the view back to the stalker.
 pub(super) fn pan_camera(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -188,6 +190,10 @@ pub(super) fn pan_camera(
     let Ok(mut orbit) = cameras.single_mut() else {
         return;
     };
+    if keys.just_pressed(KeyCode::KeyC) {
+        orbit.free_focus = None;
+        return;
+    }
     if keys.just_pressed(KeyCode::KeyF) {
         orbit.free_focus = match orbit.free_focus {
             Some(_) => None,
@@ -467,6 +473,33 @@ mod tests {
         assert_eq!(press_f(&mut app), None);
         // F alone detaches the view where the stalker stands.
         assert_eq!(press_f(&mut app), Some(Vec2::new(40.0, -120.0)));
+    }
+
+    #[test]
+    fn c_always_brings_the_view_back_to_the_stalker() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<ButtonInput<KeyCode>>()
+            .init_resource::<ButtonInput<MouseButton>>()
+            .init_resource::<AccumulatedMouseMotion>()
+            .add_systems(Update, pan_camera);
+        app.world_mut().spawn((Window::default(), PrimaryWindow));
+        app.world_mut()
+            .spawn((Player::default(), Transform::default()));
+        let roaming = OrbitCamera {
+            free_focus: Some(Vec2::new(900.0, 300.0)),
+            ..default()
+        };
+        let camera = app.world_mut().spawn(roaming).id();
+        for _ in 0..2 {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.release(KeyCode::KeyC);
+            keys.clear();
+            keys.press(KeyCode::KeyC);
+            app.update();
+            let orbit = app.world().get::<OrbitCamera>(camera).expect("orbit");
+            assert!(!orbit.roaming(), "C follows the stalker and never detaches");
+        }
     }
 
     #[test]

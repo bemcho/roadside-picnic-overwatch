@@ -3,6 +3,9 @@
 // it; inside, steps follow the fog's mean free path. Light comes from the view's
 // directional lights (sun and moon) through the atmosphere and their shadow
 // cascades, plus sky light, with forward scattering toward each light.
+//
+// Clouds: three layers of volumetric fog at different heights, shaped into
+// clouds with flat bases and domed, billowy tops, marched along the same ray.
 
 import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 import bevy_pbr::atmosphere::{
@@ -34,6 +37,8 @@ struct GroundFog {
     ambient: vec4<f32>,
     // Fog-free box: center (x, z) and half extents.
     clear_box: vec4<f32>,
+    // Cloud cover (0-1) and how dark rain clouds grow (0-1).
+    clouds: vec4<f32>,
 }
 
 @group(1) @binding(0) var<uniform> ground: GroundFog;
@@ -53,6 +58,39 @@ const SLOPE: f32 = 0.9;
 const ALBEDO: vec3<f32> = vec3(0.93, 0.95, 0.97);
 // Distance along the ray over which one direct-light evaluation is reused.
 const LIGHT_REUSE: f32 = 3.0;
+
+// A layer of clouds: base and depth above sea level, the spacing of its
+// clouds, how much faster than the ground wind it drifts, its share of the
+// weather's cover and a noise offset (all in meters but the last three).
+struct CloudLayer {
+    base: f32,
+    depth: f32,
+    size: f32,
+    drift: f32,
+    cover: f32,
+    seed: f32,
+}
+
+const CLOUD_LAYERS: u32 = 3u;
+const CLOUD_STEPS: u32 = 18u;
+// Extinction in a cloud's core: about 130 m of visibility.
+const CLOUD_EXTINCTION: f32 = 0.03;
+// Clouds fade into the sky toward this distance.
+const CLOUD_FAR: f32 = 7000.0;
+// Clouds clear around the camera as it flies through a layer.
+const CLOUD_NEAR: vec2<f32> = vec2(20.0, 120.0);
+const CLOUD_ALBEDO: vec3<f32> = vec3(0.96, 0.97, 1.0);
+
+fn cloud_layer(index: u32) -> CloudLayer {
+    switch index {
+        // Low scud that drifts over the ridge's peaks.
+        case 0u: { return CloudLayer(170.0, 110.0, 260.0, 3.0, 0.8, 0.0); }
+        // Fair-weather cumulus.
+        case 1u: { return CloudLayer(450.0, 260.0, 560.0, 5.0, 1.0, 37.0); }
+        // Large clouds high over the map.
+        default: { return CloudLayer(1050.0, 320.0, 950.0, 8.0, 0.85, 71.0); }
+    }
+}
 
 struct FogSample {
     extinction: f32,
@@ -147,6 +185,22 @@ fn sample_transmittance_lut(r: f32, mu: f32) -> vec3<f32> {
         atmosphere_transmittance_texture, atmosphere_transmittance_sampler, uv, 0.0).rgb;
 }
 
+// Exposed radiance of directional light `i` (sun or moon) reaching `p`
+// through the atmosphere.
+fn light_radiance(i: u32, p: vec3<f32>) -> vec3<f32> {
+    let light = &lights.directional_lights[i];
+    var radiance = (*light).color.rgb * view.exposure;
+@if(ATMOSPHERE) {
+    let p_atmosphere = clamp_to_surface(
+        atmosphere, (atmosphere.world_to_atmosphere * vec4(p, 1.0)).xyz);
+    let r = length(p_atmosphere);
+    let mu = dot((*light).direction_to_light.xyz, normalize(p_atmosphere));
+    radiance *= sample_transmittance_lut(r, mu)
+        * calculate_visible_sun_ratio(atmosphere, r, mu, (*light).sun_disk_angular_size);
+}
+    return radiance;
+}
+
 struct Direct {
     // Sun and moon light reaching the fog's top, scattered toward the camera.
     light: vec3<f32>,
@@ -166,15 +220,7 @@ fn direct_light(p: vec3<f32>, h: f32, affinity: f32, ray: vec3<f32>) -> Direct {
     for (var i = 0u; i < lights.n_directional_lights; i += 1u) {
         let light = &lights.directional_lights[i];
         let to_light = (*light).direction_to_light.xyz;
-        var radiance = (*light).color.rgb * view.exposure;
-@if(ATMOSPHERE) {
-        let p_atmosphere = clamp_to_surface(
-            atmosphere, (atmosphere.world_to_atmosphere * vec4(p, 1.0)).xyz);
-        let r = length(p_atmosphere);
-        let mu = dot(to_light, normalize(p_atmosphere));
-        radiance *= sample_transmittance_lut(r, mu)
-            * calculate_visible_sun_ratio(atmosphere, r, mu, (*light).sun_disk_angular_size);
-}
+        let radiance = light_radiance(i, p);
         if all(radiance < vec3(1.0e-4)) {
             continue;
         }
@@ -211,28 +257,115 @@ fn light_fog(h: f32, fog: FogSample, direct: Direct) -> vec3<f32> {
     return (sky + sun) * ALBEDO;
 }
 
-@fragment
-fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
-    if ground.weather.x * ground.weather.y <= 0.0 {
-        return vec4(0.0);
+// How much cloud a layer holds at `p`, from 0 in clear air to 1 in a cloud's
+// core. Patches of the layer swell into clouds whose tops rise with their
+// strength, so each cloud is a dome on a flat base; billows erode its edges.
+fn cloud_density(p: vec3<f32>, layer: CloudLayer) -> f32 {
+    let rise = (p.y - layer.base) / layer.depth;
+    if rise <= 0.0 || rise >= 1.0 {
+        return 0.0;
     }
-    let frag = in.position.xy;
-    let depth = textureLoad(depth_texture, vec2<i32>(frag), 0);
-    let ndc = frag_coord_to_ndc(vec4(frag, depth, 1.0)).xy;
-    let camera = view.world_position;
-    let ray = normalize(position_ndc_to_world(vec3(ndc, 1.0)) - camera);
-    var end = FAR;
-    if depth > 0.0 {
-        end = min(distance(position_ndc_to_world(vec3(ndc, depth)), camera), FAR);
+    let w = (p.xz + ground.wind.xy * layer.drift) / layer.size + layer.seed;
+    let cells = noise2(w) * 0.55 + noise2(w * 2.2 + 5.3) * 0.3 + noise2(w * 5.3 + 1.7) * 0.15;
+    let cover = ground.clouds.x * layer.cover;
+    let strength = saturate((cells - 1.0 + cover) / max(cover, 0.05));
+    if strength <= 0.0 {
+        return 0.0;
     }
+    let top = mix(0.3, 1.0, strength);
+    let profile = smoothstep(0.0, 0.08, rise) * (1.0 - smoothstep(top * 0.5, top, rise));
+    let q = vec3(w.x, rise * layer.depth / layer.size, w.y) * 7.0;
+    let billow = noise3(q) * 0.65 + noise3(q * 2.6 + 3.1) * 0.35;
+    return saturate((profile * strength - (1.0 - billow) * 0.35) * 2.5);
+}
 
+// Light scattered toward the camera at `p` in a cloud: sun and moon dimmed by
+// the cloud toward them (with a multiple-scattering tail that keeps cores from
+// going black), brightest toward the light, plus sky light that fades toward
+// the cloud's base.
+fn light_cloud(p: vec3<f32>, rise: f32, layer: CloudLayer, ray: vec3<f32>) -> vec3<f32> {
+    var light = vec3(0.0);
+    for (var i = 0u; i < lights.n_directional_lights; i += 1u) {
+        let to_light = lights.directional_lights[i].direction_to_light.xyz;
+        let radiance = light_radiance(i, p);
+        if all(radiance < vec3(1.0e-4)) {
+            continue;
+        }
+        let near = 0.12 * layer.depth;
+        let far = 0.35 * layer.depth;
+        let optical = CLOUD_EXTINCTION * (cloud_density(p + to_light * near, layer) * near
+            + cloud_density(p + to_light * far, layer) * (far - near));
+        let through = exp(-optical) + 0.3 * exp(-optical * 0.15);
+        let mu = dot(to_light, ray);
+        let phase = 4.0 * PI * mix(henyey_greenstein(mu, -0.2), henyey_greenstein(mu, 0.7), 0.5);
+        light += radiance * through * (0.6 + 0.4 * phase) / PI;
+    }
+    let sky = ground.ambient.rgb * mix(0.45, 1.1, rise);
+    let rain = 1.0 - 0.45 * ground.clouds.y * (1.0 - rise);
+    return (light + sky) * CLOUD_ALBEDO * rain;
+}
+
+// Cloud light and transmittance along the ray, up to `end`: each layer the
+// ray crosses, nearest first, sampled more densely close to the camera.
+fn march_clouds(camera: vec3<f32>, ray: vec3<f32>, end: f32, jitter: f32) -> vec4<f32> {
+    var scattered = vec3(0.0);
+    var transmittance = 1.0;
+    if ground.clouds.x <= 0.0 {
+        return vec4(scattered, transmittance);
+    }
+    let reach = min(end, CLOUD_FAR);
+    for (var k = 0u; k < CLOUD_LAYERS; k += 1u) {
+        // Downward rays meet the highest layer first.
+        let layer = cloud_layer(select(k, CLOUD_LAYERS - 1u - k, ray.y < 0.0));
+        let top = layer.base + layer.depth;
+        var enter = 0.0;
+        var leave = reach;
+        if abs(ray.y) > 1.0e-4 {
+            let a = (layer.base - camera.y) / ray.y;
+            let b = (top - camera.y) / ray.y;
+            enter = max(min(a, b), 0.0);
+            leave = min(max(a, b), reach);
+        } else if camera.y < layer.base || camera.y > top {
+            continue;
+        }
+        let span = leave - enter;
+        if span <= 0.0 {
+            continue;
+        }
+        for (var i = 0u; i < CLOUD_STEPS; i += 1u) {
+            let f = (f32(i) + jitter) / f32(CLOUD_STEPS);
+            let t = enter + span * f * f;
+            let step = span * (2.0 * f + 1.0 / f32(CLOUD_STEPS)) / f32(CLOUD_STEPS);
+            let p = camera + ray * t;
+            let fade = smoothstep(CLOUD_NEAR.x, CLOUD_NEAR.y, t)
+                * (1.0 - smoothstep(0.5 * CLOUD_FAR, CLOUD_FAR, t));
+            let density = cloud_density(p, layer) * fade;
+            if density < 0.01 {
+                continue;
+            }
+            let kept = exp(-density * CLOUD_EXTINCTION * step);
+            let rise = (p.y - layer.base) / layer.depth;
+            scattered += transmittance * (1.0 - kept) * light_cloud(p, rise, layer, ray);
+            transmittance *= kept;
+            if transmittance < 0.02 {
+                return vec4(scattered, 0.0);
+            }
+        }
+    }
+    return vec4(scattered, transmittance);
+}
+
+// Ground fog light and transmittance along the ray, up to `end`.
+fn march_ground_fog(camera: vec3<f32>, ray: vec3<f32>, end: f32, jitter: f32) -> vec4<f32> {
+    var transmittance = 1.0;
+    var scattered = vec3(0.0);
+    if ground.weather.x * ground.weather.y <= 0.0 {
+        return vec4(scattered, transmittance);
+    }
     let ceiling = ground.shape.y + 0.6;
     // Most clearance the ray can lose per meter over rising ground.
     let descent = SLOPE * length(ray.xz) - ray.y;
-    let jitter = interleaved_gradient_noise(frag, globals.frame_count);
     var t = 0.0;
-    var transmittance = 1.0;
-    var scattered = vec3(0.0);
     var entered = false;
     var direct: Direct;
     var lit_at = -1.0e9;
@@ -283,5 +416,30 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         }
         t += span;
     }
-    return vec4(scattered, 1.0 - transmittance);
+    return vec4(scattered, transmittance);
+}
+
+@fragment
+fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
+    let frag = in.position.xy;
+    let depth = textureLoad(depth_texture, vec2<i32>(frag), 0);
+    let ndc = frag_coord_to_ndc(vec4(frag, depth, 1.0)).xy;
+    let camera = view.world_position;
+    let ray = normalize(position_ndc_to_world(vec3(ndc, 1.0)) - camera);
+    var end = FAR;
+    if depth > 0.0 {
+        end = min(distance(position_ndc_to_world(vec3(ndc, depth)), camera), FAR);
+    }
+    let jitter = interleaved_gradient_noise(frag, globals.frame_count);
+    let fog = march_ground_fog(camera, ray, end, jitter);
+    let clouds = march_clouds(camera, ray, end, jitter);
+    // The clouds float above the ground fog: a ray heading down meets them first.
+    var near = fog;
+    var far = clouds;
+    if ray.y < 0.0 {
+        near = clouds;
+        far = fog;
+    }
+    let scattered = near.rgb + near.a * far.rgb;
+    return vec4(scattered, 1.0 - near.a * far.a);
 }

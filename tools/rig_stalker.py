@@ -1,5 +1,9 @@
 """Auto-rig a Tripo stalker and bake the Crawl/Idle/Jump/Run/Walk clips into a GLB.
 
+The unrigged sources below (soldier/uhd/soldier.glb, soldier/medium, stalker/*) are
+not in assets/ any more; restore them from the asset archive first (CLAUDE.md, Asset
+tiers).
+
 Medium runtime build (raw Tripo export, grounded, front faces -Y):
   blender -b --factory-startup --python-exit-code 1 --python tools/rig_stalker.py -- \
       raw.glb rigged.glb

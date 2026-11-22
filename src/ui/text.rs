@@ -14,13 +14,12 @@ pub const HUD_TITLE: &str = "THE ZONE";
 pub const HUD_FPS_PENDING: &str = "FPS: --";
 
 /// Hint shown in the HUD corner.
-pub const HUD_CONTROLS_HINT: &str = "Click: move | WASD: steer | Wheel: zoom | Arrows/Edges/Middle-drag: pan | F: free camera | Hold T: time-lapse | M: mute | ESC: pause | Q: quit";
-pub const HUD_CONTROLS_MUTED: &str = "Click: move | WASD: steer | Wheel: zoom | Arrows/Edges/Middle-drag: pan | F: free camera | Hold T: time-lapse | M: unmute | ESC: pause | Q: quit";
-pub const HUD_DRIVER_CONTROLS: &str =
-    "Click: drive | W/S: accelerate/reverse | A/D: steer | SPACE: brake | F: free camera | M: mute";
-pub const HUD_DRIVER_MUTED: &str = "Click: drive | W/S: accelerate/reverse | A/D: steer | SPACE: brake | F: free camera | M: unmute";
+pub const HUD_CONTROLS_HINT: &str = "Click: move | WASD: steer | Wheel: zoom | Arrows/Edges/Middle-drag: pan | F: free camera | C: find stalker | Hold T: time-lapse | M: mute | ESC: pause | Q: quit";
+pub const HUD_CONTROLS_MUTED: &str = "Click: move | WASD: steer | Wheel: zoom | Arrows/Edges/Middle-drag: pan | F: free camera | C: find stalker | Hold T: time-lapse | M: unmute | ESC: pause | Q: quit";
+pub const HUD_DRIVER_CONTROLS: &str = "Click: drive | W/S: accelerate/reverse | A/D: steer | SPACE: brake | F: free camera | C: find stalker | M: mute";
+pub const HUD_DRIVER_MUTED: &str = "Click: drive | W/S: accelerate/reverse | A/D: steer | SPACE: brake | F: free camera | C: find stalker | M: unmute";
 /// Shown while the view roams away from the stalker.
-pub const HUD_FREE_CAMERA: &str = "FREE CAMERA - F: follow the stalker";
+pub const HUD_FREE_CAMERA: &str = "FREE CAMERA - F or C: follow the stalker";
 pub const HUD_ENTER_VEHICLE: &str = "Press E to enter vehicle";
 pub const HUD_EXIT_VEHICLE: &str = "Press E to exit vehicle";
 
@@ -123,11 +122,11 @@ pub const SITE_COPY: [Entry; 24] = [
     },
     Entry {
         title: "The Borscht",
-        description: "A dive at the edge of town where stalkers drink, and fences buy what came out of the Zone last night.",
+        description: "A sagging two-storey tavern at the edge of town where stalkers drink. The back room buys what came out of the Zone last night, and the police know it.",
     },
     Entry {
-        title: "Roadhouse",
-        description: "A sagging two-storey tavern across from the Borscht. The back room is for business, and the police know it.",
+        title: "The Old Borscht",
+        description: "Ernest's first bar, gutted in a police raid. He reopened down the lane; the broken sign still hangs over the door.",
     },
     Entry {
         title: "Plague Quarter",

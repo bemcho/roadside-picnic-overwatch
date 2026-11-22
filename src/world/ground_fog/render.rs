@@ -1,5 +1,6 @@
-//! Render-world pass for the ground fog: a fullscreen raymarch over the fog
-//! field, drawn over the opaque scene before post-processing. It uses the
+//! Render-world pass for the ground fog and the cloud layers: a fullscreen
+//! raymarch over the fog field and through the clouds aloft, drawn over the
+//! opaque scene and the sky before post-processing. It uses the
 //! view's own bindings, so the fog is lit by the sun and moon through the
 //! atmosphere and shadowed by their cascades.
 
@@ -52,6 +53,8 @@ pub(crate) struct GroundFog {
     pub(super) ambient: Vec4,
     /// Fog-free box (center x, z, half extents).
     pub(super) clear_box: Vec4,
+    /// Cloud cover of the cloud layers (0-1) and how dark rain clouds grow.
+    pub(super) clouds: Vec4,
 }
 
 /// The fog field texture, shared with the render world.

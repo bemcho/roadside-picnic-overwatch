@@ -28,7 +28,7 @@ use super::{StreamAnchor, WorldRoot, detail_range};
 pub(crate) enum Kind {
     Institute,
     Borscht,
-    Tavern,
+    OldBorscht,
     PlagueQuarter,
     SuburbanHouse,
     Schoolhouse,
@@ -124,6 +124,9 @@ struct Model {
     /// A light stand-in built from the scan, shown from farther away.
     far: &'static str,
     scale: f32,
+    /// Stretch along model x on top of `scale` (1 keeps the scan's
+    /// proportions). Buildings only: a relief keeps its true scale.
+    widen: f32,
     ground: Ground,
     /// Half the footprint along model x and z, in model units.
     half: Vec2,
@@ -135,6 +138,21 @@ struct Model {
 }
 
 impl Model {
+    /// The same model stretched `widen` times along its x axis.
+    const fn widened(self, widen: f32) -> Self {
+        Self { widen, ..self }
+    }
+
+    /// Meters per model unit along model x, y and z.
+    fn size(&self) -> Vec3 {
+        Vec3::new(self.scale * self.widen, self.scale, self.scale)
+    }
+
+    /// Half the footprint along model x and z, in meters.
+    fn half_meters(&self) -> Vec2 {
+        self.half * self.size().xz()
+    }
+
     /// The model height (model units) laid on the land around it: a
     /// building's floor, or the middle of a diorama's front edge.
     fn datum(&self) -> f32 {
@@ -147,16 +165,17 @@ impl Model {
         }
     }
 
+    /// How far the front reaches from the middle, in meters.
     fn front_extent(&self) -> f32 {
         match self.front {
-            Front::X => self.half.x,
-            Front::Z => self.half.y,
+            Front::X => self.half_meters().x,
+            Front::Z => self.half_meters().y,
         }
     }
 
     /// Radius of the circle around the footprint, in meters.
     fn radius(&self) -> f32 {
-        self.half.length() * self.scale
+        self.half_meters().length()
     }
 
     /// Width of the slope that blends a relief into the land, in meters.
@@ -174,6 +193,7 @@ macro_rules! model {
             path: concat!("models/", $dir, "/uhd/", $file, ".glb"),
             far: concat!("models/", $dir, "/low/", $file, ".glb"),
             scale: $scale,
+            widen: 1.0,
             ground: $ground,
             half: Vec2::new($hx, $hz),
             top: $top,
@@ -220,20 +240,9 @@ const MODELS: [Model; KIND_COUNT] = [
         true,
         "institute"
     ),
+    // The stalkers' tavern, twice the scan's width along its front.
     model!(
         "The Borscht",
-        "landmarks",
-        "bar-borscht",
-        32.0,
-        Ground::Level(-0.19),
-        (0.132, 0.492),
-        0.209,
-        X,
-        true,
-        "bar_borscht"
-    ),
-    model!(
-        "Roadhouse",
         "landmarks",
         "tavern-harmont",
         22.0,
@@ -241,8 +250,21 @@ const MODELS: [Model; KIND_COUNT] = [
         (0.447, 0.49),
         0.406,
         Z,
-        false,
+        true,
         "tavern_harmont"
+    )
+    .widened(2.0),
+    model!(
+        "The Old Borscht",
+        "landmarks",
+        "bar-borscht",
+        32.0,
+        Ground::Level(-0.19),
+        (0.132, 0.492),
+        0.209,
+        X,
+        false,
+        "bar_borscht"
     ),
     model!(
         "Plague Quarter",
@@ -561,7 +583,7 @@ impl Landmark {
 
     pub fn entrance(self) -> Vec2 {
         let m = self.model();
-        self.center + self.toward_road() * (m.scale * m.front_extent() + 7.0)
+        self.center + self.toward_road() * (m.front_extent() + 7.0)
     }
 
     /// Radius of the level pad around a building.
@@ -591,13 +613,13 @@ impl Landmark {
     fn pose(self) -> Transform {
         Transform::from_xyz(self.center.x, self.base_height(), self.center.y)
             .with_rotation(self.rotation())
-            .with_scale(Vec3::splat(self.model().scale))
+            .with_scale(self.model().size())
     }
 
     /// A world point in model units.
     fn to_local(self, at: Vec2) -> Vec2 {
         let offset = (at - self.center).extend(0.0).xzy();
-        (self.rotation().inverse() * offset).xz() / self.model().scale
+        (self.rotation().inverse() * offset).xz() / self.model().size().xz()
     }
 
     fn contains(self, at: Vec2) -> bool {
@@ -664,8 +686,8 @@ use Kind::*;
 pub(super) const LANDMARKS: [Landmark; 32] = [
     // Harmont, on the hangar's side of the Perimeter.
     Landmark::new(Institute, map(349.5, 170.5), roads::INSTITUTE),
-    Landmark::new(Borscht, map(264.0, 561.5), roads::BORSCHT),
-    Landmark::new(Tavern, map(223.5, 608.0), roads::TAVERN),
+    Landmark::new(OldBorscht, map(264.0, 561.5), roads::OLD_BORSCHT),
+    Landmark::new(Borscht, map(223.5, 608.0), roads::BORSCHT),
     Landmark::new(PlagueQuarter, map(195.0, 425.5), roads::PLAGUE),
     Landmark::new(SuburbanHouse, map(150.0, 429.0), roads::HOUSES),
     Landmark::new(SuburbanHouse, map(150.0, 451.0), roads::HOUSES),
@@ -708,7 +730,7 @@ pub(super) fn outlines() -> impl Iterator<Item = (Vec2, f32, f32, Place)> {
             let m = site.model();
             (
                 site.center,
-                m.half.max_element() * m.scale,
+                m.half_meters().max_element(),
                 (m.top - m.datum()).max(0.05) * m.scale,
                 Place::Site(site.kind),
             )
@@ -993,7 +1015,7 @@ mod tests {
         for site in LANDMARKS {
             let harmont = matches!(
                 site.kind,
-                Institute | Borscht | Tavern | PlagueQuarter | Schoolhouse | MotorPool
+                Institute | Borscht | OldBorscht | PlagueQuarter | Schoolhouse | MotorPool
             );
             let margin = site.footprint() + 20.0;
             let clear = (site.center.x - cordon::PERIMETER_X).abs() > margin;

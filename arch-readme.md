@@ -284,6 +284,19 @@ above that surface, and visibility inside spans 1 to 5 two-metre ground tiles.
 The hangar hall is a fog-free box. The density fades out above 140-520 m of
 camera height.
 
+The same pass marches three cloud layers (`cloud_layer` in `ground_fog.wesl`:
+bases near 170, 450 and 1,050 m, each a slab with its own cell size, drift and
+cover). `cloud_density` shapes value-noise cells into domes with billowed
+edges. `light_cloud` takes two light probes toward the sun or moon
+(`light_radiance`, the same atmosphere transmittance as the fog), a dual-lobe
+phase and a sky ambient, and rain darkens it. `march_clouds` visits the slabs in
+ray order with 18 steps each, fades clouds within 20-120 m of the camera and
+beyond 7 km, and stops once the ray is opaque. The fragment composites both
+marches in the order the ray meets them: clouds first looking down, the ground
+fog first looking up. `update_ground_fog` feeds the cover in
+`GroundFog::clouds`, 0.3 on a clear day up to 0.6 in rain
+(`Weather::cloud`).
+
 `update_distance_fog` derives a regional visibility from a periodic cloud field
 and lowland height, shortened by humid air. It varies between 1,280 and 2,048 m
 (10-16 terrain tiles) plus a clearance for camera height, and `CAMERA_FAR`
@@ -308,7 +321,9 @@ Each placement references a `Kind`, then shares:
 
 - one UHD scan and a light `low/` stand-in built from it,
 - one scale and `Ground`: a level datum for buildings, or a `Relief` grid for
-  dioramas that carry their own landscape,
+  dioramas that carry their own landscape. A building may also be `widened`
+  along its model x (the Borscht is twice its scan's width); `Model::size`
+  carries that stretch into the pose, footprint, pad and local relief lookups,
 - one entrance axis (`Front`),
 - one pillar-collider slice,
 - one road junction,
@@ -511,7 +526,8 @@ Useful query relationships:
 - controls change with `Driving` and `AudioMode`,
 - pause UI follows `InGamePhase`, not the world lifetime,
 - the weather line reads `WorldClock` and `Weather`,
-- the free-camera banner reads `OrbitCamera::roaming`,
+- the free-camera banner reads `OrbitCamera::roaming` (F toggles it in
+  `pan_camera`, C always clears it to follow the stalker again),
 - hover tooltips (`ui/tooltip.rs`) cast the pointer's ray and choose, in order,
   a `Describe`d entity (creatures, the car, exhibits), a site or building
   outline (`places::structure_on_ray`; the hall uses its cut-away box), then the

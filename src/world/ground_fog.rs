@@ -1,7 +1,9 @@
 //! Fog. A thin, terrain-hugging ground fog, from half the armored car's height
 //! to its roof, gathers over water, vegetation and low ground at night, at
 //! dawn, and on humid or rainy days ([`render`] raymarches it over the fog
-//! [`field`]). Bevy's distance fog adds a cloud shelf over the far lowlands.
+//! [`field`]). The same pass marches three layers of cloud at different
+//! heights, whose cover follows the weather. Bevy's distance fog adds a cloud
+//! shelf over the far lowlands.
 
 mod field;
 mod render;
@@ -49,6 +51,8 @@ const HALL_HALF_EXTENTS: Vec2 = Vec2::new(18.5, 20.5);
 const SKY_LUX: f32 = 18_000.0;
 /// Rate of the fog's slow internal churn.
 const CHURN: f32 = 0.05;
+/// Cloud cover aloft from a clear day (a few fair-weather puffs) to a rainy one.
+const CLOUD_COVER: (f32, f32) = (0.3, 0.6);
 
 pub(crate) fn camera_fog() -> GroundFog {
     // Koschmieder: visibility = 3.912 / extinction.
@@ -101,6 +105,7 @@ pub(super) fn update_ground_fog(
         let height = (camera.translation.y - ground).max(0.0);
         let fade = 1.0 - smoothstep(OVERVIEW_FADE.0, OVERVIEW_FADE.1, height);
         fog.weather = Vec4::new(weather.fog, fade, 0.0, 0.0);
+        fog.clouds = Vec4::new(cloud_cover(weather.cloud), weather.cloud, 0.0, 0.0);
         fog.wind += Vec4::new(drift.x, drift.y, churn, 0.0);
         fog.ambient = (sky * exposure.exposure() / PI).extend(0.0);
     }
@@ -141,6 +146,11 @@ pub(super) fn update_distance_fog(
         let regional = visibility_at(at, &terrain) * (1.0 - 0.4 * weather.fog);
         fog.falloff = FogFalloff::from_visibility_squared(regional + height * OVERVIEW_CLEARANCE);
     }
+}
+
+/// Cover of the cloud layers for the weather's cloudiness (0-1).
+fn cloud_cover(cloud: f32) -> f32 {
+    CLOUD_COVER.0.lerp(CLOUD_COVER.1, cloud.clamp(0.0, 1.0))
 }
 
 fn visibility_at(at: Vec2, terrain: &Terrain) -> f32 {
@@ -198,6 +208,14 @@ mod tests {
             .iter()
             .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
         assert!(maximum - minimum >= 128.0, "fog banks must vary by region");
+    }
+
+    #[test]
+    fn clear_days_keep_a_few_clouds_and_rain_brings_the_most() {
+        assert!(cloud_cover(0.0) > 0.0);
+        assert!(cloud_cover(0.0) < cloud_cover(0.65));
+        assert!(cloud_cover(0.65) < cloud_cover(0.85));
+        assert_eq!(cloud_cover(2.0), CLOUD_COVER.1);
     }
 
     #[test]
