@@ -1,1 +1,8 @@
-keep moving while stuck 
+extract dioramas like buildings models as separate models in order to navigate
+Harmont buildings are in the air
+
+add way point Shft + left click
+when player is moving legs are too spread should be close to eachother
+barier on closer to institute entry
+close the second entry only crawable breach in the wall hiddeng by plants have to be close enough to find it
+make cordon wall higher 3x with a lot of vegetation along

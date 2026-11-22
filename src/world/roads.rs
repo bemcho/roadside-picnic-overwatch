@@ -12,7 +12,8 @@ use super::terrain::{BASE, TILE_SIZE, lerp, smoothstep};
 use super::town;
 
 const HALF_WIDTH: f32 = 8.5;
-const SHOULDER: f32 = 11.0;
+/// Where a road's graded shoulder meets the land, from its middle line.
+pub(super) const SHOULDER: f32 = 11.0;
 /// The railway's gravel bed, narrower than a road.
 const RAIL_HALF_WIDTH: f32 = 3.2;
 const RAIL_SHOULDER: f32 = 6.0;
@@ -207,6 +208,14 @@ const ROUTES: &[Route] = &[
         CRATER,
     ]),
 ];
+
+/// The dirt tracks and old asphalt roads outside the town's streets.
+pub(super) fn country_roads() -> impl Iterator<Item = &'static [Vec2]> {
+    ROUTES
+        .iter()
+        .filter(|route| route.surface != Surface::Street)
+        .map(|route| route.points)
+}
 
 /// The old asphalt roads outside the town, for the road kit.
 pub(super) fn old_roads() -> impl Iterator<Item = &'static [Vec2]> {

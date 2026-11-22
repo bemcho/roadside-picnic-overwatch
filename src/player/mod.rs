@@ -19,8 +19,9 @@ use bevy::render::render_resource::TextureUsages;
 use crate::assets::STALKER_MODEL;
 use crate::states::{AppState, InGamePhase};
 use crate::world::{
-    Body, CAMERA_FAR, Collider, SPAWN, StreamAnchor, TERRAIN_HALF_SIZE, Terrain,
-    camera_distance_fog, camera_fog, push_out,
+    Body, CAMERA_FAR, Collider, Crusher, SPAWN, StreamAnchor, TERRAIN_HALF_SIZE, Terrain,
+    Unclimbable, Weight, camera_distance_fog, camera_fog, climb_top, fence_out, push_out,
+    support_height,
 };
 
 pub(crate) use animation::Gait;
@@ -36,7 +37,8 @@ use camera::{
 pub(crate) use orders::cast_to_ground;
 use orders::{MoveOrder, issue_move_order, spawn_order_marker, sync_order_marker};
 use vehicle::{
-    Driver, Driving, Vehicle, drive_vehicle, interact_vehicle, pose_wheels, sync_spotlight,
+    Driver, Driving, Patrol, Vehicle, drive_patrol, drive_vehicle, interact_vehicle, pose_wheels,
+    spawn_patrol, sync_spotlight,
 };
 
 pub struct PlayerPlugin;
@@ -59,6 +61,40 @@ const PRONE: Body = Body {
     radius: 0.35,
     height: 0.5,
 };
+
+/// The stalker's weight and footprint: what they trample, and the solids light
+/// enough for them to walk through.
+const STALKER: Crusher = Crusher {
+    mass: 90.0,
+    half_size: Vec2::splat(0.35),
+};
+
+/// How fast the stalker climbs a solid they press against, in m/s.
+const CLIMB_SPEED: f32 = 1.2;
+
+/// The solids that stop the stalker: unclimbable ones (`fence`) or the rest.
+type Solids<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Collider,
+        &'static GlobalTransform,
+        Option<&'static Weight>,
+        Has<Unclimbable>,
+    ),
+>;
+
+fn solids<'a>(
+    colliders: &'a Solids,
+    fence: bool,
+) -> impl Iterator<Item = (&'a Collider, &'a GlobalTransform)> {
+    colliders
+        .iter()
+        .filter(move |&(_, _, weight, unclimbable)| {
+            unclimbable == fence && STALKER.blocked_by(weight)
+        })
+        .map(|(collider, transform, ..)| (collider, transform))
+}
 
 /// The stalker. Movement speeds are data, not magic numbers in systems.
 #[derive(Component)]
@@ -102,7 +138,7 @@ pub struct PlayerCamera;
 
 /// Everything spawned by [`spawn_player`] and torn down by [`despawn_player`].
 type PlayerEntities<'w, 's> =
-    Query<'w, 's, Entity, Or<(With<Player>, With<PlayerCamera>, With<Ears>)>>;
+    Query<'w, 's, Entity, Or<(With<Player>, With<PlayerCamera>, With<Ears>, With<Patrol>)>>;
 
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
@@ -110,7 +146,7 @@ impl Plugin for PlayerPlugin {
             .add_systems(Startup, load_stalker_animations)
             .add_systems(
                 OnEnter(AppState::InGame),
-                (spawn_player, spawn_order_marker),
+                (spawn_player, spawn_order_marker, spawn_patrol),
             )
             .add_systems(OnExit(AppState::InGame), despawn_player)
             .add_systems(
@@ -135,6 +171,7 @@ impl Plugin for PlayerPlugin {
                     .chain()
                     .run_if(in_state(InGamePhase::Running)),
             )
+            .add_systems(Update, drive_patrol.run_if(in_state(InGamePhase::Running)))
             .add_systems(OnEnter(InGamePhase::Paused), pause_stalker_animation)
             .add_systems(OnExit(InGamePhase::Paused), resume_stalker_animation)
             .add_systems(Update, grab_cursor_while_orbiting);
@@ -164,6 +201,7 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
                 grounded: true,
                 ..default()
             },
+            STALKER,
             start,
         ))
         .id();
@@ -253,13 +291,14 @@ fn respawn_player(
 /// WASD movement relative to where the camera looks, Shift to run, Space to
 /// jump, Ctrl to crawl; without WASD input the stalker follows its
 /// point-and-click [`MoveOrder`]. The stalker turns to face the direction of
-/// travel, bumps into solid models, and stays on the terrain surface unless
-/// airborne.
+/// travel, walks through solids lighter than them, climbs the others they press
+/// against (all but the unclimbable ones), and stays on the terrain or the top
+/// they stand on unless airborne.
 fn move_player(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     terrain: Res<Terrain>,
-    colliders: Query<(&Collider, &GlobalTransform)>,
+    colliders: Solids,
     cameras: Query<&OrbitCamera>,
     mut players: Query<
         (&Player, &mut Locomotion, &mut Transform, &mut MoveOrder),
@@ -329,8 +368,10 @@ fn move_player(
     }
     let step = Vec3::new(velocity.x, 0.0, velocity.y) * dt;
     let target = transform.translation + step;
+    let feet = target.y;
     let body = if crawling { PRONE } else { STANDING };
-    let clear = push_out(target.xz(), target.y, body, colliders);
+    let clear = push_out(target.xz(), feet, body, solids(&colliders, false));
+    let clear = fence_out(clear, body.radius, solids(&colliders, true));
     let from = transform.translation.xz();
     let limit = if crawling { 0.28 } else { 1.05 };
     let clear = if terrain.can_wade(from, clear, limit) {
@@ -338,7 +379,13 @@ fn move_player(
     } else {
         from
     };
-    let ground = ground_position(&terrain, Vec3::new(clear.x, target.y, clear.y));
+    let ground = ground_position(&terrain, Vec3::new(clear.x, feet, clear.y));
+    let top = support_height(ground.xz(), feet, body.radius, solids(&colliders, false));
+    let ground = ground.with_y(top.map_or(ground.y, |top| top.max(ground.y)));
+    let toward = direction.xz().normalize_or_zero();
+    let climb = (!crawling && toward != Vec2::ZERO)
+        .then(|| climb_top(target.xz(), feet, body, toward, solids(&colliders, false)))
+        .flatten();
     if dt > 0.0 && ground.xz().distance_squared(target.xz()) > 1e-8 {
         locomotion.planar_velocity = (ground.xz() - from).clamp_length_max(step.length()) / dt;
     }
@@ -347,18 +394,22 @@ fn move_player(
     if locomotion.grounded && !crawling && keys.just_pressed(KeyCode::Space) {
         locomotion.vertical_speed = player.jump_speed;
     }
-    let (y, vertical_speed, grounded) = fall(
-        transform.translation.y,
-        locomotion.vertical_speed,
-        locomotion.grounded,
-        ground.y,
-        dt,
-    );
+    let (y, vertical_speed, grounded) = match climb {
+        Some(top) => ((feet + CLIMB_SPEED * dt).min(top), 0.0, true),
+        None => fall(
+            transform.translation.y,
+            locomotion.vertical_speed,
+            locomotion.grounded,
+            ground.y,
+            dt,
+        ),
+    };
     transform.translation = Vec3::new(ground.x, y, ground.z);
     locomotion.vertical_speed = vertical_speed;
     locomotion.grounded = grounded;
     let moving = ground.xz().distance_squared(from) > 1e-8;
     locomotion.gait = match (grounded, crawling, moving, running) {
+        _ if climb.is_some() => Gait::Climb,
         (false, ..) => Gait::Jump,
         (true, true, false, _) => Gait::Prone,
         (true, true, true, _) => Gait::Crawl,
@@ -617,22 +668,51 @@ mod tests {
             .translation
     }
 
-    #[test]
-    fn stalker_bumps_into_solid_models() {
+    /// A 1.2 m solid, 0.8 m across, 5 m ahead of the stalker.
+    fn solid_ahead(app: &mut App) -> f32 {
         use crate::world::Pillar;
 
         const ROCK: &[Pillar] = &[Pillar::centered(0.4, 1.2)];
-        let (mut app, player) = moving_app(&[KeyCode::KeyW]);
         let ground = Terrain::new().height_at(0.0, -5.0);
         let rock = Transform::from_xyz(0.0, ground + 0.6, -5.0);
         app.world_mut()
             .spawn((Collider(ROCK), rock, GlobalTransform::from(rock)));
+        ground
+    }
+
+    #[test]
+    fn stalker_bumps_into_unclimbable_solids() {
+        let (mut app, player) = moving_app(&[KeyCode::KeyW]);
+        solid_ahead(&mut app);
+        let mut walls = app.world_mut().query_filtered::<Entity, With<Collider>>();
+        let wall = walls.single(app.world()).expect("one solid");
+        app.world_mut().entity_mut(wall).insert(Unclimbable);
         for _ in 0..100 {
             app.update();
             let distance = feet(&app, player).xz().distance(Vec2::new(0.0, -5.0));
-            assert!(distance >= 0.75 - 1e-4, "inside the rock, {distance} m off");
+            assert!(distance >= 0.75 - 1e-4, "inside the wall, {distance} m off");
         }
-        assert!(feet(&app, player).z > -5.0, "walked through the rock");
+        assert!(feet(&app, player).z > -5.0, "walked through the wall");
+    }
+
+    #[test]
+    fn stalker_climbs_onto_a_rock_and_over_it() {
+        let (mut app, player) = moving_app(&[KeyCode::KeyW]);
+        let ground = solid_ahead(&mut app);
+        let (mut climbed, mut highest) = (false, f32::MIN);
+        for _ in 0..140 {
+            app.update();
+            let gait = app
+                .world()
+                .get::<Locomotion>(player)
+                .expect("locomotion")
+                .gait;
+            climbed |= gait == Gait::Climb;
+            highest = highest.max(feet(&app, player).y - ground);
+        }
+        assert!(climbed, "never climbed");
+        assert!(highest > 1.15, "never stood on the rock, {highest} m up");
+        assert!(feet(&app, player).z < -5.8, "stuck at the rock");
     }
 
     #[test]

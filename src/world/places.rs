@@ -31,6 +31,10 @@ pub enum Place {
     Coast,
     Creature(CreatureKind),
     Vehicle,
+    /// A UN soldier guarding a way through a cordon.
+    Guard,
+    /// The UN armored car patrolling the Perimeter.
+    Patrol,
     Artifact(usize),
 }
 
@@ -52,8 +56,8 @@ const CHECKPOINTS: [Vec2; 2] = [cordon::CHECKPOINT, cordon::PERIMETER_CHECKPOINT
 
 /// How far around them the stalker surveys the land, in meters.
 pub const SURVEY_RANGE: f32 = 150.0;
-const SURVEY_CELL: f32 = 32.0;
-const SURVEY_CELLS: usize = (2.0 * HALF_SIZE / SURVEY_CELL) as usize + 1;
+pub const SURVEY_CELL: f32 = 32.0;
+pub(super) const SURVEY_CELLS: usize = (2.0 * HALF_SIZE / SURVEY_CELL) as usize + 1;
 
 /// The named place on the ground at `at`.
 pub fn place_at(at: Vec2) -> Option<Place> {
@@ -193,7 +197,17 @@ impl Explored {
         Self::cell(at).is_some_and(|index| self.seen[index])
     }
 
-    fn survey(&mut self, at: Vec2) {
+    /// Whether `at` lies on the map but has not been surveyed.
+    pub(super) fn hides(&self, at: Vec2) -> bool {
+        Self::cell(at).is_some_and(|index| !self.seen[index])
+    }
+
+    /// Every cell, row by row from the map's -X, -Z corner: surveyed or not.
+    pub(super) fn cells(&self) -> impl Iterator<Item = bool> + '_ {
+        self.seen.iter().copied()
+    }
+
+    pub(crate) fn survey(&mut self, at: Vec2) {
         let reach = (SURVEY_RANGE / SURVEY_CELL).ceil() as i32;
         let center = ((at + HALF_SIZE) / SURVEY_CELL).floor().as_ivec2();
         for z in -reach..=reach {

@@ -4,7 +4,9 @@ mod base;
 mod canopy;
 mod collision;
 mod cordon;
+mod crush;
 mod ground_fog;
+mod guards;
 mod hydrology;
 mod landscape;
 mod map;
@@ -14,7 +16,9 @@ mod places;
 mod plants;
 mod railway;
 mod roads;
+mod rocks;
 mod scenery;
+mod shroud;
 mod sites;
 mod terrain;
 mod terrain_material;
@@ -27,13 +31,21 @@ mod wildlife;
 
 pub(crate) use base::ArtifactDisplay;
 pub(crate) use collision::STEP_HEIGHT;
-pub use collision::{Body, Collider, Pillar, push_out};
+pub use collision::{
+    Body, Collider, Crusher, Pillar, Unclimbable, Weight, climb_top, fence_out, push_out,
+    support_height,
+};
+#[cfg(test)]
+pub(crate) use cordon::in_zone;
+pub(crate) use cordon::{PATROL_RADIUS, PATROL_TURNS};
 pub(crate) use ground_fog::{CAMERA_FAR, camera_distance_fog, camera_fog};
 #[cfg(test)]
 pub(crate) use hydrology::SWAMP;
-pub use places::{Describe, Explored, Place, place_at, structure_on_ray};
+pub(crate) use map::{MAP_SIZE, METERS_PER_PIXEL, map, map_pixel};
+pub use places::{Describe, Explored, Place, SURVEY_CELL, place_at, structure_on_ray};
 #[cfg(test)]
 pub(crate) use terrain::BASE;
+pub(crate) use terrain::lattice_hash;
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
 pub use weather::{Sky, Weather, Wind, WorldClock};
 pub(crate) use wildlife::{CreatureSound, Cue as CreatureCue, Kind as CreatureKind};
@@ -95,9 +107,11 @@ impl Plugin for WorldPlugin {
             MaterialPlugin::<base::CutawayMaterial>::default(),
             MaterialPlugin::<plants::PlantMaterial>::default(),
             ground_fog::GroundFogRenderPlugin,
+            shroud::ShroudPlugin,
         ))
         .init_asset::<Landscape>()
         .init_resource::<Terrain>()
+        .init_resource::<crush::Trampled>()
         .add_message::<tree_fall::TreeBreak>()
         .add_systems(
             Startup,
@@ -113,6 +127,8 @@ impl Plugin for WorldPlugin {
                 plants::preload_plants,
                 old_road::preload_old_roads,
                 marsh::preload_marsh,
+                rocks::preload_rocks,
+                guards::preload_guards,
             ),
         )
         .add_systems(
@@ -131,6 +147,8 @@ impl Plugin for WorldPlugin {
                 railway::spawn_railway,
                 old_road::spawn_old_roads,
                 marsh::spawn_marsh,
+                rocks::spawn_rocks,
+                guards::spawn_guards,
             ),
         )
         .add_systems(Update, mipmap_filtered_textures)
@@ -173,6 +191,8 @@ impl Plugin for WorldPlugin {
         .add_systems(
             PostUpdate,
             (
+                crush::trample_plants,
+                crush::knock_down_light_solids,
                 plants::stream_full_plants,
                 base::stream_full_artifacts,
                 base::animate_artifacts,
@@ -184,6 +204,12 @@ impl Plugin for WorldPlugin {
             )
                 .chain()
                 .before(TransformSystems::Propagate)
+                .run_if(in_state(InGamePhase::Running)),
+        )
+        .add_systems(
+            Update,
+            (guards::patrol_guards, guards::animate_guards)
+                .chain()
                 .run_if(in_state(InGamePhase::Running)),
         )
         .add_systems(OnExit(AppState::InGame), despawn_world);
@@ -285,13 +311,16 @@ fn load_landscape_materials(
     mut standard: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let shroud = shroud::new_mask(&mut images);
+    commands.insert_resource(shroud::ShroudMask(shroud.clone()));
     commands.insert_resource(LandscapeMaterials {
         terrain: materials.add(load_terrain_material(
             &asset_server,
             &terrain.roads,
+            shroud.clone(),
             &mut images,
         )),
-        water: water_materials.add(water::material()),
+        water: water_materials.add(water::material(shroud)),
         foliage: standard.add(scenery::foliage_material(&mut images)),
     });
 }
@@ -375,6 +404,7 @@ fn despawn_world(mut commands: Commands, roots: Query<Entity, With<WorldRoot>>) 
     commands.remove_resource::<cordon::Cordon>();
     commands.remove_resource::<plants::PlantLooks>();
     commands.remove_resource::<tree_fall::TreeBreakClock>();
+    commands.insert_resource(crush::Trampled::default());
 }
 
 #[cfg(test)]

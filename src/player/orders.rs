@@ -5,11 +5,11 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::states::AppState;
-use crate::world::{Body, Collider, Terrain};
+use crate::world::{Body, Collider, Terrain, Weight};
 
 use super::path::find_path;
-use super::vehicle::{Driving, FORD_DEPTH};
-use super::{Player, PlayerCamera, STANDING};
+use super::vehicle::{CAR, Driving, FORD_DEPTH};
+use super::{Player, PlayerCamera, STALKER, STANDING};
 
 /// Orders farther than this make the stalker run instead of walk.
 const RUN_DISTANCE: f32 = 9.0;
@@ -142,7 +142,7 @@ pub(super) fn issue_move_order(
     terrain: Res<Terrain>,
     window: Single<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<PlayerCamera>>,
-    colliders: Query<(Entity, &Collider, &GlobalTransform)>,
+    colliders: Query<(Entity, &Collider, &GlobalTransform, Option<&Weight>)>,
     mut players: Query<(&Transform, &mut MoveOrder, Option<&Driving>), With<Player>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
@@ -164,15 +164,15 @@ pub(super) fn issue_move_order(
     };
     let from = stalker.translation.xz();
     let vehicle = driving.map(|driving| driving.0);
-    let (body, depth, arrival) = match vehicle {
-        Some(_) => (VEHICLE_BODY, FORD_DEPTH, VEHICLE_ARRIVAL),
-        None => (STANDING, WADE_DEPTH, STALKER_ARRIVAL),
+    let (body, depth, arrival, mover) = match vehicle {
+        Some(_) => (VEHICLE_BODY, FORD_DEPTH, VEHICLE_ARRIVAL, CAR),
+        None => (STANDING, WADE_DEPTH, STALKER_ARRIVAL, STALKER),
     };
-    // The driven vehicle must not block its own route.
+    // The driven vehicle must not block its own route, nor anything lighter.
     let obstacles = colliders
         .iter()
-        .filter(|(entity, ..)| Some(*entity) != vehicle)
-        .map(|(_, collider, pose)| (collider, pose));
+        .filter(|&(entity, _, _, weight)| Some(entity) != vehicle && mover.blocked_by(weight))
+        .map(|(_, collider, pose, _)| (collider, pose));
     let Some(path) = find_path(&terrain, obstacles, from, target.xz(), body, depth) else {
         return;
     };

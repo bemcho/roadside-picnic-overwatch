@@ -9,7 +9,7 @@ use bevy::prelude::*;
 use crate::assets;
 
 use super::canopy::near_landmark;
-use super::collision::{Collider, Pillar};
+use super::collision::{Collider, Pillar, Unclimbable};
 use super::cordon::reserve_scenery;
 use super::hydrology::Wetlands;
 use super::scenery::TREE_DENSITY;
@@ -176,6 +176,7 @@ pub(super) fn spawn_trees(
                 WorldAssetRoot(scenes[site.model].clone()),
                 site.transform,
                 Collider(pillars),
+                Unclimbable,
                 detail_range(105.0, 20.0),
             ))
             .observe(range_scene_meshes);

@@ -132,7 +132,7 @@ fn toggle_mute(
     mut spatial: Query<&mut SpatialAudioSink>,
     mut pending: Query<&mut PlaybackSettings, (Without<AudioSink>, Without<SpatialAudioSink>)>,
 ) {
-    if !keys.just_pressed(KeyCode::KeyM) {
+    if !keys.just_pressed(KeyCode::KeyN) {
         return;
     }
     let mute = *mode == AudioMode::Audible;
@@ -344,7 +344,7 @@ mod tests {
             .id();
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::KeyM);
+            .press(KeyCode::KeyN);
         app.update();
         let mode = app.world().resource::<AudioMode>();
         assert!(mode.settings(PlaybackSettings::DESPAWN).muted);
@@ -355,8 +355,8 @@ mod tests {
                 .muted
         );
         let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
-        keys.release(KeyCode::KeyM);
-        keys.press(KeyCode::KeyM);
+        keys.release(KeyCode::KeyN);
+        keys.press(KeyCode::KeyN);
         app.update();
         let settings = app.world().get::<PlaybackSettings>(ambient).expect("loop");
         assert!(!settings.muted);

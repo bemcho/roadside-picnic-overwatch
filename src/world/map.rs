@@ -9,6 +9,8 @@ use bevy::math::Vec2;
 pub(crate) const METERS_PER_PIXEL: f32 = 2.4;
 /// The map pixel at the world origin, the middle of the map's frame.
 const CENTER: Vec2 = Vec2::new(705.0, 383.0);
+/// The whole image, in pixels.
+pub(crate) const MAP_SIZE: Vec2 = Vec2::new(1408.0, 768.0);
 
 /// The world position of a map pixel.
 pub(crate) const fn map(px: f32, py: f32) -> Vec2 {
@@ -16,6 +18,11 @@ pub(crate) const fn map(px: f32, py: f32) -> Vec2 {
         (CENTER.x - px) * METERS_PER_PIXEL,
         (CENTER.y - py) * METERS_PER_PIXEL,
     )
+}
+
+/// The map pixel over a world position: the inverse of [`map`].
+pub(crate) fn map_pixel(at: Vec2) -> Vec2 {
+    CENTER - at / METERS_PER_PIXEL
 }
 
 /// The old railway, south to north across the whole map (the double line on

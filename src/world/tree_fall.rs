@@ -7,6 +7,7 @@ use bevy::prelude::*;
 use crate::player::{Player, PlayerCamera};
 
 use super::canopy::CanopyVisual;
+use super::collision::Collider;
 use super::scenery::{Scenery, StandingTree};
 use super::terrain::{BASE, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep};
 
@@ -44,9 +45,10 @@ pub(super) fn start_break_clock(mut commands: Commands, time: Res<Time<Real>>) {
 
 #[derive(Message)]
 pub(super) struct TreeBreak {
-    trunk: Entity,
-    tree: StandingTree,
-    direction: Vec2,
+    pub trunk: Entity,
+    pub tree: StandingTree,
+    /// Which way it falls.
+    pub direction: Vec2,
 }
 
 pub(super) fn pick_tree_to_break(
@@ -152,6 +154,33 @@ impl FallingTree {
             angle: (rise / height + 0.06).clamp(-0.25, 0.55).acos(),
             depth: height * 0.46 + 0.5,
             age: 0.0,
+        }
+    }
+}
+
+impl FallingTree {
+    /// A solid knocked down by a heavier body: a slender one topples away from
+    /// it, a squat one is pressed straight into the ground.
+    pub(super) fn knocked(
+        terrain: &Terrain,
+        start: Transform,
+        collider: &Collider,
+        placed: &GlobalTransform,
+        direction: Vec2,
+    ) -> Self {
+        let (scale, _, _) = placed.to_scale_rotation_translation();
+        let height = collider.0.iter().map(|p| p.top).fold(0.0, f32::max) * scale.y;
+        let width = collider.0.iter().map(|p| p.radius).fold(0.0, f32::max) * scale.x;
+        if height > 3.0 * width {
+            return Self::new(terrain, start, height, direction);
+        }
+        Self {
+            start,
+            axis: Vec3::X,
+            angle: 0.0,
+            depth: height + 0.3,
+            // Past the fall and the settling: it only sinks.
+            age: FALL_TIME + SETTLE_TIME,
         }
     }
 }

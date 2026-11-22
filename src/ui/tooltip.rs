@@ -208,6 +208,8 @@ fn describe(place: Place) -> (&'static str, &'static Entry) {
             (label, &creatures[kind as usize])
         }
         Place::Vehicle => (text::KIND_VEHICLE, &text::VEHICLE),
+        Place::Guard => (text::KIND_GUARD, &text::GUARD),
+        Place::Patrol => (text::KIND_VEHICLE, &text::PATROL),
         Place::Artifact(index) => (
             text::KIND_ARTIFACT,
             &artifacts[index.min(artifacts.len() - 1)],

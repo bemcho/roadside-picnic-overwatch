@@ -15,14 +15,18 @@ The pillars file is a Rust array of `Pillar`s (glTF axes, model units): the
 stand's surface sampled into vertical columns on a PILLAR_CELL grid, each
 spanning the lowest to highest geometry in its column. src/world/trees.rs
 includes it for collision and for grounding the stand.
-Pass --split-columns after the output path to preserve gaps under roofs.
+Pass --split-columns after the output path to preserve gaps under roofs, and
+--cell <units> for a coarser column grid (default 0.03): a scattered prop such as
+a rock (tools/trim_tree_base.py -- rock.glb - 0 pillars/rock.rs --cell 0.2) needs
+a handful of pillars, not hundreds.
 """
 import bpy, bmesh, math, sys
 
 SRC, DST, CUT, PILLARS = sys.argv[sys.argv.index('--') + 1:][:4]
-SPLIT_COLUMNS = "--split-columns" in sys.argv[sys.argv.index('--') + 5:]
+OPTIONS = sys.argv[sys.argv.index('--') + 5:]
+SPLIT_COLUMNS = "--split-columns" in OPTIONS
 CUT = float(CUT)
-PILLAR_CELL = 0.03
+PILLAR_CELL = float(OPTIONS[OPTIONS.index("--cell") + 1]) if "--cell" in OPTIONS else 0.03
 # Columns whose geometry never rises above this (model units) are only litter.
 MIN_TOP = 0.025
 

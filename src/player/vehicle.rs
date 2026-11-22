@@ -1,6 +1,9 @@
 //! Driving, collision, and wheel posing for the armored vehicle.
 
 mod contact;
+mod patrol;
+
+pub(super) use patrol::{Patrol, drive_patrol, spawn_patrol};
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -10,12 +13,13 @@ use bevy::world_serialization::WorldInstanceReady;
 
 use crate::assets;
 use crate::world::{
-    Collider, Describe, Pillar, Place, STEP_HEIGHT, TERRAIN_HALF_SIZE, Terrain, push_out,
+    Collider, Crusher, Describe, Pillar, Place, STEP_HEIGHT, TERRAIN_HALF_SIZE, Terrain, Weight,
+    push_out,
 };
 
 use super::{
-    GRAVITY, Locomotion, Player, STANDING, camera::OrbitCamera, freefall, orders::MoveOrder,
-    response,
+    GRAVITY, Locomotion, Player, STALKER, STANDING, camera::OrbitCamera, freefall,
+    orders::MoveOrder, response,
 };
 
 const MODEL_SCALE: f32 = 5.2;
@@ -41,6 +45,24 @@ const CONTACT_SNAP: f32 = 0.014;
 const FORWARD: Vec3 = Vec3::Z;
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
 const COLLISION: &[Pillar] = include!("../world/pillars/armored_vehicle.rs");
+/// An armored car's weight and footprint: it runs through and knocks down
+/// whatever weighs less, and flattens the plants under it.
+pub(super) const CAR: Crusher = Crusher {
+    mass: 12_000.0,
+    half_size: HALF_EXTENTS,
+};
+
+/// Every collider, with what it weighs.
+type Solids<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static Collider,
+        &'static GlobalTransform,
+        Option<&'static Weight>,
+    ),
+>;
 
 #[derive(Component)]
 pub(crate) struct Vehicle {
@@ -129,13 +151,14 @@ pub(crate) fn spawn_vehicle(
     let mut vehicle = commands.spawn((
         Vehicle::default(),
         Collider(COLLISION),
+        CAR,
         Describe {
             place: Place::Vehicle,
             radius: 2.4,
             height: 2.6,
         },
         transform.with_scale(Vec3::splat(MODEL_SCALE)),
-        WorldAssetRoot(assets::load_vehicle_scene(assets)),
+        WorldAssetRoot(assets::load_vehicle_scene(assets, assets::BASE_VEHICLE)),
     ));
     vehicle.observe(attach_wheels);
     mount_spotlight(&mut vehicle, meshes, materials);
@@ -214,12 +237,8 @@ fn attach_wheels(
         let Ok((name, transform)) = wheels.get(entity) else {
             continue;
         };
-        let slot = match name.as_str() {
-            "WheelFrontRight" => 0,
-            "WheelFrontLeft" => 1,
-            "WheelRearRight" => 2,
-            "WheelRearLeft" => 3,
-            _ => continue,
+        let Some(slot) = wheel_slot(name) else {
+            continue;
         };
         commands.entity(entity).insert(Wheel {
             vehicle: ready.entity,
@@ -245,7 +264,7 @@ pub(super) fn interact_vehicle(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     terrain: Res<Terrain>,
-    colliders: Query<(Entity, &Collider, &GlobalTransform)>,
+    colliders: Solids,
     mut vehicles: Query<(Entity, &mut Vehicle, &Transform), Without<Player>>,
     mut players: Driver,
     mut cameras: Query<&mut OrbitCamera>,
@@ -267,7 +286,7 @@ pub(super) fn interact_vehicle(
                     point.xz(),
                     point.y,
                     STANDING,
-                    other_colliders(&colliders, entity),
+                    other_colliders(&colliders, entity, STALKER),
                 ) == point.xz()
             })
         {
@@ -334,7 +353,7 @@ pub(crate) fn drive_vehicle(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
     terrain: Res<Terrain>,
-    colliders: Query<(Entity, &Collider, &GlobalTransform)>,
+    colliders: Solids,
     mut vehicles: Query<(Entity, &mut Vehicle, &mut Transform), Without<Player>>,
     mut players: Query<(&Driving, &mut Transform, &mut MoveOrder), With<Player>>,
     mut cameras: Query<&mut OrbitCamera>,
@@ -386,7 +405,7 @@ pub(crate) fn drive_vehicle(
                 &terrain,
                 input,
                 dt / steps as f32,
-                |next| blocked(next, other_colliders(&colliders, entity)),
+                |next| blocked(next, other_colliders(&colliders, entity, CAR)),
             );
         }
         if let Some(order) = order.as_mut() {
@@ -665,14 +684,16 @@ fn axis(keys: &ButtonInput<KeyCode>, positive: KeyCode, negative: KeyCode) -> f3
     f32::from(keys.pressed(positive)) - f32::from(keys.pressed(negative))
 }
 
+/// The solids that stop `body`, leaving out the vehicle itself.
 fn other_colliders<'a>(
-    colliders: &'a Query<(Entity, &Collider, &GlobalTransform)>,
+    colliders: &'a Solids,
     vehicle: Entity,
+    body: Crusher,
 ) -> impl Iterator<Item = (&'a Collider, &'a GlobalTransform)> {
     colliders
         .iter()
-        .filter(move |(entity, _, _)| *entity != vehicle)
-        .map(|(_, collider, transform)| (collider, transform))
+        .filter(move |&(entity, _, _, weight)| entity != vehicle && body.blocked_by(weight))
+        .map(|(_, collider, transform, _)| (collider, transform))
 }
 
 pub(crate) fn blocked<'a>(
@@ -704,14 +725,33 @@ pub(crate) fn blocked<'a>(
     })
 }
 
+/// The suspension slot of a wheel pivot in the car's model, front wheels first.
+fn wheel_slot(name: &Name) -> Option<usize> {
+    match name.as_str() {
+        "WheelFrontRight" => Some(0),
+        "WheelFrontLeft" => Some(1),
+        "WheelRearRight" => Some(2),
+        "WheelRearLeft" => Some(3),
+        _ => None,
+    }
+}
+
+/// Springs a wheel pivot from its rest position, rolls it, and steers it if
+/// it is a front wheel.
+fn pose_wheel(transform: &mut Transform, slot: usize, rest: Vec3, gear: (f32, f32, [Vec3; 4])) {
+    let (steer, roll, suspension) = gear;
+    let steer = if slot < 2 { steer } else { 0.0 };
+    transform.translation = rest + suspension[slot];
+    transform.rotation = Quat::from_rotation_y(steer) * Quat::from_rotation_x(roll);
+}
+
 pub(super) fn pose_wheels(vehicles: Query<&Vehicle>, mut wheels: Query<(&Wheel, &mut Transform)>) {
     for (wheel, mut transform) in &mut wheels {
         let Ok(vehicle) = vehicles.get(wheel.vehicle) else {
             continue;
         };
-        let steer = if wheel.slot < 2 { vehicle.steer } else { 0.0 };
-        transform.translation = wheel.rest + vehicle.suspension[wheel.slot];
-        transform.rotation = Quat::from_rotation_y(steer) * Quat::from_rotation_x(vehicle.roll);
+        let gear = (vehicle.steer, vehicle.roll, vehicle.suspension);
+        pose_wheel(&mut transform, wheel.slot, wheel.rest, gear);
     }
 }
 

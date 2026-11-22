@@ -9,6 +9,7 @@ use bevy::shader::ShaderRef;
 use crate::assets::{self, load_repeating};
 
 use super::roads::RoadNetwork;
+use super::shroud;
 
 pub(super) type TerrainMaterial = ExtendedMaterial<StandardMaterial, GroundLayers>;
 
@@ -35,6 +36,12 @@ pub(super) struct GroundLayers {
     road_bounds: Vec4,
     #[uniform(109)]
     fog_settings: Vec4,
+    /// The shroud over unsurveyed ground (`shroud.rs`) and where it lies.
+    #[texture(110)]
+    #[sampler(111)]
+    shroud: Handle<Image>,
+    #[uniform(112)]
+    shroud_bounds: Vec4,
 }
 
 impl MaterialExtension for GroundLayers {
@@ -50,6 +57,7 @@ impl MaterialExtension for GroundLayers {
 pub(super) fn load_terrain_material(
     server: &AssetServer,
     roads: &RoadNetwork,
+    shroud: Handle<Image>,
     images: &mut Assets<Image>,
 ) -> TerrainMaterial {
     let load = |path, is_srgb| load_repeating(server, path, is_srgb);
@@ -71,6 +79,8 @@ pub(super) fn load_terrain_material(
             road_surface: images.add(road_surface),
             road_bounds,
             fog_settings: Vec4::ZERO,
+            shroud,
+            shroud_bounds: shroud::mask_bounds(),
         },
     }
 }

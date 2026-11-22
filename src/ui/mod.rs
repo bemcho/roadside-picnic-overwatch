@@ -5,6 +5,7 @@
 
 mod curtain;
 mod locator;
+mod map;
 mod splash;
 pub mod text;
 mod tooltip;
@@ -72,9 +73,15 @@ impl Plugin for UiPlugin {
         ))
         .add_systems(
             OnEnter(AppState::InGame),
-            (spawn_hud, locator::spawn_locator),
+            (spawn_hud, locator::spawn_locator, map::spawn_map),
         )
-        .add_systems(OnExit(AppState::InGame), despawn_hud)
+        .add_systems(OnExit(AppState::InGame), (despawn_hud, map::despawn_map))
+        .add_systems(
+            Update,
+            (map::toggle_map, map::update_map, map::fly_map_birds)
+                .chain()
+                .run_if(in_state(InGamePhase::Running)),
+        )
         .add_systems(
             Update,
             (update_hud_stats, update_hud_weather).run_if(in_state(InGamePhase::Running)),

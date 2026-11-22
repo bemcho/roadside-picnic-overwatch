@@ -30,6 +30,8 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **Left click** — move the stalker there (pathfinding around obstacles and deep
   water; long trips or **Shift**-click run). While driving, click to drive there.
 - **WASD** — steer directly (camera-relative) and cancel a click order; hold **Shift** to run
+- Walk into a rock, building or other solid to **climb** onto it; the cordon walls,
+  checkpoints, trees and guards can't be climbed
 - **Space** — jump
 - **Ctrl** (hold) — crawl prone
 - **E** — enter or exit the armored vehicle; **W/S** to accelerate/reverse, **A/D** to steer, **Space** to brake
@@ -42,7 +44,9 @@ The upper-right in-game HUD shows the smoothed frame rate.
   the car or an exhibit for its description (unsurveyed places show only their kind)
 - **T** (hold) — time-lapse the day/night cycle (40× speed)
 - **Esc** — pause / resume
-- **M** — mute / unmute game audio
+- **M** — open / close the Harmont map
+- **N** — mute / unmute game audio
+- **V** — lift / restore the fog of war (for testing)
 - **Q** — quit
 
 ## Tactical view
@@ -55,12 +59,22 @@ readable. The camera's `ViewFocus` (the audio listener `Ears`) also becomes a
 ground LODs and walls around the view as well as around the stalker.
 `detail_range` adds `STRATEGY_REACH` (75 m) to every detail range for the raised
 camera. The hangar's roof and upper walls are cut away (`base/cutaway.rs`,
-`shaders/cutaway.wesl`) while the camera or its focus is over the hall.
+`shaders/cutaway.wesl`) while the camera or its focus is over the hall and the
+camera is within 120 m of its focus (`CUT_ZOOM`); zoomed out further, the
+hall shows whole.
 The hangar's pendant lamps and cords (`RoofFixture`) hide with the roof.
 Hover descriptions (`ui/tooltip.rs`) pick, in order, a `Describe`d entity
 (creatures, the car, exhibits), a site/building outline, then the named ground
 (`world/places.rs`: water from the hydrology profiles, quarry, bald hill, yard).
 The stalker surveys an `Explored` grid within 150 m as they travel.
+Unsurveyed ground lies under a shroud (fog of war, `world/shroud.rs`): the
+terrain and water shaders darken it from a mask texture of that grid (one
+texel per 32 m cell, its edges softened and wobbled), and `cull_shrouded`
+drops every other entity standing wholly on it from the cameras' and the sun's
+visible lists after Bevy's own culling, so it costs no draws or shadow passes.
+V lifts the shroud for testing. M opens the Harmont map (`ui/map.rs`):
+`doc/Roadside_map.jpg` (as `textures/ui/roadside_map.png`) with the stalker's
+marker, haze over unsurveyed cells and a few birds wheeling over it.
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
 in `drive_vehicle`. A yellow ring (`ui/locator.rs`) lies on the ground around
@@ -242,6 +256,23 @@ the stalker stands still.
   are scattered over the marsh; trees, stumps, logs and mounds may stand in
   shallow pools, the rest keep to the hummocks. Props too tall to step over
   carry a collider.
+- **Rocks** (`src/world/rocks.rs`): seven big textured rocks
+  (`assets/models/rocks/`, 2–17 m) stand on the shoulders of the country roads
+  (`roads::country_roads`) and, in open country, as groups of crags with
+  boulders around them, mostly on high ground. Each shows its `medium/` model
+  near the view and a `low/` copy farther out, to a range that grows with its
+  size. Their colliders (`world/pillars/rock_*.rs`) come from
+  `tools/trim_tree_base.py ... --cell 0.2`; the stalker can climb them.
+- **Guards** (`src/world/guards.rs`): two UN soldiers
+  (`assets/models/soldiers/medium/`, rigged by `tools/rig_stalker.py`;
+  `--walk-arms` sets the walk clip's arm swing) at each way through a cordon:
+  the hangar yard's gate, the Institute gate and the breach. Each paces a short
+  beat beside the opening, swinging its arms, and stands watching at either end.
+- **UN patrol** (`src/player/vehicle/patrol.rs`): a white armored car
+  (`UN_VEHICLE`, the stalkers' car repainted with a UN marking in its roof
+  atlas; the flank plates are separate quads with `textures/decals/un_flank.png`)
+  laps a loop beside the Perimeter wall on Harmont's side
+  (`cordon::PATROL_TURNS`) and halts while the stalker or their car is in its way.
 - **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
   textured sources in `assets/models/{animals,birds}/medium/` share mesh handles
   and preserve the original PBR maps. Rebuild with glTF Transform `simplify
@@ -297,7 +328,16 @@ the stalker stands still.
   0.045 --error 0.0014`, then `resize --width 2048 --height 2048` (use
   `--vertex-layout separate` for both), bake `tangents`, then run
   `tools/prepare_hangar_asset.py` to level the slab and apron. If the geometry
-  changes, remeasure the walls and pendant mounts in `base.rs`. A stronger
+  changes, remeasure the walls and pendant mounts in `base.rs`. The runtime
+  GLB is the arched hall shell, one primitive about 0.9 × 0.58 × 1.0 units
+  (×38 m); the hangar's `parts/` kit is a different model, so never save it
+  over `medium/hangar.glb`. The shell's material (`base/cutaway.rs`,
+  `shaders/cutaway.wesl`) repaints it as an industrial hall: steel floor
+  plates (`textures/hangar/`, cut from the reference board by
+  `tools/prepare_hangar_floor.py`) with yellow walkway lines beside the
+  exhibit rows, the parked car's bay, a trench grate and hazard band at the
+  door, and steel-grey walls with a hazard band at their foot. The walkway
+  lines are shader constants: move them with the exhibit rows. A stronger
   local light probe and broad warm pendants keep the interior readable without
   changing outdoor lighting. Prop and artifact spotlights add focused task and
   exhibit light on top of that soft fill.
@@ -331,12 +371,22 @@ the stalker stands still.
   set of upright `Pillar`s posed by its `GlobalTransform`; `push_out` moves bodies out
   of them. Pillars under `STEP_HEIGHT` are stepped over, ones above the body are passed
   under (crawling body is 0.5 m). Give every new solid model a `Collider`.
+  A collider with a `Weight` (trees by size, the marsh props) gives way to a
+  heavier `Crusher` (`world/crush.rs`): the stalker (90 kg), their car and the
+  patrol (12 t) run through it and knock it down. Trees fall through
+  `TreeBreak`, slender props topple and squat ones sink; none return during the
+  run. Crushers also trample the plants under their footprint (`Trampled`
+  keeps them gone when tiles re-stream). The stalker climbs a solid they press
+  into (`climb_top`; `Gait::Climb` plays the crawl clip upright) and stands on
+  its pillars' tops (`support_height`). `Unclimbable` solids (cordon walls and
+  checkpoints, trees, guards, vegetation clusters, marsh trees) fence bodies
+  out at any height (`fence_out`).
 - **Audio** (`src/audio/`) is synthesized at startup: looping Zone ambience,
   gait-dependent footsteps, jump and landing, vehicle doors, and a speed-driven
   engine. Wildlife calls, footfalls, takeoff/landing, and fight cues originate
   from the creature's world position; nearby sounds pan with the camera and fade
   with distance. Footfalls follow accepted travel and attack sounds follow
-  chase, lunge, and hit events. M mutes both positional and non-positional audio.
+  chase, lunge, and hit events. N mutes both positional and non-positional audio.
   Playback follows the system's default audio output.
 - **Stalker model** (`STALKER_MODEL`: `assets/models/soldier/uhd/soldier_rigged.glb`)
   is the UHD Tripo soldier scan (~2M triangles, 4K normal-mapped PBR) rigged in

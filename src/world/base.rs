@@ -148,7 +148,7 @@ pub(super) fn spawn_base(
                 .get(&shell_paint)
                 .expect("the hangar finishes preloading before the Zone opens"),
         ),
-        extension: Cutaway::default(),
+        extension: Cutaway::new(&server, pad),
     });
     let hall = commands
         .spawn((

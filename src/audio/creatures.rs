@@ -247,7 +247,7 @@ mod tests {
         );
         world
             .resource_mut::<ButtonInput<KeyCode>>()
-            .press(KeyCode::KeyM);
+            .press(KeyCode::KeyN);
         emit(Cue::Impact, &mut app);
         app.update();
         let world = app.world();

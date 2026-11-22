@@ -15,7 +15,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use super::{StreamAnchor, anchor_tiles, near_anchor, neighborhoods};
 
 use super::canopy::{self, ForestTree};
-use super::collision::{Collider, Pillar};
+use super::collision::{Collider, Pillar, Unclimbable};
 use super::cordon::{reserve_scenery, shelterbelt};
 use super::hydrology::Wetlands;
 use super::plants::PendingPlants;
@@ -58,6 +58,7 @@ impl Site {
 
 /// An imported tree still standing, which may snap and fall.
 #[derive(Component, Clone, Copy)]
+#[require(Unclimbable)]
 pub(super) struct StandingTree(pub ForestTree);
 
 impl StandingTree {
@@ -245,7 +246,12 @@ pub(super) fn stream_scenery(
                     objects.spawn((site.pose, site.solid()));
                 }
                 for tree in &sites.canopies {
-                    objects.spawn((tree.pose, tree.collider(), StandingTree(*tree)));
+                    objects.spawn((
+                        tree.pose,
+                        tree.collider(),
+                        tree.weight(),
+                        StandingTree(*tree),
+                    ));
                 }
                 trees::spawn_trees(objects, &server, &sites.undergrowth);
                 super::sites::spawn_solids(objects, tile);

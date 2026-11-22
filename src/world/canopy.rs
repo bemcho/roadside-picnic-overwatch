@@ -15,7 +15,7 @@ use bevy::world_serialization::WorldInstanceReady;
 use crate::assets::{self, PreloadedAssets};
 use crate::player::PlayerCamera;
 
-use super::collision::{Collider, Pillar};
+use super::collision::{Collider, Pillar, Weight};
 use super::cordon::{inside_yard, near_wall_or_checkpoint, shelterbelt};
 use super::hydrology::SWAMP;
 use super::terrain::{
@@ -111,6 +111,9 @@ struct TreeModel {
     footprint: f32,
     wind_bend: f32,
     draw_distance: f32,
+    /// Kilograms per cubic meter of height: a tree's weight grows with the
+    /// cube of its height.
+    density: f32,
     trunks: &'static [Pillar],
 }
 
@@ -122,6 +125,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
         footprint: 0.34,
         wind_bend: 0.034,
         draw_distance: 125.0,
+        density: 1.0,
         trunks: &[Pillar {
             x: 0.004,
             z: 0.001,
@@ -137,6 +141,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
         footprint: 0.22,
         wind_bend: 0.017,
         draw_distance: 195.0,
+        density: 2.0,
         trunks: &[Pillar {
             x: 0.019,
             z: 0.022,
@@ -152,6 +157,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
         footprint: 0.05,
         wind_bend: 0.021,
         draw_distance: 335.0,
+        density: 0.35,
         trunks: &[Pillar {
             x: 0.008,
             z: -0.004,
@@ -167,6 +173,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
         footprint: 0.047,
         wind_bend: 0.028,
         draw_distance: 175.0,
+        density: 0.45,
         trunks: &[Pillar {
             x: 0.005,
             z: 0.0,
@@ -182,6 +189,7 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
         footprint: 0.22,
         wind_bend: 0.0,
         draw_distance: 155.0,
+        density: 0.25,
         trunks: &[Pillar {
             x: -0.014,
             z: 0.045,
@@ -268,6 +276,12 @@ impl ForestTree {
 
     pub(super) fn collider(self) -> Collider {
         Collider(self.species.model().trunks)
+    }
+
+    /// From over 100 kg for a sapling, more than the stalker, to 13–15 t for
+    /// the biggest broadleaves and conifers, which stop an armored car.
+    pub(super) fn weight(self) -> Weight {
+        Weight(self.species.model().density * self.pose.scale.y.powi(3))
     }
 }
 
@@ -518,6 +532,28 @@ mod tests {
 
     use super::*;
     use crate::world::terrain::base_tile;
+
+    #[test]
+    fn the_stalker_fells_no_tree_and_only_big_ones_stop_a_car() {
+        let weight = |species: Species, height: f32| {
+            ForestTree {
+                species,
+                pose: Transform::from_scale(Vec3::splat(height)),
+            }
+            .weight()
+            .0
+        };
+        for species in Species::ALL {
+            let (lowest, tallest) = species.model().scale;
+            assert!(weight(species, lowest) > 100.0, "{species:?} too light");
+            let stops_cars = matches!(species, Species::Broadleaf | Species::Tall);
+            assert_eq!(
+                weight(species, tallest) > 12_000.0,
+                stops_cars,
+                "{species:?}"
+            );
+        }
+    }
 
     /// An app streaming the scan of a tree at `pose`, viewed from the origin.
     fn streaming(pose: Transform) -> (App, Entity, Entity) {

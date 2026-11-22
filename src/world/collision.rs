@@ -1,6 +1,11 @@
 //! Static collision: every solid model carries a [`Collider`] made of upright
 //! [`Pillar`]s, and moving bodies are pushed out of the pillars they overlap.
 //! Pillars low enough to step over, or high enough to pass under, never block.
+//!
+//! A collider with a [`Weight`] gives way to a heavier [`Crusher`] (the stalker,
+//! a car), which runs through it and knocks it down. The stalker climbs solids
+//! and stands on their pillars' tops, except [`Unclimbable`] ones (the cordon
+//! walls and checkpoints, trees, guards), which block at any height.
 
 use bevy::prelude::*;
 
@@ -34,6 +39,46 @@ impl Pillar {
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Collider(pub &'static [Pillar]);
 
+/// What a solid object weighs, in kilograms. A heavier [`Crusher`] runs
+/// through it and knocks it down; a collider without one is anchored and never
+/// gives way.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Weight(pub f32);
+
+/// A collider nothing climbs and no height clears: the cordon walls and
+/// checkpoints, trees, guards.
+#[derive(Component, Default)]
+pub struct Unclimbable;
+
+/// A body moving through the world: it tramples the plants under its footprint
+/// (a box `half_size` meters either side of its middle, turned with it) and
+/// knocks down colliders lighter than `mass` kilograms that it touches.
+#[derive(Component, Clone, Copy, Debug)]
+pub struct Crusher {
+    pub mass: f32,
+    pub half_size: Vec2,
+}
+
+impl Crusher {
+    /// Whether a collider weighing `weight` stands in this body's way.
+    pub fn blocked_by(self, weight: Option<&Weight>) -> bool {
+        weight.is_none_or(|weight| weight.0 >= self.mass)
+    }
+
+    /// Whether a circle of `radius` at `point` overlaps the footprint of the
+    /// body posed at `pose`.
+    pub fn reaches(self, pose: &Transform, point: Vec2, radius: f32) -> bool {
+        let offset = point - pose.translation.xz();
+        if offset.length_squared() > (self.half_size.length() + radius).powi(2) {
+            return false;
+        }
+        let (yaw, _, _) = pose.rotation.to_euler(EulerRot::YXZ);
+        let local = Vec2::from_angle(yaw).rotate(offset);
+        let outside = (local.abs() - self.half_size).max(Vec2::ZERO);
+        outside.length_squared() <= radius * radius
+    }
+}
+
 /// A moving body: an upright cylinder standing at its feet.
 #[derive(Clone, Copy, Debug)]
 pub struct Body {
@@ -65,6 +110,74 @@ pub fn push_out<'a>(
         })
 }
 
+/// Keeps `point` at least `radius` from every pillar, whatever their height.
+pub fn fence_out<'a>(
+    point: Vec2,
+    radius: f32,
+    colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
+) -> Vec2 {
+    colliders
+        .into_iter()
+        .fold(point, |point, (collider, transform)| {
+            let (scale, _, _) = transform.to_scale_rotation_translation();
+            collider.0.iter().fold(point, |point, pillar| {
+                let center = transform.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
+                separate(point, center.xz(), pillar.radius * scale.x + radius)
+            })
+        })
+}
+
+/// The highest pillar top a body of `radius` at `point`, feet at `feet`,
+/// stands on: one under its footprint that it has climbed to within a step of.
+pub fn support_height<'a>(
+    point: Vec2,
+    feet: f32,
+    radius: f32,
+    colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
+) -> Option<f32> {
+    colliders
+        .into_iter()
+        .flat_map(|(collider, transform)| {
+            let (scale, _, _) = transform.to_scale_rotation_translation();
+            collider.0.iter().filter_map(move |pillar| {
+                let center = transform.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
+                let top = center.y + pillar.top * scale.y;
+                let reach = pillar.radius * scale.x + radius;
+                let under = point.distance_squared(center.xz()) < reach * reach;
+                (under && top <= feet + STEP_HEIGHT).then_some(top)
+            })
+        })
+        .reduce(f32::max)
+}
+
+/// The top of the highest pillar that blocks `body` at `point` (feet at
+/// `feet`) and lies ahead of it, toward `toward`: what it climbs while
+/// pressing on.
+pub fn climb_top<'a>(
+    point: Vec2,
+    feet: f32,
+    body: Body,
+    toward: Vec2,
+    colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
+) -> Option<f32> {
+    colliders
+        .into_iter()
+        .flat_map(|(collider, transform)| {
+            let (scale, _, _) = transform.to_scale_rotation_translation();
+            collider.0.iter().filter_map(move |pillar| {
+                let center = transform.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
+                let top = center.y + pillar.top * scale.y;
+                let bottom = center.y + pillar.bottom * scale.y;
+                let offset = center.xz() - point;
+                let reach = pillar.radius * scale.x + body.radius;
+                let blocks = top > feet + STEP_HEIGHT && bottom < feet + body.height;
+                let ahead = offset.dot(toward) > 0.7 * offset.length();
+                (blocks && ahead && offset.length_squared() < reach * reach).then_some(top)
+            })
+        })
+        .reduce(f32::max)
+}
+
 /// Moves `point` to at least `reach` from `center`.
 fn separate(point: Vec2, center: Vec2, reach: f32) -> Vec2 {
     let offset = point - center;
@@ -80,6 +193,8 @@ fn separate(point: Vec2, center: Vec2, reach: f32) -> Vec2 {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::FRAC_PI_2;
+
     use super::*;
 
     const BODY: Body = Body {
@@ -106,6 +221,61 @@ mod tests {
     fn posed(pillars: &'static [Pillar]) -> (Collider, GlobalTransform) {
         let transform = Transform::from_xyz(10.0, 0.0, 0.0).with_scale(Vec3::splat(10.0));
         (Collider(pillars), GlobalTransform::from(transform))
+    }
+
+    #[test]
+    fn walls_fence_bodies_out_at_any_height_and_tops_carry_climbers() {
+        let (collider, transform) = posed(TRUNK);
+        // Ten meters up, far above the 10 m pillar's top, it still fences out.
+        let fenced = fence_out(Vec2::new(10.2, 0.0), 0.3, [(&collider, &transform)]);
+        assert!((fenced.distance(Vec2::new(10.0, 0.0)) - 0.8).abs() < 1e-5);
+        // Its top carries a climber who reached it, under any part of the
+        // body's footprint, but not one still below.
+        let solid = || [(&collider, &transform)];
+        assert_eq!(
+            support_height(Vec2::new(10.7, 0.0), 9.9, 0.3, solid()),
+            Some(10.0)
+        );
+        assert_eq!(
+            support_height(Vec2::new(10.1, 0.0), 5.0, 0.3, solid()),
+            None
+        );
+        assert_eq!(
+            support_height(Vec2::new(12.0, 0.0), 10.0, 0.3, solid()),
+            None
+        );
+    }
+
+    #[test]
+    fn a_body_climbs_only_what_blocks_it_ahead() {
+        let (collider, transform) = posed(TRUNK);
+        let solid = || [(&collider, &transform)];
+        let body = Body {
+            radius: 0.3,
+            height: 1.8,
+        };
+        let at = Vec2::new(9.3, 0.0);
+        assert_eq!(climb_top(at, 0.0, body, Vec2::X, solid()), Some(10.0));
+        assert_eq!(climb_top(at, 0.0, body, Vec2::NEG_X, solid()), None);
+        assert_eq!(climb_top(at, 0.0, body, Vec2::Y, solid()), None);
+        // Once within a step of its top, the body walks on instead.
+        assert_eq!(climb_top(at, 9.7, body, Vec2::X, solid()), None);
+    }
+
+    #[test]
+    fn heavier_crushers_run_through_lighter_colliders_they_touch() {
+        let car = Crusher {
+            mass: 12_000.0,
+            half_size: Vec2::new(1.5, 2.6),
+        };
+        assert!(!car.blocked_by(Some(&Weight(900.0))));
+        assert!(car.blocked_by(Some(&Weight(20_000.0))));
+        assert!(car.blocked_by(None));
+        // Turned a quarter, the long footprint lies along X.
+        let pose = Transform::from_rotation(Quat::from_rotation_y(FRAC_PI_2));
+        assert!(car.reaches(&pose, Vec2::new(2.9, 0.0), 0.4));
+        assert!(!car.reaches(&pose, Vec2::new(0.0, 2.9), 0.4));
+        assert!(car.reaches(&Transform::IDENTITY, Vec2::new(0.0, 2.9), 0.4));
     }
 
     #[test]

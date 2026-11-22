@@ -25,6 +25,8 @@ pub enum Gait {
     Crawl,
     /// Lying still, ready to crawl.
     Prone,
+    /// Scrambling up a solid: the crawl clip, upright.
+    Climb,
 }
 
 impl Gait {
@@ -32,12 +34,12 @@ impl Gait {
         matches!(self, Self::Crawl | Self::Prone)
     }
 
-    /// The clip showing this gait; lying still holds the crawl pose.
+    /// The clip showing this gait; lying still holds the crawl pose, and
+    /// climbing plays the crawl standing up.
     fn clip(self) -> Self {
-        if self == Self::Prone {
-            Self::Crawl
-        } else {
-            self
+        match self {
+            Self::Prone | Self::Climb => Self::Crawl,
+            gait => gait,
         }
     }
 }

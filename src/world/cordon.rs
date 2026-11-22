@@ -11,7 +11,7 @@ use bevy::prelude::*;
 
 use crate::assets::{self, PreloadedAssets};
 
-use super::collision::{Collider, Pillar};
+use super::collision::{Collider, Pillar, Unclimbable};
 use super::hydrology::{WATER_LEVEL, Wetlands};
 use super::terrain::{BASE, HALF_SIZE, SPACING, TILE_SIZE, Terrain, smoothstep};
 use super::{StreamAnchor, WorldRoot, anchor_tiles, detail_range, near_anchor, neighborhoods};
@@ -20,7 +20,7 @@ const YARD_MIN: Vec2 = Vec2::new(BASE.0 - 64.0, BASE.1 - 64.0);
 const YARD_MAX: Vec2 = Vec2::new(BASE.0 + 64.0, BASE.1 + 60.0);
 const GATE_CENTER: f32 = BASE.0 - 1.0;
 pub(super) const GATE: Vec2 = Vec2::new(GATE_CENTER, YARD_MAX.y);
-const GATE_HALF: f32 = 8.0;
+pub(super) const GATE_HALF: f32 = 8.0;
 pub(super) const CHECKPOINT: Vec2 = Vec2::new(GATE_CENTER - 13.6, YARD_MAX.y - 8.2);
 const CHECKPOINT_SCALE: f32 = 11.0;
 /// The UHD checkpoint's ground level, in model units.
@@ -31,12 +31,23 @@ const CHECKPOINT_DATUM: f32 = -0.41;
 pub(crate) const PERIMETER_X: f32 = 700.0;
 /// The official Institute gate, where the highway leaves Harmont (map px 413, 350).
 pub(super) const PERIMETER_GATE: Vec2 = Vec2::new(PERIMETER_X, 79.0);
-const PERIMETER_GATE_HALF: f32 = 12.0;
+pub(super) const PERIMETER_GATE_HALF: f32 = 12.0;
 /// The checkpoint guarding the Perimeter gate, on the Harmont side.
 pub(super) const PERIMETER_CHECKPOINT: Vec2 = Vec2::new(PERIMETER_X + 14.0, 61.0);
 /// The stalkers' illegal breach in the Perimeter, south of the gate (map px 410, 510).
 pub(super) const BREACH: Vec2 = Vec2::new(PERIMETER_X, -305.0);
-const BREACH_HALF: f32 = 9.0;
+pub(super) const BREACH_HALF: f32 = 9.0;
+/// The UN patrol's loop beside the Perimeter on Harmont's side: every point
+/// `PATROL_RADIUS` from the segment between the two turn centers, so it runs
+/// north along the wall, turns out short of the gate's checkpoint, comes back
+/// south past the breach and turns in again.
+pub(crate) const PATROL_TURNS: [Vec2; 2] = [
+    Vec2::new(PERIMETER_X + 19.0, -640.0),
+    Vec2::new(PERIMETER_X + 19.0, 40.0),
+];
+pub(crate) const PATROL_RADIUS: f32 = 12.0;
+/// Half the width the patrol's track keeps clear of scenery.
+const PATROL_HALF_WIDTH: f32 = 3.5;
 const EDGE: f32 = HALF_SIZE - 4.0;
 const WALL_HEIGHT_SCALE: f32 = 7.4;
 const PANEL_SPAN: f32 = 0.86;
@@ -87,6 +98,16 @@ pub(super) fn reserve_scenery(at: Vec2, clearance: f32) -> bool {
         || (at.abs().max_element() - EDGE).abs() < clearance
         || (at.x - PERIMETER_X).abs() < clearance + 3.0
         || near_checkpoint(at, PERIMETER_CHECKPOINT, clearance + 3.0)
+        || on_patrol_track(at, clearance)
+}
+
+/// Within `clearance` of the UN patrol's track.
+fn on_patrol_track(at: Vec2, clearance: f32) -> bool {
+    let [south, north] = PATROL_TURNS;
+    let line = north - south;
+    let fraction = ((at - south).dot(line) / line.length_squared()).clamp(0.0, 1.0);
+    let off_center = at.distance(south + line * fraction);
+    (off_center - PATROL_RADIUS).abs() < PATROL_HALF_WIDTH + clearance
 }
 
 fn near_checkpoint(at: Vec2, checkpoint: Vec2, clearance: f32) -> bool {
@@ -172,6 +193,7 @@ pub(super) fn prepare_cordon(
             ),
             checkpoint_pose(&terrain, at),
             Collider(CHECKPOINT_PILLARS),
+            Unclimbable,
             detail_range(400.0, 40.0),
         ));
     }
@@ -312,7 +334,11 @@ fn spawn_wall_chunk(
     }
     root.with_children(|wall| {
         for at in panels.iter().flat_map(|panel| panel.pillars()) {
-            wall.spawn((Collider(WALL_PILLAR), wall_pillar_pose(terrain, at, origin)));
+            wall.spawn((
+                Collider(WALL_PILLAR),
+                Unclimbable,
+                wall_pillar_pose(terrain, at, origin),
+            ));
         }
     })
     .id()

@@ -530,7 +530,7 @@ pub(super) fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
 }
 
 /// Deterministic integer-lattice hash in `[0, 1)`.
-pub(super) fn lattice_hash(ix: i32, iz: i32, seed: u32) -> f32 {
+pub(crate) fn lattice_hash(ix: i32, iz: i32, seed: u32) -> f32 {
     let mut h = (ix as u32).wrapping_mul(0x8da6_b343)
         ^ (iz as u32).wrapping_mul(0xd816_3841)
         ^ seed.wrapping_mul(0xcb1a_b31f);

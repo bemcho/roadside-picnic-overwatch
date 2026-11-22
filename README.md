@@ -51,12 +51,15 @@ This is an active prototype rather than a finished campaign.
 | Right mouse drag | Orbit camera |
 | Mouse wheel | Zoom camera |
 | `Esc` | Pause/resume |
-| `M` | Mute/unmute audio |
+| `M` | Open/close the map |
+| `N` | Mute/unmute audio |
+| `V` | Lift/restore the fog of war (for testing) |
 | `Q` | Quit |
 
 ## Requirements
 
-- A Git installation.
+- A Git installation with [Git LFS](https://git-lfs.com/): every model and
+  texture under `assets/` is an LFS object.
 - The stable Rust toolchain from [rustup](https://rustup.rs/).
 - A GPU and drivers supported by `wgpu` (Vulkan, Metal, or DirectX 12).
 - A working audio output device.
@@ -67,9 +70,15 @@ The game uses only local/bundled runtime assets. Tripo, Blender, and
 ## Install
 
 ```bash
-git clone https://github.com/bemcho/Roadside-Picnic.git
-cd Roadside-Picnic
+sudo apt install git-lfs    # macOS: brew install git-lfs; Git for Windows ships it
+git lfs install             # once per user, before cloning
+git clone https://github.com/bemcho/roadside-picnic-overwatch.git
+cd roadside-picnic-overwatch
+git lfs pull                # fetches the assets if the clone left pointer files
 ```
+
+Without Git LFS the clone holds small text pointers in place of the GLB and PNG
+assets, and the game fails to load them (see Troubleshooting).
 
 Install the platform dependencies below, then run `cargo run --release`.
 
@@ -278,9 +287,14 @@ repository, or a local copy of it, before they can install the optional skills.
 
 - **Splash never finishes loading:** run from the repository root and inspect
   the first `Could not preload ...` log entry.
+- **`invalid glTF file: expected value at line 1 column 1` or `Invalid PNG
+  signature`:** the assets are Git LFS pointer files, not the real files
+  (`head -c 60 assets/textures/terrain/grass_surface.png` prints
+  `version https://git-lfs...`). Install Git LFS, then run `git lfs install`
+  and `git lfs pull` in the checkout.
 - **The game reports paths under `target/.../assets`:** start it with
   `cargo run`/`cargo run --release`, not the executable directly.
-- **No sound:** confirm the system output device, then press `M` once to avoid
+- **No sound:** confirm the system output device, then press `N` once to avoid
   testing with the game muted. The audio is synthesized at runtime.
 - **Long first compile:** Bevy and GPU/audio dependencies are large; subsequent
   debug builds use the existing incremental `target/` cache.

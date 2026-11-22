@@ -1,6 +1,10 @@
 //! Roof cutaway: the hangar's roof and upper walls disappear while the camera
 //! looks inside, so the tactical view can follow the stalker indoors. Only the
 //! main pass cuts; shadows still use the whole shell, keeping the hall dim.
+//!
+//! The same shader repaints the shell as an industrial hall: steel floor
+//! plates with yellow walkway lines, the parked car's bay, a trench grate and
+//! a hazard band at the door, and painted-steel walls with a hazard kick band.
 
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -9,6 +13,7 @@ use bevy::shader::ShaderRef;
 
 use crate::assets;
 use crate::player::PlayerCamera;
+use crate::player::vehicle::parked_vehicle;
 use crate::world::ViewFocus;
 
 use super::Hall;
@@ -27,12 +32,50 @@ pub(in crate::world) struct Cutaway {
     /// x: world height above which fragments are discarded.
     #[uniform(100)]
     pub(super) height: Vec4,
+    /// xyz: the middle of the hall's floor in the world, where the floor paint
+    /// is laid out from (the hall stands unrotated).
+    #[uniform(101)]
+    pub(super) floor: Vec4,
+    #[texture(102)]
+    #[sampler(103)]
+    pub(super) plate_albedo: Handle<Image>,
+    #[texture(104)]
+    #[sampler(105)]
+    pub(super) plate_normal: Handle<Image>,
+    /// AO, roughness and metallic.
+    #[texture(106)]
+    #[sampler(107)]
+    pub(super) plate_surface: Handle<Image>,
+    /// The parked car's painted bay: x, z and yaw from the floor's middle.
+    #[uniform(108)]
+    pub(super) bay: Vec4,
+}
+
+impl Cutaway {
+    /// The uncut shell of a hall whose floor's middle lies at `floor`.
+    pub(super) fn new(server: &AssetServer, floor: Vec3) -> Self {
+        let parked = parked_vehicle(Vec3::ZERO);
+        let (yaw, _, _) = parked.rotation.to_euler(EulerRot::YXZ);
+        Self {
+            floor: floor.extend(0.0),
+            bay: Vec4::new(parked.translation.x, parked.translation.z, yaw, 0.0),
+            plate_albedo: assets::load_repeating(server, assets::HANGAR_FLOOR_ALBEDO, true),
+            plate_normal: assets::load_repeating(server, assets::HANGAR_FLOOR_NORMAL, false),
+            plate_surface: assets::load_repeating(server, assets::HANGAR_FLOOR_SURFACE, false),
+            ..default()
+        }
+    }
 }
 
 impl Default for Cutaway {
     fn default() -> Self {
         Self {
             height: Vec4::new(UNCUT, 0.0, 0.0, 0.0),
+            floor: Vec4::ZERO,
+            plate_albedo: Handle::default(),
+            plate_normal: Handle::default(),
+            plate_surface: Handle::default(),
+            bay: Vec4::ZERO,
         }
     }
 }
@@ -55,8 +98,12 @@ pub(in crate::world) struct RoofFixture;
 #[derive(Component)]
 pub(in crate::world) struct CutawayShell(pub Handle<CutawayMaterial>);
 
+/// Past this camera distance from its focus the hall shows whole again, roof
+/// and walls, as a landmark in the wider view.
+const CUT_ZOOM: f32 = 120.0;
+
 /// Cuts the shell down to its lower walls while the view focus is inside or
-/// the camera looks down from above it.
+/// the camera looks down from above it, unless the camera is zoomed out.
 pub(in crate::world) fn update_cutaway(
     focus: Query<&GlobalTransform, With<ViewFocus>>,
     cameras: Query<&GlobalTransform, With<PlayerCamera>>,
@@ -80,7 +127,8 @@ pub(in crate::world) fn update_cutaway(
                 .cmple(INTERIOR_HALF_EXTENTS)
                 .all()
         };
-        let inside = over(focus.translation()) || over(eye);
+        let close = eye.distance(focus.translation()) < CUT_ZOOM;
+        let inside = close && (over(focus.translation()) || over(eye));
         let shown = if inside {
             Visibility::Hidden
         } else {

@@ -14,10 +14,10 @@ pub const HUD_TITLE: &str = "THE ZONE";
 pub const HUD_FPS_PENDING: &str = "FPS: --";
 
 /// Hint shown in the HUD corner.
-pub const HUD_CONTROLS_HINT: &str = "Click: move | WASD: steer | Wheel: zoom | Arrows/Edges/Middle-drag: pan | F: free camera | C: find stalker | Hold T: time-lapse | M: mute | ESC: pause | Q: quit";
-pub const HUD_CONTROLS_MUTED: &str = "Click: move | WASD: steer | Wheel: zoom | Arrows/Edges/Middle-drag: pan | F: free camera | C: find stalker | Hold T: time-lapse | M: unmute | ESC: pause | Q: quit";
-pub const HUD_DRIVER_CONTROLS: &str = "Click: drive | W/S: accelerate/reverse | A/D: steer | SPACE: brake | F: free camera | C: find stalker | M: mute";
-pub const HUD_DRIVER_MUTED: &str = "Click: drive | W/S: accelerate/reverse | A/D: steer | SPACE: brake | F: free camera | C: find stalker | M: unmute";
+pub const HUD_CONTROLS_HINT: &str = "Click: move | WASD: steer | Wheel: zoom | Arrows/Edges/Middle-drag: pan | F: free camera | C: find stalker | M: map | Hold T: time-lapse | N: mute | ESC: pause | Q: quit";
+pub const HUD_CONTROLS_MUTED: &str = "Click: move | WASD: steer | Wheel: zoom | Arrows/Edges/Middle-drag: pan | F: free camera | C: find stalker | M: map | Hold T: time-lapse | N: unmute | ESC: pause | Q: quit";
+pub const HUD_DRIVER_CONTROLS: &str = "Click: drive | W/S: accelerate/reverse | A/D: steer | SPACE: brake | F: free camera | C: find stalker | M: map | N: mute";
+pub const HUD_DRIVER_MUTED: &str = "Click: drive | W/S: accelerate/reverse | A/D: steer | SPACE: brake | F: free camera | C: find stalker | M: map | N: unmute";
 /// Shown while the view roams away from the stalker.
 pub const HUD_FREE_CAMERA: &str = "FREE CAMERA - F or C: follow the stalker";
 pub const HUD_ENTER_VEHICLE: &str = "Press E to enter vehicle";
@@ -100,6 +100,7 @@ pub const KIND_COAST: &str = "Coast";
 pub const KIND_WILDLIFE: &str = "Wildlife";
 pub const KIND_MUTANT: &str = "Mutant";
 pub const KIND_VEHICLE: &str = "Vehicle";
+pub const KIND_GUARD: &str = "Cordon guard";
 pub const KIND_ARTIFACT: &str = "Recovered artifact";
 
 pub const UNEXPLORED_DESCRIPTION: &str =
@@ -258,6 +259,14 @@ pub const VEHICLE: Entry = Entry {
     title: "Armored vehicle",
     description: "The stalkers' armored car. Press E beside it to get in, then click to drive.",
 };
+pub const GUARD: Entry = Entry {
+    title: "UN soldier",
+    description: "One of the international cordon's sentries, pacing beside the opening and watching who comes through.",
+};
+pub const PATROL: Entry = Entry {
+    title: "UN patrol car",
+    description: "A white armored car of the international forces, driving the length of the Perimeter wall on the Harmont side.",
+};
 
 /// Indexed like the world's creature kinds.
 pub const CREATURE_COPY: [Entry; 13] = [
@@ -317,6 +326,10 @@ pub const CREATURE_COPY: [Entry; 13] = [
 
 /// Title shown in the pause menu.
 pub const PAUSE_TITLE: &str = "PAUSED";
+pub const MAP_TITLE: &str = "HARMONT AND THE ZONE";
+pub const MAP_HINT: &str = "M — close the map";
+/// A bird on the map, its wings up and down.
+pub const MAP_BIRD: [&str; 2] = ["v", "-"];
 
 /// Hint shown in the pause menu.
 pub const PAUSE_HINT: &str = "ESC — resume";

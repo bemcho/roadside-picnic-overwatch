@@ -26,6 +26,10 @@ pub const TERRAIN_GRASS_SURFACE: &str = "textures/terrain/grass_surface.png";
 pub const TERRAIN_EARTH_ALBEDO: &str = "textures/terrain/earth_albedo.png";
 pub const TERRAIN_EARTH_NORMAL: &str = "textures/terrain/earth_normal.png";
 pub const TERRAIN_EARTH_SURFACE: &str = "textures/terrain/earth_surface.png";
+/// The hangar floor's steel plates (`tools/prepare_hangar_floor.py`).
+pub const HANGAR_FLOOR_ALBEDO: &str = "textures/hangar/floor_albedo.png";
+pub const HANGAR_FLOOR_NORMAL: &str = "textures/hangar/floor_normal.png";
+pub const HANGAR_FLOOR_SURFACE: &str = "textures/hangar/floor_surface.png";
 pub const VEGETATION_DEAD_FOREST: &str = "models/vegetation/medium/dead_forest.glb";
 pub const VEGETATION_OVERGROWTH: &str = "models/vegetation/medium/overgrowth.glb";
 pub const VEGETATION_MUD_BOG: &str = "models/vegetation/medium/mud_bog.glb";
@@ -55,6 +59,12 @@ pub const FLESHDEER: &str = "models/mutants/medium/fleshdeer.glb";
 pub const MUTT: &str = "models/mutants/medium/mutt.glb";
 pub const BASE_HANGAR: &str = "models/hangar/medium/hangar.glb";
 pub const BASE_VEHICLE: &str = "models/vehicles/medium/armored_vehicle.glb";
+/// The stalkers' car repainted white with a UN roof marking, for the Perimeter patrol.
+pub const UN_VEHICLE: &str = "models/vehicles/medium/un_armored_vehicle.glb";
+/// The UN marking for the patrol car's flanks: blue on a transparent ground.
+pub const UN_DECAL: &str = "textures/decals/un_flank.png";
+/// The Harmont map (`doc/Roadside_map.jpg`) shown on M.
+pub const UI_MAP: &str = "textures/ui/roadside_map.png";
 pub const VEHICLE_CRAWLER: &str = "models/vehicles/medium/vehicle-crawler.glb";
 pub const VEHICLE_QUARRY: &str = "models/vehicles/medium/vehicle-quarry.glb";
 pub const VEHICLE_SEDAN: &str = "models/vehicles/medium/vehicle-sedan.glb";
@@ -113,6 +123,13 @@ pub const SHRUBS: [PlantModel; 6] = [
     plant!("wormwood"),
 ];
 pub const THORNBUSHES: [PlantModel; 1] = [plant!("thornbush")];
+/// The cordon guards: soldiers rigged like the stalker by `tools/rig_stalker.py`.
+pub const GUARDS: [&str; 4] = [
+    "models/soldiers/medium/soldier-f1.glb",
+    "models/soldiers/medium/soldier-f2.glb",
+    "models/soldiers/medium/soldier-m1.glb",
+    "models/soldiers/medium/soldier-m2.glb",
+];
 pub const ARTIFACTS: [&str; 14] = [
     "models/artifacts/medium/artifact-death-lamp.glb",
     "models/artifacts/medium/artifact-golden-sphere.glb",
@@ -180,12 +197,18 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         VEHICLE_SEDAN,
         VEHICLE_TRAIN,
     ];
-    let albedo = [TERRAIN_GRASS_ALBEDO, TERRAIN_EARTH_ALBEDO];
+    let albedo = [
+        TERRAIN_GRASS_ALBEDO,
+        TERRAIN_EARTH_ALBEDO,
+        HANGAR_FLOOR_ALBEDO,
+    ];
     let data_maps = [
         TERRAIN_GRASS_NORMAL,
         TERRAIN_GRASS_SURFACE,
         TERRAIN_EARTH_NORMAL,
         TERRAIN_EARTH_SURFACE,
+        HANGAR_FLOOR_NORMAL,
+        HANGAR_FLOOR_SURFACE,
     ];
     assets.0.extend(scenes.map(|path| {
         server
@@ -201,7 +224,13 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
     assets.0.extend([golden_sphere.untyped(), gold.untyped()]);
     let (hangar, hangar_paint) = load_single_primitive(&server, BASE_HANGAR);
     assets.0.extend([hangar.untyped(), hangar_paint.untyped()]);
-    assets.0.push(load_vehicle_scene(&server).untyped());
+    for vehicle in [BASE_VEHICLE, UN_VEHICLE] {
+        assets
+            .0
+            .push(load_vehicle_scene(&server, vehicle).untyped());
+    }
+    assets.0.push(server.load::<Image>(UN_DECAL).untyped());
+    assets.0.push(server.load::<Image>(UI_MAP).untyped());
     assets
         .0
         .extend(albedo.map(|path| load_repeating(&server, path, true).untyped()));
@@ -218,7 +247,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
     ]);
 }
 
-pub(crate) fn load_vehicle_scene(server: &AssetServer) -> Handle<WorldAsset> {
+pub(crate) fn load_vehicle_scene(server: &AssetServer, path: &'static str) -> Handle<WorldAsset> {
     server
         .load_builder()
         .with_settings(|settings: &mut GltfLoaderSettings| {
@@ -227,7 +256,7 @@ pub(crate) fn load_vehicle_scene(server: &AssetServer) -> Handle<WorldAsset> {
                 ..ImageSamplerDescriptor::linear()
             });
         })
-        .load(GltfAssetLabel::Scene(0).from_asset(BASE_VEHICLE))
+        .load(GltfAssetLabel::Scene(0).from_asset(path))
 }
 
 /// Loads the shared mesh and material of a single-primitive GLB.

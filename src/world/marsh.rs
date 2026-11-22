@@ -15,7 +15,7 @@ use bevy::prelude::*;
 
 use crate::assets::{self, PreloadedAssets};
 
-use super::collision::{Collider, Pillar, STEP_HEIGHT};
+use super::collision::{Collider, Pillar, STEP_HEIGHT, Unclimbable, Weight};
 use super::cordon::reserve_scenery;
 use super::hydrology::SWAMP;
 use super::terrain::{MARSH_RADII, Terrain, lattice_hash, lerp, marsh_distance};
@@ -78,6 +78,18 @@ impl Group {
             Self::Rock => 0.10,
             Self::Mound => 0.07,
             Self::Debris => 0.05,
+        }
+    }
+
+    /// What a prop of the group weighs, in kilograms; stumps, mounds and rocks
+    /// are rooted in the ground and never give way.
+    fn weight(self) -> Option<Weight> {
+        match self {
+            Self::Tree => Some(Weight(300.0)),
+            Self::Trunk => Some(Weight(4_000.0)),
+            Self::Log => Some(Weight(600.0)),
+            Self::Branch => Some(Weight(40.0)),
+            _ => None,
         }
     }
 
@@ -311,13 +323,24 @@ pub(super) fn spawn_marsh(
         let close = commands
             .spawn((full.clone(), pose, near.clone(), ChildOf(root)))
             .id();
+        // The far model rides along when a heavier body knocks the prop down.
         let distant = commands
-            .spawn((simple.clone(), pose, far.clone(), ChildOf(root)))
+            .spawn((
+                simple.clone(),
+                Transform::IDENTITY,
+                far.clone(),
+                ChildOf(close),
+            ))
             .id();
         if let Some(pillar) = &prop.pillar {
-            commands
-                .entity(close)
-                .insert(Collider(std::slice::from_ref(pillar)));
+            let mut solid = commands.entity(close);
+            solid.insert(Collider(std::slice::from_ref(pillar)));
+            if let Some(weight) = prop.group.weight() {
+                solid.insert(weight);
+            }
+            if prop.group == Group::Tree {
+                solid.insert(Unclimbable);
+            }
         }
         if prop.height * pose.scale.y / SCALE < SHADOW_HEIGHT {
             for entity in [close, distant] {

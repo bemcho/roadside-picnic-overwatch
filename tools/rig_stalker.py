@@ -19,6 +19,14 @@ on the medium scan of the same model and its weights are copied onto the full me
       --image-format AUTO
   python3 tools/compress_glb_textures.py assets/models/soldier/uhd/soldier_rigged.glb
 
+Cordon guards (soldiers/medium/soldier-{f1,f2,m1,m2}.glb from the Tripo workspace: glTF +X
+front, T-pose, ~5k triangles). A wider Walk arm swing keeps their hands moving when seen from
+the tactical camera:
+  blender -b --factory-startup --python-exit-code 1 --python tools/rig_stalker.py -- \
+      soldier-m1.glb assets/models/soldiers/medium/soldier-m1.glb \
+      --yaw-degrees -90 --height 0.977325 --t-pose --walk-arms 32 --image-format AUTO
+  python3 tools/compress_glb_textures.py assets/models/soldiers/medium/soldier-m1.glb
+
 UHD build (assets/models/stalker/uhd/stalker.glb: glTF +X front, arms outstretched,
 unrigged, 8192 px JPEG). Keep the full geometry and texture; the output is the source
 mesh skinned as-is:
@@ -42,6 +50,8 @@ Blender coords: Z up, model front faces -Y, character's left is +X (glTF: front 
                   weights are copied onto the full mesh. Use it when the arms hang
                   against the body, where proximity gives the torso's sides to the arms.
   --image-format  JPEG re-encodes at quality 88; AUTO keeps the source image bytes.
+  --walk-arms     the Walk clip's arm swing at the shoulder, in degrees (default 18); the
+                  elbow bend grows in proportion.
 """
 import argparse
 import math
@@ -63,6 +73,7 @@ def parse_args():
     p.add_argument('--weights', choices=('heat', 'proximity'), default='heat')
     p.add_argument('--weights-from')
     p.add_argument('--image-format', choices=('JPEG', 'AUTO'), default='JPEG')
+    p.add_argument('--walk-arms', type=float, default=18.0)
     args = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     if args.coat and args.weights != 'proximity':
         p.error('--coat needs --weights proximity')
@@ -491,7 +502,8 @@ def gait(t, stride, knee_max, arm, elbow, lean, bob, twist):
     return q
 
 
-key('Walk', 30, lambda t: gait(t, stride=24, knee_max=40, arm=18, elbow=12, lean=3, bob=0.010, twist=4))
+key('Walk', 30, lambda t: gait(t, stride=24, knee_max=40, arm=A.walk_arms, elbow=A.walk_arms * 2 / 3,
+                                lean=3, bob=0.010, twist=4))
 key('Run', 20, lambda t: gait(t, stride=40, knee_max=85, arm=40, elbow=75, lean=12, bob=0.022, twist=7))
 
 

@@ -82,17 +82,21 @@ flowchart LR
 | Day/night and weather | `src/world/weather.rs` | `WorldClock`, daily `Weather` (temperature, humidity, fog tendency), sun/moon, exposure |
 | Ground fog | `src/world/ground_fog.rs`, `ground_fog/{field,render}.rs` | Fog field texture, terrain-hugging raymarch pass, regional distance fog |
 | Places | `src/world/places.rs` | Named places at a point or along a ray, `Describe`, the `Explored` survey grid |
+| Fog of war | `src/world/shroud.rs` | `Shroud` state (V), survey mask texture for the terrain/water shaders, culling of shrouded entities |
 | Streaming | `src/world/landscape.rs`, `scenery.rs` | Async terrain build, LOD swaps, 3x3 scenery/collider streaming |
 | Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
-| Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `old_road.rs`, `marsh.rs` | Harmont map overlay, New Harmont, kit-laid railway and asphalt roads, marsh props |
+| Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `old_road.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway and asphalt roads, marsh props, big rocks |
+| Cordon guards | `src/world/guards.rs` | Two pacing, rigged UN soldiers at each way through a cordon |
+| UN patrol | `src/player/vehicle/patrol.rs` | White armored car lapping the Perimeter wall, flank plates |
 | Wildlife | `src/world/wildlife/` | Shared rigs, gaits, flyers, predator/mutant AI, spatial cues |
-| Collision | `src/world/collision.rs`, `world/pillars/` | Static `Pillar` colliders and push-out behavior |
+| Collision | `src/world/collision.rs`, `world/pillars/` | Static `Pillar` colliders, push-out, climbing, `Weight`/`Crusher`/`Unclimbable` |
+| Crushing | `src/world/crush.rs` | Trampled plants, knocking down lighter solids |
 | Audio | `src/audio/` | Synthesized ambience/effects and live audio sinks |
-| UI | `src/ui/` | Splash, entry curtain, HUD, FPS, weather line, controls, hover tooltips, stalker locator ring, pause |
+| UI | `src/ui/` | Splash, entry curtain, HUD, FPS, weather line, controls, hover tooltips, stalker locator ring, map overlay (M), pause |
 | Zone loop | `src/zone/` | Current placeholder anomalies, collectible markers, run counters |
 | Asset tooling | `tools/` | Texture/GLB preparation, grounding, rigging, collision generation |
-| Shaders | `assets/shaders/` | Terrain, water, hangar cutaway, plant wind and ground fog WESL entry points |
+| Shaders | `assets/shaders/` | Terrain, water, hangar cutaway and floor/wall paint, plant wind and ground fog WESL entry points |
 
 ## State and lifecycle
 
@@ -152,6 +156,8 @@ Update, only while InGamePhase::Running
     -> sun/moon, exposure, distance-fog color
   survey around the stalker
   ground-fog uniforms, terrain fog ceiling, distance-fog range, cutaway
+  shroud toggle (V) and survey mask repaint
+  map overlay toggle (M), marker, fog and birds
   player/camera input
   respawn handling
   vehicle enter/exit
@@ -165,9 +171,14 @@ Update, only while InGamePhase::Running
 PostUpdate, before Transform propagation
   wildlife route/mutant AI
   shared creature rig pose
+  trample plants, knock down lighter solids
   artifact idle motion
   tree fall
   canopy motion, UHD tree scan streaming
+
+PostUpdate, after CheckVisibility and CheckLightVisibility
+  cull_shrouded (drops shrouded entities from VisibleEntities and the sun's
+  cascade lists while the shroud covers the map)
 
 Last
   mute processing
@@ -361,6 +372,17 @@ that root. `base/props.rs` owns existing workshop props. `base/artifacts.rs`
 owns the fourteen display pedestals, their spotlights, and idle animation.
 The static crawler, quarry truck, sedan, and train are in the level rear yard.
 
+The hall shell's `CutawayMaterial` (`base/cutaway.rs`, `shaders/cutaway.wesl`)
+does two jobs: it cuts the roof for the tactical view, and it repaints the
+scan. Fragments are sorted by their geometric normal and height above the
+floor (`Cutaway::floor`). Floor fragments get the tiling steel plates from
+`textures/hangar/` and procedural paint. Wall fragments keep the scan's
+luminance under steel-grey paint. The paint is antialiased with `fwidth` and
+computed for every fragment, so derivatives stay in uniform control flow.
+The car's bay comes from `parked_vehicle` as a uniform. The walkway lines,
+grate and door band are shader constants in hall meters (+Z toward the door),
+so moving the exhibit rows or the door means moving them too.
+
 The hangar artifacts are display models only. Each of the fourteen tables
 preloads a 1536 px scene from `artifacts/lod/`; `stream_full_artifacts` keeps at
 most one nearest 4K source active within 8 m and restores the preview after the
@@ -382,11 +404,14 @@ collider pillars and deep water (`player/path.rs`). `move_player`:
 1. reads camera-relative WASD input (which cancels an order), otherwise
    steers toward the order's next waypoint,
 2. eases planar velocity,
-3. resolves pillar collisions with `push_out`,
+3. resolves pillar collisions with `push_out` against climbable solids the
+   stalker's 90 kg doesn't knock down, and with `fence_out` against
+   `Unclimbable` ones,
 4. rejects moves into disallowed deep water,
-5. samples `Terrain::mesh_height_at`,
-6. applies jump/gravity,
-7. selects `Idle/Walk/Run/Jump/Prone/Crawl`.
+5. samples `Terrain::mesh_height_at`, raised to a pillar top the body stands
+   on (`support_height`),
+6. climbs a blocking solid ahead (`climb_top`, 1.2 m/s) or applies jump/gravity,
+7. selects `Idle/Walk/Run/Jump/Prone/Crawl/Climb`.
 
 The stalker scene is skinned in `player/animation.rs`. Animation order in the
 GLB is an asset contract: the rig script exports the clips sorted as
@@ -432,6 +457,22 @@ Collision is intentionally small and bespoke:
 
 Pillars below `STEP_HEIGHT` can be stepped over. A pillar above the body can be
 passed under. Crawling uses the smaller prone body.
+
+Weight and climbing:
+
+- a collider without a `Weight` is anchored; one with a `Weight` gives way to
+  any heavier `Crusher` (stalker 90 kg, car and patrol 12 t). `orders.rs` and
+  the vehicle skip such colliders when planning and colliding, and
+  `crush::knock_down_light_solids` removes its `Collider` and `Weight` at the
+  first touch, then fells a tree through `TreeBreak` or knocks a prop down
+  with `FallingTree::knocked`,
+- `crush::trample_plants` despawns the plants under a crusher's footprint and
+  records their decimeter spots in `Trampled`, which `spawn_grown_plants`
+  filters when tiles stream back,
+- the stalker climbs a solid pressed into from within ~45° of its travel
+  (`climb_top`) and stands on pillar tops under its footprint
+  (`support_height`); `Unclimbable` solids are fenced at any height
+  (`fence_out`).
 
 Generated arrays live under `src/world/pillars/`. Use
 `tools/trim_tree_base.py` to regenerate them after a mesh or pivot change:
@@ -533,6 +574,10 @@ Useful query relationships:
   outline (`places::structure_on_ray`; the hall uses its cut-away box), then the
   named ground under it (`places::place_at`). Places outside the `Explored`
   survey grid show only their kind.
+- the map overlay (`ui/map.rs`, M) stretches `assets::UI_MAP` over a frame
+  with the map's aspect; `world::map_pixel` places the stalker's marker, and a
+  fog texture of one texel per survey cell is redrawn only when the map opens
+  or `Explored` changes,
 - the locator ring (`ui/locator.rs`) is a world-space mesh, not a UI node: each
   frame `update_locator` lays its vertices on `Terrain::mesh_height_at` plus
   `water_depth_at` around the `Player` (wider while `Driving`), widens it to
@@ -552,7 +597,7 @@ Important paths:
 - teleport distances reset the step clock,
 - door sounds follow actual `Driving` transitions,
 - engine sound follows occupied vehicle load,
-- `M` mutes live `AudioSink`/`SpatialAudioSink` values and pending playback
+- `N` mutes live `AudioSink`/`SpatialAudioSink` values and pending playback
   settings,
 - one-shot sounds are despawned through `DespawnOnExit(AppState::InGame)`.
 
@@ -683,6 +728,14 @@ Important paths:
     (`canopy::stream_close_trees`, `plants::stream_full_plants`) rather than
     preloading them; wgpu keeps freed memory pooled for the next scan, so
     `nvidia-smi` stays level after a scan unloads instead of dropping.
+
+25. **Mind the shroud when adding meshes or materials.**
+    `shroud::cull_shrouded` drops any entity with an `Aabb` that stands wholly
+    on unsurveyed ground from the views' visible lists. Ground-like materials
+    that should stay drawn and veil themselves in their shader belong in
+    `shroud::Shroudable`'s exemptions; `NoFrustumCulling` entities are never
+    culled. A new terrain-like shader samples the same mask (`shroud_at`,
+    `veil` in `terrain.wesl`/`water.wesl`).
 
 ## How to add a static site model
 
@@ -884,7 +937,8 @@ Before declaring a visual or gameplay feature complete:
 - verify the model roots and colliders despawn with their state
 - inspect a release run from the repository root
 - inspect near and distant views, including a terrain tile boundary if relevant
-- verify pause behavior and M mute behavior if the feature affects motion/audio
+- verify pause behavior and N mute behavior if the feature affects motion/audio
+- verify the feature with the shroud covered and lifted (V) if it adds meshes
 
 ## Troubleshooting map
 
@@ -893,7 +947,8 @@ Before declaring a visual or gameplay feature complete:
 | Splash stays loading | `PreloadedAssets`, `SplashPhase`, asset log, missing recursive dependency |
 | Splash shows failure | first `Could not preload ...` log entry and its exact asset path |
 | `Path not found` under `target/release/assets` | launched the binary directly; use `cargo run --release` from the repo root |
-| Model is invisible | state spawn schedule, `WorldAssetRoot`, scene label, `VisibilityRange`, missing material |
+| Model is invisible | state spawn schedule, `WorldAssetRoot`, scene label, `VisibilityRange`, missing material, the shroud (press V), the GLB's own geometry (`glb-preview`) |
+| `invalid glTF file: expected value at line 1 column 1`, `Invalid PNG signature` | Git LFS pointer files; `git lfs install && git lfs pull` |
 | Model floats | grounded origin, `datum`, `mesh_height_at`, parent transform, scale |
 | Collision does not match mesh | stale `world/pillars/*.rs`, different runtime GLB, mismatched yaw/scale |
 | Site appears but terrain tilts through it | `sites::foundation`, pad radius, LOD stitching, road overlap |

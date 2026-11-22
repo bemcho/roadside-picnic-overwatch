@@ -21,6 +21,7 @@ use bevy::world_serialization::WorldInstanceReady;
 use crate::assets::{self, PlantModel, PreloadedAssets};
 
 use super::cordon::{near_wall_or_checkpoint, reserve_scenery, shelterbelt};
+use super::crush::Trampled;
 use super::hydrology::Wetlands;
 use super::scenery::forest_density;
 use super::terrain::{
@@ -237,6 +238,15 @@ struct PlantSite {
 #[derive(Component)]
 pub(in crate::world) struct Plant {
     model: &'static PlantModel,
+}
+
+#[cfg(test)]
+impl Plant {
+    pub(in crate::world) fn test() -> Self {
+        Self {
+            model: &Kind::DryGrass.models()[0],
+        }
+    }
 }
 
 /// The full scan standing in for the plant nearest the stalker.
@@ -480,17 +490,22 @@ impl PendingPlants {
 }
 
 /// Spawns at most one grown tile per frame, spreading the spawns.
+/// Trampled plants stay gone.
 pub(super) fn spawn_grown_plants(
     mut commands: Commands,
     mut tiles: Query<(Entity, &mut PendingPlants)>,
     looks: Res<PlantLooks>,
+    trampled: Res<Trampled>,
 ) {
-    let Some((tile, plants)) = tiles
+    let Some((tile, mut plants)) = tiles
         .iter_mut()
         .find_map(|(tile, mut pending)| Some((tile, check_ready(&mut pending.0)?)))
     else {
         return;
     };
+    plants
+        .0
+        .retain(|site| !trampled.contains(site.pose.translation));
     commands
         .entity(tile)
         .remove::<PendingPlants>()
@@ -622,6 +637,7 @@ mod tests {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
             .init_resource::<PlantLooks>()
+            .init_resource::<Trampled>()
             .add_systems(Update, spawn_grown_plants);
         let tile = base_tile() + IVec2::NEG_Y;
         let expected = TilePlants::grow(&Terrain::new(), tile);
