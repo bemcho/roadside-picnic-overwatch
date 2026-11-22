@@ -210,6 +210,9 @@ fn describe(place: Place) -> (&'static str, &'static Entry) {
         Place::Vehicle => (text::KIND_VEHICLE, &text::VEHICLE),
         Place::Guard => (text::KIND_GUARD, &text::GUARD),
         Place::Patrol => (text::KIND_VEHICLE, &text::PATROL),
+        Place::Sweeper => (text::KIND_VEHICLE, &text::SWEEPER),
+        Place::Sedan => (text::KIND_VEHICLE, &text::SEDAN),
+        Place::CrawlHole => (text::KIND_PASSAGE, &text::CRAWL_HOLE),
         Place::Artifact(index) => (
             text::KIND_ARTIFACT,
             &artifacts[index.min(artifacts.len() - 1)],

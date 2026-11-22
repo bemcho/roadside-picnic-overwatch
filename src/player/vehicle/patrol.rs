@@ -1,10 +1,11 @@
-//! The UN patrol: a white armored car (`UN_VEHICLE`, the stalkers' car
+//! The UN patrol: four white armored cars (`UN_VEHICLE`, the stalkers' car
 //! repainted with a UN marking on the roof) lapping a long loop beside the
-//! Perimeter wall on Harmont's side (`world::PATROL_TURNS`). It drives north
-//! along the wall past the breach, turns out short of the gate's checkpoint and
-//! comes back on the far lane. It eases to a halt while the stalker or their car
-//! stands in its way. Both flanks carry a UN plate: their faces share texture
-//! pixels in the model, so the plates are separate quads.
+//! Perimeter wall on Harmont's side (`world::PATROL_TURNS`), a quarter lap
+//! apart. They drive north along the wall from south of the hangar's latitude
+//! past the Institute gate, turn out beyond the Institute and come back on the
+//! far lane. Each eases to a halt while the stalker, their car or another
+//! patrol stands in its way. Both flanks carry a UN plate: their faces share
+//! texture pixels in the model, so the plates are separate quads.
 //!
 //! `assets/textures/decals/un_flank.png` keeps only the blue of the supplied
 //! decal photo (`un_decal_blue_on_white.jpg`) as its alpha, over a flat UN blue.
@@ -31,6 +32,8 @@ const STEER_RATE: f32 = 3.0;
 /// It stops for anything this far ahead and this close to its middle line.
 const LOOK_AHEAD: f32 = 11.0;
 const LOOK_SIDE: f32 = 3.0;
+/// How many cars share the loop, spaced evenly around it.
+const PATROLS: usize = 4;
 /// The flank plates, in model units: size, and where the doors face out.
 const PLATE: Vec2 = Vec2::new(0.25, 0.25 * 175.0 / 512.0);
 const PLATE_AT: Vec3 = Vec3::new(0.219, 0.255, 0.015);
@@ -45,10 +48,11 @@ pub(crate) struct Patrol {
     suspension: [Vec3; 4],
 }
 
+/// A wheel pivot of a car the game drives: a patrol or Harmont's traffic.
 #[derive(Component)]
-pub(crate) struct PatrolWheel {
-    slot: usize,
-    rest: Vec3,
+pub(crate) struct CarWheel {
+    pub(super) slot: usize,
+    pub(super) rest: Vec3,
 }
 
 /// One lap's length: two lanes and two half circles.
@@ -93,7 +97,7 @@ fn on_loop(along: f32) -> (Vec2, Vec2, bool) {
 }
 
 /// True when `obstacle` stands in the lane just ahead of a car at `at`.
-fn in_the_way(at: Vec2, heading: Vec2, obstacle: Vec2) -> bool {
+pub(super) fn in_the_way(at: Vec2, heading: Vec2, obstacle: Vec2) -> bool {
     let offset = obstacle - at;
     let ahead = offset.dot(heading);
     (0.0..LOOK_AHEAD).contains(&ahead) && heading.perp_dot(offset).abs() < LOOK_SIDE
@@ -105,7 +109,6 @@ pub(crate) fn spawn_patrol(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let (at, heading, _) = on_loop(0.0);
     let plate = meshes.add(Rectangle::from_size(PLATE));
     let paint = materials.add(StandardMaterial {
         base_color_texture: Some(server.load(assets::UN_DECAL)),
@@ -114,36 +117,40 @@ pub(crate) fn spawn_patrol(
         depth_bias: 50.0,
         ..default()
     });
-    let mut patrol = commands.spawn((
-        Name::new("UN patrol"),
-        Patrol::default(),
-        Collider(COLLISION),
-        CAR,
-        Describe {
-            place: Place::Patrol,
-            radius: 2.4,
-            height: 2.6,
-        },
-        Transform::from_translation(at.extend(0.0).xzy())
-            .looking_to(heading.extend(0.0).xzy(), Vec3::Y)
-            .with_scale(Vec3::splat(MODEL_SCALE)),
-        WorldAssetRoot(assets::load_vehicle_scene(&server, assets::UN_VEHICLE)),
-    ));
-    // A quad faces +Z; turned a quarter about Y it faces a flank, lettering
-    // reading front to back on the right and back to front on the left.
-    for side in [1.0, -1.0] {
-        patrol.with_child((
-            Mesh3d(plate.clone()),
-            MeshMaterial3d(paint.clone()),
-            Transform::from_translation(PLATE_AT * Vec3::new(side, 1.0, 1.0))
-                .with_rotation(Quat::from_rotation_y(side * FRAC_PI_2)),
-            NotShadowCaster,
+    for i in 0..PATROLS {
+        let along = lap() * i as f32 / PATROLS as f32;
+        let (at, heading, _) = on_loop(along);
+        let mut patrol = commands.spawn((
+            Name::new("UN patrol"),
+            Patrol { along, ..default() },
+            Collider(COLLISION),
+            CAR,
+            Describe {
+                place: Place::Patrol,
+                radius: 2.4,
+                height: 2.6,
+            },
+            Transform::from_translation(at.extend(0.0).xzy())
+                .looking_to(heading.extend(0.0).xzy(), Vec3::Y)
+                .with_scale(Vec3::splat(MODEL_SCALE)),
+            WorldAssetRoot(assets::load_vehicle_scene(&server, assets::UN_VEHICLE)),
         ));
+        // A quad faces +Z; turned a quarter about Y it faces a flank, lettering
+        // reading front to back on the right and back to front on the left.
+        for side in [1.0, -1.0] {
+            patrol.with_child((
+                Mesh3d(plate.clone()),
+                MeshMaterial3d(paint.clone()),
+                Transform::from_translation(PLATE_AT * Vec3::new(side, 1.0, 1.0))
+                    .with_rotation(Quat::from_rotation_y(side * FRAC_PI_2)),
+                NotShadowCaster,
+            ));
+        }
+        patrol.observe(attach_wheels);
     }
-    patrol.observe(attach_patrol_wheels);
 }
 
-fn attach_patrol_wheels(
+pub(super) fn attach_wheels(
     ready: On<WorldInstanceReady>,
     mut commands: Commands,
     children: Query<&Children>,
@@ -154,7 +161,7 @@ fn attach_patrol_wheels(
             continue;
         };
         if let Some(slot) = wheel_slot(name) {
-            commands.entity(entity).insert(PatrolWheel {
+            commands.entity(entity).insert(CarWheel {
                 slot,
                 rest: transform.translation,
             });
@@ -169,26 +176,32 @@ type InTheWay<'w, 's> =
 type Wheels<'w, 's> = Query<
     'w,
     's,
-    (Entity, &'static PatrolWheel, &'static mut Transform),
+    (Entity, &'static CarWheel, &'static mut Transform),
     (Without<Patrol>, Without<Player>, Without<Vehicle>),
 >;
 
-/// Drives the patrol around its loop over the rendered ground, then poses
-/// its wheels.
+/// Drives each patrol around the loop over the rendered ground, then poses
+/// their wheels.
 pub(crate) fn drive_patrol(
     time: Res<Time>,
     terrain: Res<Terrain>,
     others: InTheWay,
-    mut patrols: Query<(&mut Patrol, &mut Transform), Without<PatrolWheel>>,
+    mut patrols: Query<(Entity, &mut Patrol, &mut Transform), Without<CarWheel>>,
     mut wheels: Wheels,
     parents: Query<&ChildOf>,
 ) {
     let dt = time.delta_secs();
-    for (mut patrol, mut transform) in &mut patrols {
+    let cars: Vec<(Entity, Vec2)> = patrols
+        .iter()
+        .map(|(entity, _, transform)| (entity, transform.translation.xz()))
+        .collect();
+    for (entity, mut patrol, mut transform) in &mut patrols {
         let (at, heading, turning) = on_loop(patrol.along);
         let blocked = others
             .iter()
-            .any(|other| in_the_way(at, heading, other.translation.xz()));
+            .map(|other| other.translation.xz())
+            .chain(cars.iter().filter(|car| car.0 != entity).map(|car| car.1))
+            .any(|other| in_the_way(at, heading, other));
         let target = match (blocked, turning) {
             (true, _) => 0.0,
             (false, true) => TURNING,
@@ -219,7 +232,7 @@ pub(crate) fn drive_patrol(
         let patrol = parents
             .iter_ancestors(entity)
             .find_map(|ancestor| patrols.get(ancestor).ok());
-        if let Some((patrol, _)) = patrol {
+        if let Some((_, patrol, _)) = patrol {
             let gear = (patrol.steer, patrol.roll, patrol.suspension);
             pose_wheel(&mut transform, wheel.slot, wheel.rest, gear);
         }

@@ -19,13 +19,19 @@ on the medium scan of the same model and its weights are copied onto the full me
       --image-format AUTO
   python3 tools/compress_glb_textures.py assets/models/soldier/uhd/soldier_rigged.glb
 
-Cordon guards (soldiers/medium/soldier-{f1,f2,m1,m2}.glb from the Tripo workspace: glTF +X
+Cordon guards (soldiers/medium/soldier-{f1,f2,m2}.glb from the Tripo workspace: glTF +X
 front, T-pose, ~5k triangles). A wider Walk arm swing keeps their hands moving when seen from
 the tactical camera:
   blender -b --factory-startup --python-exit-code 1 --python tools/rig_stalker.py -- \
-      soldier-m1.glb assets/models/soldiers/medium/soldier-m1.glb \
+      soldier-f1.glb assets/models/soldiers/medium/soldier-f1.glb \
       --yaw-degrees -90 --height 0.977325 --t-pose --walk-arms 32 --image-format AUTO
-  python3 tools/compress_glb_textures.py assets/models/soldiers/medium/soldier-m1.glb
+  python3 tools/compress_glb_textures.py assets/models/soldiers/medium/soldier-f1.glb
+soldier-m1 was rigged by Tripo (`animate_rig`, biped; the Tripo workspace's
+tripo-out/soldier-m1-rig-rig-cd280954/model.glb): the same build with --armature keeps
+Tripo's skeleton and skin weights and bakes the clips onto them:
+  blender -b --factory-startup --python-exit-code 1 --python tools/rig_stalker.py -- \
+      model.glb assets/models/soldiers/medium/soldier-m1.glb --armature \
+      --yaw-degrees -90 --height 0.977325 --t-pose --walk-arms 32 --image-format AUTO
 
 UHD build (assets/models/stalker/uhd/stalker.glb: glTF +X front, arms outstretched,
 unrigged, 8192 px JPEG). Keep the full geometry and texture; the output is the source
@@ -52,6 +58,8 @@ Blender coords: Z up, model front faces -Y, character's left is +X (glTF: front 
   --image-format  JPEG re-encodes at quality 88; AUTO keeps the source image bytes.
   --walk-arms     the Walk clip's arm swing at the shoulder, in degrees (default 18); the
                   elbow bend grows in proportion.
+  --armature      the source is already rigged (a Tripo biped rig): keep its skeleton and
+                  weights and bake the clips onto it through TRIPO_BONES.
 """
 import argparse
 import math
@@ -74,11 +82,14 @@ def parse_args():
     p.add_argument('--weights-from')
     p.add_argument('--image-format', choices=('JPEG', 'AUTO'), default='JPEG')
     p.add_argument('--walk-arms', type=float, default=18.0)
+    p.add_argument('--armature', action='store_true')
     args = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
     if args.coat and args.weights != 'proximity':
         p.error('--coat needs --weights proximity')
     if args.weights_from and args.weights != 'heat':
         p.error('--weights-from computes heat weights')
+    if args.armature and (args.coat or args.weights_from):
+        p.error('--armature keeps the source\'s own skeleton and weights')
     return args
 
 
@@ -130,273 +141,324 @@ def import_scan(path):
     return obj
 
 
-mesh = import_scan(A.src)
-V = vertex_array(mesh)
-H = V[:, 2].max()
+def fit_rig():
+    """Fit a skeleton to the scan from slices of its mesh and skin it."""
+    mesh = import_scan(A.src)
+    V = vertex_array(mesh)
+    H = V[:, 2].max()
 
 
-def center(zlo, zhi, xlo=-9, xhi=9):
-    """Bounding-box center (x, y) of the mesh slice in a height/side band."""
-    x, y, z = V[:, 0], V[:, 1], V[:, 2]
-    m = (zlo * H <= z) & (z <= zhi * H) & (xlo * H <= x) & (x <= xhi * H)
-    return Vector(((x[m].min() + x[m].max()) / 2, (y[m].min() + y[m].max()) / 2))
+    def center(zlo, zhi, xlo=-9, xhi=9):
+        """Bounding-box center (x, y) of the mesh slice in a height/side band."""
+        x, y, z = V[:, 0], V[:, 1], V[:, 2]
+        m = (zlo * H <= z) & (z <= zhi * H) & (xlo * H <= x) & (x <= xhi * H)
+        return Vector(((x[m].min() + x[m].max()) / 2, (y[m].min() + y[m].max()) / 2))
 
 
-def at(c, z):
-    return Vector((c.x, c.y, z * H))
+    def at(c, z):
+        return Vector((c.x, c.y, z * H))
 
 
-body = center(0.45, 0.80, -0.12, 0.12)
-spine = lambda z: Vector((0, body.y, z * H))
+    body = center(0.45, 0.80, -0.12, 0.12)
+    spine = lambda z: Vector((0, body.y, z * H))
 
 
-def arm_joint(frac):
-    """Centroid of the outstretched left arm at a fraction of the height along +X."""
-    x, y, z = V[:, 0], V[:, 1], V[:, 2]
-    xk = frac * H
-    m = (np.abs(x - xk) < 0.01 * H) & (z >= 0.72 * H) & (z <= 0.82 * H) & (np.abs(y) < 0.25 * H)
-    return Vector((xk, y[m].mean(), z[m].mean()))
+    def arm_joint(frac):
+        """Centroid of the outstretched left arm at a fraction of the height along +X."""
+        x, y, z = V[:, 0], V[:, 1], V[:, 2]
+        xk = frac * H
+        m = (np.abs(x - xk) < 0.01 * H) & (z >= 0.72 * H) & (z <= 0.82 * H) & (np.abs(y) < 0.25 * H)
+        return Vector((xk, y[m].mean(), z[m].mean()))
 
 
-if A.t_pose:
-    shoulder, elbow = arm_joint(0.175), arm_joint(0.31)
-    wrist, hand_end = arm_joint(0.40), arm_joint(0.44)
-else:
-    # Limb joints: fitted from slices of the mesh on the character's left (+X).
-    shoulder = at(center(0.74, 0.78, 0.10, 0.20), 0.775)
-    elbow = at(center(0.61, 0.65, 0.13, 0.30), 0.63)
-    wrist = at(center(0.47, 0.50, 0.13, 0.30), 0.485)
-    hand_end = at(center(0.40, 0.44, 0.13, 0.30), 0.41)
-ankle = at(center(0.08, 0.11, 0.0, 0.15), 0.085)
-if A.coat:
-    # A robe hides the thighs and knees: the slices there are dominated by the skirt, which
-    # biases their centers ~5 cm forward. Fit the visible shins below the hem and extend
-    # that axis up to the knee and hip.
-    shin = at(center(0.13, 0.19, 0.0, 0.15), 0.16)
+    if A.t_pose:
+        shoulder, elbow = arm_joint(0.175), arm_joint(0.31)
+        wrist, hand_end = arm_joint(0.40), arm_joint(0.44)
+    else:
+        # Limb joints: fitted from slices of the mesh on the character's left (+X).
+        shoulder = at(center(0.74, 0.78, 0.10, 0.20), 0.775)
+        elbow = at(center(0.61, 0.65, 0.13, 0.30), 0.63)
+        wrist = at(center(0.47, 0.50, 0.13, 0.30), 0.485)
+        hand_end = at(center(0.40, 0.44, 0.13, 0.30), 0.41)
+    ankle = at(center(0.08, 0.11, 0.0, 0.15), 0.085)
+    if A.coat:
+        # A robe hides the thighs and knees: the slices there are dominated by the skirt, which
+        # biases their centers ~5 cm forward. Fit the visible shins below the hem and extend
+        # that axis up to the knee and hip.
+        shin = at(center(0.13, 0.19, 0.0, 0.15), 0.16)
 
-    def along(z):
-        t = (z * H - ankle.z) / (shin.z - ankle.z)
-        return ankle + (shin - ankle) * t
+        def along(z):
+            t = (z * H - ankle.z) / (shin.z - ankle.z)
+            return ankle + (shin - ankle) * t
 
-    knee, hip = along(0.28), along(0.50)
-else:
-    hip = at(center(0.40, 0.44, 0.01, 0.15), 0.50)
-    knee = at(center(0.26, 0.30, 0.0, 0.15), 0.28)
-low = (V[:, 2] < 0.05 * H) & (V[:, 0] > 0)
-toe = Vector((ankle.x, V[low, 1].min(), 0.015 * H))
-print('JOINTS', dict(shoulder=shoulder, elbow=elbow, wrist=wrist, hip=hip, knee=knee, ankle=ankle, toe=toe))
+        knee, hip = along(0.28), along(0.50)
+    else:
+        hip = at(center(0.40, 0.44, 0.01, 0.15), 0.50)
+        knee = at(center(0.26, 0.30, 0.0, 0.15), 0.28)
+    low = (V[:, 2] < 0.05 * H) & (V[:, 0] > 0)
+    toe = Vector((ankle.x, V[low, 1].min(), 0.015 * H))
+    print('JOINTS', dict(shoulder=shoulder, elbow=elbow, wrist=wrist, hip=hip, knee=knee, ankle=ankle, toe=toe))
 
-arm_data = bpy.data.armatures.new('Rig')
-rig = bpy.data.objects.new('Stalker', arm_data)
-sc.collection.objects.link(rig)
-bpy.context.view_layer.objects.active = rig
-bpy.ops.object.mode_set(mode='EDIT')
-eb = arm_data.edit_bones
-segments = {}
-
-
-def bone(name, head, tail, parent=None, connect=False):
-    b = eb.new(name)
-    b.head, b.tail = head, tail
-    if parent:
-        b.parent = eb[parent]
-        b.use_connect = connect
-    segments[name] = (head, tail)
-    return b
-
-
-bone('hips', spine(0.50), spine(0.58))
-bone('spine', spine(0.58), spine(0.68), 'hips', True)
-bone('chest', spine(0.68), spine(0.79), 'spine', True)
-bone('neck', spine(0.79), spine(0.84), 'chest', True)
-bone('head', spine(0.84), spine(0.99), 'neck', True)
-for side, m in (('L', 1), ('R', -1)):
-    f = lambda v: Vector((v.x * m, v.y, v.z))
-    bone(f'shoulder.{side}', spine(0.775) + Vector((0.03 * m, 0, 0)), f(shoulder), 'chest')
-    bone(f'upper_arm.{side}', f(shoulder), f(elbow), f'shoulder.{side}', True)
-    bone(f'forearm.{side}', f(elbow), f(wrist), f'upper_arm.{side}', True)
-    bone(f'hand.{side}', f(wrist), f(hand_end), f'forearm.{side}', True)
-    bone(f'thigh.{side}', f(hip), f(knee), 'hips')
-    bone(f'shin.{side}', f(knee), f(ankle), f'thigh.{side}', True)
-    bone(f'foot.{side}', f(ankle), f(toe), f'shin.{side}', True)
-
-
-def coat_point(side, z):
-    """Coat surface on one side at height z, pulled 20 % inside so the bone sits in cloth."""
-    zf = z * H
-    band = np.abs(V[:, 2] - zf) < 0.03 * H
-    if side == 'Front':
-        s = V[band & (np.abs(V[:, 0]) < 0.12 * H)]
-        return Vector((0, 0.8 * s[:, 1].min(), zf))
-    if side == 'Back':
-        s = V[band & (np.abs(V[:, 0]) < 0.12 * H)]
-        return Vector((0, 0.8 * s[:, 1].max(), zf))
-    s = V[band & (np.abs(V[:, 1] - body.y) < 0.05 * H)]
-    if side == 'Left':
-        return Vector((0.8 * s[:, 0].max(), body.y, zf))
-    return Vector((0.8 * s[:, 0].min(), body.y, zf))
-
-
-if A.coat:
-    for side in ('Front', 'Back', 'Left', 'Right'):
-        p0, p1, p2 = (coat_point(side, z) for z in (0.50, 0.38, 0.24))
-        bone(f'Coat{side}.1', p0, p1, 'hips')
-        bone(f'Coat{side}.2', p1, p2, f'Coat{side}.1', True)
-for b in eb:
-    b.roll = 0
-bpy.ops.object.mode_set(mode='OBJECT')
-
-
-def heat_weights(mesh):
-    """Blender bone-heat weights, computed on a welded copy scaled 10x (small meshes only)."""
-    bpy.ops.object.select_all(action='DESELECT')
-    mesh.select_set(True)
-    rig.select_set(True)
-    bpy.context.view_layer.objects.active = mesh
+    arm_data = bpy.data.armatures.new('Rig')
+    rig = bpy.data.objects.new('Stalker', arm_data)
+    sc.collection.objects.link(rig)
+    bpy.context.view_layer.objects.active = rig
     bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.mesh.remove_doubles(threshold=0.0005)
+    eb = arm_data.edit_bones
+    segments = {}
+
+
+    def bone(name, head, tail, parent=None, connect=False):
+        b = eb.new(name)
+        b.head, b.tail = head, tail
+        if parent:
+            b.parent = eb[parent]
+            b.use_connect = connect
+        segments[name] = (head, tail)
+        return b
+
+
+    bone('hips', spine(0.50), spine(0.58))
+    bone('spine', spine(0.58), spine(0.68), 'hips', True)
+    bone('chest', spine(0.68), spine(0.79), 'spine', True)
+    bone('neck', spine(0.79), spine(0.84), 'chest', True)
+    bone('head', spine(0.84), spine(0.99), 'neck', True)
+    for side, m in (('L', 1), ('R', -1)):
+        f = lambda v: Vector((v.x * m, v.y, v.z))
+        bone(f'shoulder.{side}', spine(0.775) + Vector((0.03 * m, 0, 0)), f(shoulder), 'chest')
+        bone(f'upper_arm.{side}', f(shoulder), f(elbow), f'shoulder.{side}', True)
+        bone(f'forearm.{side}', f(elbow), f(wrist), f'upper_arm.{side}', True)
+        bone(f'hand.{side}', f(wrist), f(hand_end), f'forearm.{side}', True)
+        bone(f'thigh.{side}', f(hip), f(knee), 'hips')
+        bone(f'shin.{side}', f(knee), f(ankle), f'thigh.{side}', True)
+        bone(f'foot.{side}', f(ankle), f(toe), f'shin.{side}', True)
+
+
+    def coat_point(side, z):
+        """Coat surface on one side at height z, pulled 20 % inside so the bone sits in cloth."""
+        zf = z * H
+        band = np.abs(V[:, 2] - zf) < 0.03 * H
+        if side == 'Front':
+            s = V[band & (np.abs(V[:, 0]) < 0.12 * H)]
+            return Vector((0, 0.8 * s[:, 1].min(), zf))
+        if side == 'Back':
+            s = V[band & (np.abs(V[:, 0]) < 0.12 * H)]
+            return Vector((0, 0.8 * s[:, 1].max(), zf))
+        s = V[band & (np.abs(V[:, 1] - body.y) < 0.05 * H)]
+        if side == 'Left':
+            return Vector((0.8 * s[:, 0].max(), body.y, zf))
+        return Vector((0.8 * s[:, 0].min(), body.y, zf))
+
+
+    if A.coat:
+        for side in ('Front', 'Back', 'Left', 'Right'):
+            p0, p1, p2 = (coat_point(side, z) for z in (0.50, 0.38, 0.24))
+            bone(f'Coat{side}.1', p0, p1, 'hips')
+            bone(f'Coat{side}.2', p1, p2, f'Coat{side}.1', True)
+    for b in eb:
+        b.roll = 0
     bpy.ops.object.mode_set(mode='OBJECT')
-    for o in (mesh, rig):
-        o.scale = (10, 10, 10)
+
+
+    def heat_weights(mesh):
+        """Blender bone-heat weights, computed on a welded copy scaled 10x (small meshes only)."""
+        bpy.ops.object.select_all(action='DESELECT')
+        mesh.select_set(True)
+        rig.select_set(True)
+        bpy.context.view_layer.objects.active = mesh
+        bpy.ops.object.mode_set(mode='EDIT')
+        bpy.ops.mesh.select_all(action='SELECT')
+        bpy.ops.mesh.remove_doubles(threshold=0.0005)
+        bpy.ops.object.mode_set(mode='OBJECT')
+        for o in (mesh, rig):
+            o.scale = (10, 10, 10)
+        bpy.ops.object.select_all(action='DESELECT')
+        for o in (mesh, rig):
+            o.select_set(True)
+        bpy.context.view_layer.objects.active = rig
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        bpy.ops.object.parent_set(type='ARMATURE_AUTO')
+        bpy.ops.object.select_all(action='DESELECT')
+        rig.select_set(True)
+        bpy.context.view_layer.objects.active = rig
+        rig.scale = (0.1, 0.1, 0.1)
+        mesh.select_set(True)
+        bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
+        # Copy weights onto the few vertices bone heat missed (Bevy would collapse them).
+        from mathutils import kdtree
+        mv = mesh.data.vertices
+        done = [v for v in mv if any(g.weight > 1e-3 for g in v.groups)]
+        tree = kdtree.KDTree(len(done))
+        for i, v in enumerate(done):
+            tree.insert(v.co, i)
+        tree.balance()
+        for v in mv:
+            if not any(g.weight > 1e-3 for g in v.groups):
+                src = done[tree.find(v.co)[1]]
+                for g in src.groups:
+                    mesh.vertex_groups[g.group].add([v.index], g.weight, 'REPLACE')
+        unweighted = sum(1 for v in mesh.data.vertices if not any(g.weight > 1e-3 for g in v.groups))
+        print('UNWEIGHTED', unweighted, 'of', len(mesh.data.vertices))
+
+
+    def bone_sigma(name):
+        if name.startswith('Coat'):
+            return 0.06
+        return SIGMA[name.rsplit('.', 1)[0]]
+
+
+    SIGMA = {'hips': 0.08, 'spine': 0.08, 'chest': 0.09, 'neck': 0.05, 'head': 0.10,
+             'shoulder': 0.05, 'upper_arm': 0.05, 'forearm': 0.045, 'hand': 0.04,
+             'thigh': 0.065, 'shin': 0.055, 'foot': 0.045}
+
+
+    def segment_distance(P, a, b):
+        a = np.array(a, dtype=np.float64)
+        ab = np.array(b, dtype=np.float64) - a
+        t = np.clip((P - a) @ ab / (ab @ ab), 0.0, 1.0)
+        return np.linalg.norm(P - (a + t[:, None] * ab), axis=1)
+
+
+    def soft_nearest(D, sig):
+        """Gaussian falloff of each bone's distance relative to the nearest bone, normalized."""
+        w = np.exp(-0.5 * ((D - D.min(1, keepdims=True)) / sig) ** 2)
+        return w / w.sum(1, keepdims=True)
+
+
+    def smoothstep(e0, e1, x):
+        t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
+        return t * t * (3 - 2 * t)
+
+
+    def proximity_weights():
+        """Skin by distance to each bone segment; the coat skirt moves to the coat chains.
+
+        Joints blend smoothly because each bone's falloff is relative to the nearest bone.
+        The skirt is taken over only outside the legs (between the thigh and shin axes
+        and the cloth) and between the hem and the waist, so boots and legs keep their bones.
+        """
+        names = list(segments)
+        D = np.stack([segment_distance(V, *segments[n]) for n in names], 1)
+        sig = np.array([bone_sigma(n) for n in names])
+        coat = np.array([n.startswith('Coat') for n in names])
+        leg = np.array([n.split('.')[0] in ('thigh', 'shin') for n in names])
+        W = np.zeros_like(D)
+        body_cols = ~coat
+        W[:, body_cols] = soft_nearest(D[:, body_cols], sig[body_cols])
+        if coat.any():
+            zf = V[:, 2] / H
+            leg_d = D[:, leg].min(1)
+            s = smoothstep(0.52, 0.46, zf) * smoothstep(0.20, 0.26, zf) * smoothstep(0.07, 0.11, leg_d)
+            W[:, body_cols] *= (1 - s)[:, None]
+            W[:, coat] = s[:, None] * soft_nearest(D[:, coat], sig[coat])
+            print('COAT VERTS', int((s > 0.5).sum()), 'partially coat', int(((s > 0.01) & (s <= 0.5)).sum()))
+        # Bevy and glTF skinning take four influences per vertex.
+        top = np.argsort(-W, axis=1)[:, :4]
+        keep = np.zeros_like(W)
+        np.put_along_axis(keep, top, np.take_along_axis(W, top, 1), 1)
+        keep /= keep.sum(1, keepdims=True)
+        return names, keep
+
+
+    def apply_proximity_weights():
+        names, W = proximity_weights()
+        for j, name in enumerate(names):
+            idx = np.nonzero(W[:, j] > 0)[0]
+            if len(idx) == 0:
+                continue
+            group = mesh.vertex_groups.new(name=name)
+            for i, w in zip(idx.tolist(), W[idx, j].tolist()):  # add() takes one weight at a time
+                group.add([i], w, 'REPLACE')
+        print('WEIGHTED', len(V), 'vertices across', len(names), 'bones')
+        mod = mesh.modifiers.new('Armature', 'ARMATURE')
+        mod.object = rig
+        mesh.parent = rig
+
+
+    def transfer_heat_weights():
+        """Bone heat on the lighter scan, copied onto the nearest surface of the full mesh.
+
+        Heat only reaches skin that can see the bone, so the torso beside a hanging arm
+        stays with the torso. Bone heat is too slow for the full mesh itself.
+        """
+        proxy = import_scan(A.weights_from)
+        heat_weights(proxy)
+        for group in proxy.vertex_groups:
+            mesh.vertex_groups.new(name=group.name)
+        copy = mesh.modifiers.new('Weights', 'DATA_TRANSFER')
+        copy.object = proxy
+        copy.use_vert_data = True
+        copy.data_types_verts = {'VGROUP_WEIGHTS'}
+        copy.vert_mapping = 'POLYINTERP_NEAREST'
+        copy.layers_vgroup_select_src = 'ALL'
+        copy.layers_vgroup_select_dst = 'NAME'
+        bpy.ops.object.select_all(action='DESELECT')
+        bpy.context.view_layer.objects.active = mesh
+        bpy.ops.object.modifier_apply(modifier=copy.name)
+        bpy.data.objects.remove(proxy)
+        mod = mesh.modifiers.new('Armature', 'ARMATURE')
+        mod.object = rig
+        mesh.parent = rig
+        print('TRANSFERRED', len(mesh.vertex_groups), 'bone weights onto', len(mesh.data.vertices), 'vertices')
+
+
+    if A.weights_from:
+        transfer_heat_weights()
+    elif A.weights == 'heat':
+        heat_weights(mesh)
+    else:
+        apply_proximity_weights()
+    return rig, mesh
+
+
+def import_rig():
+    """Import an already rigged scan (a Tripo rig) with its skeleton and weights,
+    turned by --yaw-degrees and grounded at --height like an unrigged one."""
+    before = set(sc.objects)
+    bpy.ops.import_scene.gltf(filepath=A.src)
+    imported = [o for o in sc.objects if o not in before]
+    rig = next(o for o in imported if o.type == 'ARMATURE')
+    mesh = next(o for o in imported if o.type == 'MESH' and o.parent is rig)
+    for o in imported:
+        if o not in (rig, mesh):
+            bpy.data.objects.remove(o)  # the importer's bone display shape
+    rig.rotation_mode = 'XYZ'
+    rig.rotation_euler.z = math.radians(A.yaw_degrees)
+    if A.height:
+        bpy.context.view_layer.update()
+        z = np.array([(mesh.matrix_world @ v.co).z for v in mesh.data.vertices])
+        s = A.height / (z.max() - z.min())
+        rig.scale = (s, s, s)
+        rig.location.z = -z.min() * s
     bpy.ops.object.select_all(action='DESELECT')
-    for o in (mesh, rig):
+    for o in (rig, mesh):
         o.select_set(True)
     bpy.context.view_layer.objects.active = rig
-    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-    bpy.ops.object.parent_set(type='ARMATURE_AUTO')
-    bpy.ops.object.select_all(action='DESELECT')
-    rig.select_set(True)
-    bpy.context.view_layer.objects.active = rig
-    rig.scale = (0.1, 0.1, 0.1)
-    mesh.select_set(True)
-    bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
-    # Copy weights onto the few vertices bone heat missed (Bevy would collapse them).
-    from mathutils import kdtree
-    mv = mesh.data.vertices
-    done = [v for v in mv if any(g.weight > 1e-3 for g in v.groups)]
-    tree = kdtree.KDTree(len(done))
-    for i, v in enumerate(done):
-        tree.insert(v.co, i)
-    tree.balance()
-    for v in mv:
-        if not any(g.weight > 1e-3 for g in v.groups):
-            src = done[tree.find(v.co)[1]]
-            for g in src.groups:
-                mesh.vertex_groups[g.group].add([v.index], g.weight, 'REPLACE')
-    unweighted = sum(1 for v in mesh.data.vertices if not any(g.weight > 1e-3 for g in v.groups))
-    print('UNWEIGHTED', unweighted, 'of', len(mesh.data.vertices))
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    return rig, mesh
 
 
-def bone_sigma(name):
-    if name.startswith('Coat'):
-        return 0.06
-    return SIGMA[name.rsplit('.', 1)[0]]
-
-
-SIGMA = {'hips': 0.08, 'spine': 0.08, 'chest': 0.09, 'neck': 0.05, 'head': 0.10,
-         'shoulder': 0.05, 'upper_arm': 0.05, 'forearm': 0.045, 'hand': 0.04,
-         'thigh': 0.065, 'shin': 0.055, 'foot': 0.045}
-
-
-def segment_distance(P, a, b):
-    a = np.array(a, dtype=np.float64)
-    ab = np.array(b, dtype=np.float64) - a
-    t = np.clip((P - a) @ ab / (ab @ ab), 0.0, 1.0)
-    return np.linalg.norm(P - (a + t[:, None] * ab), axis=1)
-
-
-def soft_nearest(D, sig):
-    """Gaussian falloff of each bone's distance relative to the nearest bone, normalized."""
-    w = np.exp(-0.5 * ((D - D.min(1, keepdims=True)) / sig) ** 2)
-    return w / w.sum(1, keepdims=True)
-
-
-def smoothstep(e0, e1, x):
-    t = np.clip((x - e0) / (e1 - e0), 0.0, 1.0)
-    return t * t * (3 - 2 * t)
-
-
-def proximity_weights():
-    """Skin by distance to each bone segment; the coat skirt moves to the coat chains.
-
-    Joints blend smoothly because each bone's falloff is relative to the nearest bone.
-    The skirt is taken over only outside the legs (between the thigh and shin axes
-    and the cloth) and between the hem and the waist, so boots and legs keep their bones.
-    """
-    names = list(segments)
-    D = np.stack([segment_distance(V, *segments[n]) for n in names], 1)
-    sig = np.array([bone_sigma(n) for n in names])
-    coat = np.array([n.startswith('Coat') for n in names])
-    leg = np.array([n.split('.')[0] in ('thigh', 'shin') for n in names])
-    W = np.zeros_like(D)
-    body_cols = ~coat
-    W[:, body_cols] = soft_nearest(D[:, body_cols], sig[body_cols])
-    if coat.any():
-        zf = V[:, 2] / H
-        leg_d = D[:, leg].min(1)
-        s = smoothstep(0.52, 0.46, zf) * smoothstep(0.20, 0.26, zf) * smoothstep(0.07, 0.11, leg_d)
-        W[:, body_cols] *= (1 - s)[:, None]
-        W[:, coat] = s[:, None] * soft_nearest(D[:, coat], sig[coat])
-        print('COAT VERTS', int((s > 0.5).sum()), 'partially coat', int(((s > 0.01) & (s <= 0.5)).sum()))
-    # Bevy and glTF skinning take four influences per vertex.
-    top = np.argsort(-W, axis=1)[:, :4]
-    keep = np.zeros_like(W)
-    np.put_along_axis(keep, top, np.take_along_axis(W, top, 1), 1)
-    keep /= keep.sum(1, keepdims=True)
-    return names, keep
-
-
-def apply_proximity_weights():
-    names, W = proximity_weights()
-    for j, name in enumerate(names):
-        idx = np.nonzero(W[:, j] > 0)[0]
-        if len(idx) == 0:
-            continue
-        group = mesh.vertex_groups.new(name=name)
-        for i, w in zip(idx.tolist(), W[idx, j].tolist()):  # add() takes one weight at a time
-            group.add([i], w, 'REPLACE')
-    print('WEIGHTED', len(V), 'vertices across', len(names), 'bones')
-    mod = mesh.modifiers.new('Armature', 'ARMATURE')
-    mod.object = rig
-    mesh.parent = rig
-
-
-def transfer_heat_weights():
-    """Bone heat on the lighter scan, copied onto the nearest surface of the full mesh.
-
-    Heat only reaches skin that can see the bone, so the torso beside a hanging arm
-    stays with the torso. Bone heat is too slow for the full mesh itself.
-    """
-    proxy = import_scan(A.weights_from)
-    heat_weights(proxy)
-    for group in proxy.vertex_groups:
-        mesh.vertex_groups.new(name=group.name)
-    copy = mesh.modifiers.new('Weights', 'DATA_TRANSFER')
-    copy.object = proxy
-    copy.use_vert_data = True
-    copy.data_types_verts = {'VGROUP_WEIGHTS'}
-    copy.vert_mapping = 'POLYINTERP_NEAREST'
-    copy.layers_vgroup_select_src = 'ALL'
-    copy.layers_vgroup_select_dst = 'NAME'
-    bpy.ops.object.select_all(action='DESELECT')
-    bpy.context.view_layer.objects.active = mesh
-    bpy.ops.object.modifier_apply(modifier=copy.name)
-    bpy.data.objects.remove(proxy)
-    mod = mesh.modifiers.new('Armature', 'ARMATURE')
-    mod.object = rig
-    mesh.parent = rig
-    print('TRANSFERRED', len(mesh.vertex_groups), 'bone weights onto', len(mesh.data.vertices), 'vertices')
-
-
-if A.weights_from:
-    transfer_heat_weights()
-elif A.weights == 'heat':
-    heat_weights(mesh)
-else:
-    apply_proximity_weights()
+rig, mesh = import_rig() if A.armature else fit_rig()
+arm_data = rig.data
 
 # --- Animation -------------------------------------------------------------
+# The clips name the fitted rig's bones; a Tripo biped rig calls them this.
+TRIPO_BONES = {'hips': 'Hip', 'spine': 'Spine01', 'chest': 'Spine02', 'neck': 'NeckTwist01',
+               'head': 'Head'}
+for _side in ('L', 'R'):
+    TRIPO_BONES.update({
+        f'shoulder.{_side}': f'{_side}_Clavicle', f'upper_arm.{_side}': f'{_side}_Upperarm',
+        f'forearm.{_side}': f'{_side}_Forearm', f'hand.{_side}': f'{_side}_Hand',
+        f'thigh.{_side}': f'{_side}_Thigh', f'shin.{_side}': f'{_side}_Calf',
+        f'foot.{_side}': f'{_side}_Foot',
+    })
+BONE = TRIPO_BONES if A.armature else {}
+
+
+def bone_name(name):
+    return BONE.get(name, name)
+
+
 bpy.context.view_layer.update()
 bones = arm_data.bones
 rest = {b.name: b.matrix_local.to_3x3() for b in bones}  # armature-space rest rotations
@@ -411,12 +473,18 @@ def depth(name):
 
 
 order = sorted(rest, key=depth)
-# Outstretched arms hang for the clips: the hang rotates the T-pose rest about Y.
+# Outstretched arms hang for the clips: the hang rotates the T-pose rest of the upper
+# arm and every bone below it (forearm, hand, twist and finger bones) about Y.
 hang = {}
 if A.t_pose:
     for side, m in (('L', 1), ('R', -1)):
-        for part in ('upper_arm', 'forearm', 'hand'):
-            hang[f'{part}.{side}'] = Matrix.Rotation(math.radians(90 * m), 3, 'Y')
+        upper = bone_name(f'upper_arm.{side}')
+        for name in rest:
+            p = name
+            while p and p != upper:
+                p = parent_of[p]
+            if p == upper:
+                hang[name] = Matrix.Rotation(math.radians(90 * m), 3, 'Y')
 
 
 def hanging_rest(name):
@@ -462,7 +530,7 @@ def key(action_name, frames, pose_at, loop=True):
     for f in range(frames + 1):
         t = (f % frames if loop else f) / frames
         pose = pose_at(t)
-        quats = solve({k: v for k, v in pose.items() if not k.startswith('_')})
+        quats = solve({bone_name(k): v for k, v in pose.items() if not k.startswith('_')})
         for pb in rig.pose.bones:
             if pb.name.startswith('Coat'):
                 continue  # unkeyed: clips leave the coat at rest and the game drives it
@@ -470,8 +538,9 @@ def key(action_name, frames, pose_at, loop=True):
             pb.rotation_quaternion = quats[pb.name]
             pb.location = Vector()
             pb.keyframe_insert('rotation_quaternion', frame=f)
-        hips = rig.pose.bones['hips']
-        hips.location = Vector((0, pose.get('_lift', 0.0), 0))  # bone Y is up
+        hips = rig.pose.bones[bone_name('hips')]
+        # The lift is along world up, in the hip bone's own rest axes.
+        hips.location = rest[hips.name].inverted() @ Vector((0, 0, pose.get('_lift', 0.0)))
         hips.keyframe_insert('location', frame=f)
     # Keys sit on whole frames, so linear keys equal the sampled values exactly.
     for fc in act.fcurves:
@@ -483,16 +552,21 @@ def key(action_name, frames, pose_at, loop=True):
 TAU = math.tau
 
 
+# The scans stand with their feet wider than their hips; in stride the legs swing in
+# under the body, so the feet pass close to each other, and the soles stay level.
+ADDUCT = 7.0
+
+
 def gait(t, stride, knee_max, arm, elbow, lean, bob, twist):
     p = TAU * t
     q = {}
-    for side, ph in (('L', 0.0), ('R', math.pi)):
+    for side, ph, m in (('L', 0.0, 1), ('R', math.pi, -1)):
         fwd = math.sin(p + ph)                  # >0: leg ahead of the body
         swing = max(0.0, math.cos(p + ph))      # leg moving forward
         knee = 6 + knee_max * swing ** 1.5
-        q[f'thigh.{side}'] = rot(x=-stride * fwd - 0.3 * knee * swing)
+        q[f'thigh.{side}'] = rot(x=-stride * fwd - 0.3 * knee * swing, y=m * ADDUCT)
         q[f'shin.{side}'] = rot(x=knee)
-        q[f'foot.{side}'] = rot(x=-0.35 * knee + 8 * fwd)
+        q[f'foot.{side}'] = rot(x=-0.35 * knee + 8 * fwd, y=-m * ADDUCT)
         q[f'upper_arm.{side}'] = rot(x=arm * fwd)  # opposite leg
         q[f'forearm.{side}'] = rot(x=-elbow - 0.4 * elbow * max(0.0, -fwd))
     q['spine'] = rot(x=lean * 0.5, z=twist * math.sin(p))

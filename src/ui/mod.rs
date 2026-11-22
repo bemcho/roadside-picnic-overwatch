@@ -18,6 +18,7 @@ use crate::player::{
     Locomotion, OrbitCamera, Player,
     vehicle::{Driving, Vehicle, can_enter_vehicle},
 };
+use crate::save::ProgressSaved;
 use crate::states::{AppState, InGamePhase};
 use crate::world::{ArtifactDisplay, Sky, Weather, WorldClock};
 use crate::zone::ZoneRun;
@@ -50,6 +51,14 @@ struct HudControls;
 /// Banner shown while the camera roams free of the stalker.
 #[derive(Component)]
 struct HudFreeCamera;
+
+/// "Progress saved", shown for a moment after each save.
+#[derive(Component, Default)]
+struct HudSaved {
+    seconds_left: f32,
+}
+
+const SAVED_NOTICE_SECONDS: f32 = 2.5;
 
 #[derive(Component)]
 struct ArtifactReadout;
@@ -93,6 +102,7 @@ impl Plugin for UiPlugin {
                 update_vehicle_prompt,
                 update_artifact_readout,
                 update_free_camera_banner,
+                show_saved_notice,
                 tooltip::update_tooltip,
                 locator::update_locator,
             )
@@ -224,6 +234,28 @@ fn spawn_hud(mut commands: Commands) {
                 position_type: PositionType::Absolute,
                 width: Val::Percent(100.0),
                 top: Val::Px(14.0),
+                ..default()
+            },
+        ));
+
+        hud.spawn((
+            HudSaved::default(),
+            Text::new(text::PROGRESS_SAVED),
+            Visibility::Hidden,
+            TextFont {
+                font_size: FontSize::Px(18.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.85, 0.85, 0.8)),
+            TextShadow {
+                offset: Vec2::splat(1.0),
+                ..default()
+            },
+            TextLayout::justify(Justify::Center),
+            Node {
+                position_type: PositionType::Absolute,
+                width: Val::Percent(100.0),
+                bottom: Val::Px(64.0),
                 ..default()
             },
         ));
@@ -389,6 +421,23 @@ fn update_vehicle_prompt(
     if controls.0 != controls_hint {
         controls.0 = controls_hint.to_owned();
     }
+}
+
+fn show_saved_notice(
+    time: Res<Time>,
+    mut saves: MessageReader<ProgressSaved>,
+    notice: Single<(&mut HudSaved, &mut Visibility)>,
+) {
+    let (mut notice, mut visibility) = notice.into_inner();
+    if saves.read().count() > 0 {
+        notice.seconds_left = SAVED_NOTICE_SECONDS;
+    }
+    notice.seconds_left = (notice.seconds_left - time.delta_secs()).max(0.0);
+    visibility.set_if_neq(if notice.seconds_left > 0.0 {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    });
 }
 
 fn update_free_camera_banner(

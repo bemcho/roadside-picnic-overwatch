@@ -66,6 +66,7 @@ pub(crate) fn camera_fog() -> GroundFog {
             extinction(VISIBILITY_TILES.0),
         ),
         clear_box: Vec4::new(BASE.0, BASE.1, HALL_HALF_EXTENTS.x, HALL_HALF_EXTENTS.y),
+        shroud: super::shroud::mask_bounds(),
         ..default()
     }
 }

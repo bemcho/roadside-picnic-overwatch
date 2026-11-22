@@ -20,7 +20,9 @@ use bevy::world_serialization::WorldInstanceReady;
 
 use crate::assets::{self, PlantModel, PreloadedAssets};
 
-use super::cordon::{near_wall_or_checkpoint, reserve_scenery, shelterbelt};
+use super::cordon::{
+    CRAWL_HOLE, PERIMETER_BELT, PERIMETER_X, near_wall_or_checkpoint, reserve_scenery, shelterbelt,
+};
 use super::crush::Trampled;
 use super::hydrology::Wetlands;
 use super::scenery::forest_density;
@@ -300,7 +302,7 @@ fn plant_sites(terrain: &Terrain, tile: IVec2) -> Vec<PlantSite> {
         grow_plant_layer(terrain, tile, layer, &mut wild);
     }
     let mut belt = Vec::new();
-    grow_hangar_plants(terrain, tile, &mut belt);
+    grow_belt_plants(terrain, tile, &mut belt);
     expand_patches(terrain, &wild, false)
         .chain(expand_patches(terrain, &belt, true))
         .collect()
@@ -337,7 +339,9 @@ fn expand_patches<'a>(
                     _ => 0.025,
                 };
                 let clear = if in_belt {
-                    shelterbelt(at) > 0.0 && !near_wall_or_checkpoint(at, 0.7)
+                    shelterbelt(at) > 0.0
+                        && !near_wall_or_checkpoint(at, 0.7)
+                        && !super::sites::clear_footprint(at, 1.0)
                 } else {
                     !reserve_scenery(at, 1.6)
                         && !super::sites::clear_footprint(at, 1.0)
@@ -416,10 +420,20 @@ fn grow_plant_layer(terrain: &Terrain, tile: IVec2, layer: u32, sites: &mut Vec<
     }
 }
 
-fn grow_hangar_plants(terrain: &Terrain, tile: IVec2, sites: &mut Vec<PlantSite>) {
+/// Whether `tile` reaches into a belt: around the hangar, along the
+/// Perimeter, or over the crawl hole.
+fn reaches_belt(tile: IVec2) -> bool {
+    let low = tile.as_vec2() * TILE_SIZE;
+    let high = low + TILE_SIZE;
+    let mid = (low + high) * 0.5;
+    (mid - Vec2::from(BASE)).abs().max_element() <= 113.0 + TILE_SIZE * 0.5
+        || (low.x < PERIMETER_X + PERIMETER_BELT.1 && high.x > PERIMETER_X + PERIMETER_BELT.0)
+        || (mid - CRAWL_HOLE).abs().max_element() <= TILE_SIZE
+}
+
+fn grow_belt_plants(terrain: &Terrain, tile: IVec2, sites: &mut Vec<PlantSite>) {
     const CELLS: i32 = 26;
-    let mid = (tile.as_vec2() + Vec2::splat(0.5)) * TILE_SIZE;
-    if (mid - Vec2::from(BASE)).abs().max_element() > 113.0 + TILE_SIZE * 0.5 {
+    if !reaches_belt(tile) {
         return;
     }
     let cell = TILE_SIZE / CELLS as f32;
@@ -433,6 +447,7 @@ fn grow_hangar_plants(terrain: &Terrain, tile: IVec2, sites: &mut Vec<PlantSite>
             let density = shelterbelt(at) * 0.85;
             if roll(2) >= density
                 || near_wall_or_checkpoint(at, 0.7)
+                || super::sites::clear_footprint(at, 1.0)
                 || terrain.road_mask(at.x, at.y) > 0.025
                 || terrain.water_depth_at(at.x, at.y) > 0.025
                 || terrain.normal_at(at.x, at.y).y < 0.89
@@ -724,10 +739,13 @@ mod tests {
         let mut seeds = Vec::new();
         for z in -2..=1 {
             for x in -2..=2 {
-                grow_hangar_plants(&terrain, base_tile() + IVec2::new(x, z), &mut seeds);
+                grow_belt_plants(&terrain, base_tile() + IVec2::new(x, z), &mut seeds);
             }
         }
-        let sites: Vec<_> = expand_patches(&terrain, &seeds, true).collect();
+        // The hangar's belt only, east of the Perimeter's.
+        let sites: Vec<_> = expand_patches(&terrain, &seeds, true)
+            .filter(|site| site.pose.translation.x > PERIMETER_X + PERIMETER_BELT.1)
+            .collect();
         for site in &sites {
             let at = site.pose.translation;
             let offset = at.xz() - Vec2::from(BASE);
@@ -744,6 +762,40 @@ mod tests {
             "{count:?}"
         );
         assert!(count.into_iter().all(|n| n >= 45), "{count:?}");
+    }
+
+    #[test]
+    fn a_belt_lines_the_perimeter_and_a_thicket_hides_the_crawl_hole() {
+        let terrain = Terrain::new();
+        let tile = (CRAWL_HOLE / TILE_SIZE).floor().as_ivec2();
+        let mut seeds = Vec::new();
+        for z in -1..=1 {
+            for x in -1..=0 {
+                grow_belt_plants(&terrain, tile + IVec2::new(x, z), &mut seeds);
+            }
+        }
+        let sites: Vec<_> = expand_patches(&terrain, &seeds, true).collect();
+        let zone_side = sites
+            .iter()
+            .filter(|site| (-15.0..-3.0).contains(&(site.pose.translation.x - PERIMETER_X)))
+            .count();
+        assert!(zone_side > 400, "{zone_side} plants on the Zone's side");
+        let around_hole = sites
+            .iter()
+            .filter(|site| site.pose.translation.xz().distance(CRAWL_HOLE) < 7.0)
+            .count();
+        assert!(around_hole >= 12, "{around_hole} plants hide the hole");
+        for site in &sites {
+            let at = site.pose.translation.xz();
+            assert!(
+                !near_wall_or_checkpoint(at, 0.7),
+                "plant in the wall at {at}"
+            );
+            assert!(
+                !super::super::cordon::reserve_patrol_track(at),
+                "plant on the patrol's track at {at}"
+            );
+        }
     }
 
     #[test]

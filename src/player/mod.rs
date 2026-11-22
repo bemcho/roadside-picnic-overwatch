@@ -35,10 +35,10 @@ use camera::{
     pan_camera,
 };
 pub(crate) use orders::cast_to_ground;
-use orders::{MoveOrder, issue_move_order, spawn_order_marker, sync_order_marker};
+use orders::{MoveOrder, issue_move_order, prepare_order_markers, sync_order_markers};
 use vehicle::{
-    Driver, Driving, Patrol, Vehicle, drive_patrol, drive_vehicle, interact_vehicle, pose_wheels,
-    spawn_patrol, sync_spotlight,
+    Driver, Driving, Patrol, Vehicle, drive_patrol, drive_traffic, drive_vehicle, interact_vehicle,
+    pose_wheels, spawn_patrol, spawn_traffic, sync_spotlight,
 };
 
 pub struct PlayerPlugin;
@@ -146,7 +146,12 @@ impl Plugin for PlayerPlugin {
             .add_systems(Startup, load_stalker_animations)
             .add_systems(
                 OnEnter(AppState::InGame),
-                (spawn_player, spawn_order_marker, spawn_patrol),
+                (
+                    spawn_player,
+                    prepare_order_markers,
+                    spawn_patrol,
+                    spawn_traffic,
+                ),
             )
             .add_systems(OnExit(AppState::InGame), despawn_player)
             .add_systems(
@@ -163,7 +168,7 @@ impl Plugin for PlayerPlugin {
                     sync_spotlight,
                     follow_player,
                     fit_view_to_zoom,
-                    sync_order_marker,
+                    sync_order_markers,
                     animate_stalker,
                     pose_stalker_body,
                     swing_coat,
@@ -171,7 +176,10 @@ impl Plugin for PlayerPlugin {
                     .chain()
                     .run_if(in_state(InGamePhase::Running)),
             )
-            .add_systems(Update, drive_patrol.run_if(in_state(InGamePhase::Running)))
+            .add_systems(
+                Update,
+                (drive_patrol, drive_traffic).run_if(in_state(InGamePhase::Running)),
+            )
             .add_systems(OnEnter(InGamePhase::Paused), pause_stalker_animation)
             .add_systems(OnExit(InGamePhase::Paused), resume_stalker_animation)
             .add_systems(Update, grab_cursor_while_orbiting);
@@ -371,7 +379,7 @@ fn move_player(
     let feet = target.y;
     let body = if crawling { PRONE } else { STANDING };
     let clear = push_out(target.xz(), feet, body, solids(&colliders, false));
-    let clear = fence_out(clear, body.radius, solids(&colliders, true));
+    let clear = fence_out(clear, feet, body, solids(&colliders, true));
     let from = transform.translation.xz();
     let limit = if crawling { 0.28 } else { 1.05 };
     let clear = if terrain.can_wade(from, clear, limit) {

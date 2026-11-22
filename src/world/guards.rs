@@ -1,8 +1,10 @@
 //! UN soldiers guarding the ways through the cordons: two at the hangar yard's
-//! gate, two at the Institute gate in the Perimeter and two at the stalkers'
-//! breach. Each paces a short beat along the wall beside the opening, swinging
-//! its arms in the walk clip, and stands a while at either end watching the
-//! passage. The soldiers are rigged like the stalker (`tools/rig_stalker.py`).
+//! gate and two at the Institute gate in the Perimeter, each pacing a short
+//! beat along the wall beside the opening, swinging its arms in the walk clip,
+//! and standing a while at either end watching the passage. Five sentries keep
+//! shorter beats by the checkpoints: three at the Institute gate's and two at
+//! the hangar yard's. The soldiers are rigged like the stalker
+//! (`tools/rig_stalker.py`).
 
 use std::time::Duration;
 
@@ -12,7 +14,9 @@ use bevy::world_serialization::WorldInstanceReady;
 use crate::assets::{GUARDS, PreloadedAssets};
 
 use super::collision::{Collider, Pillar, Unclimbable};
-use super::cordon::{BREACH, BREACH_HALF, GATE, GATE_HALF, PERIMETER_GATE, PERIMETER_GATE_HALF};
+use super::cordon::{
+    CHECKPOINT, GATE, GATE_HALF, PERIMETER_CHECKPOINT, PERIMETER_GATE, PERIMETER_GATE_HALF,
+};
 use super::places::{Describe, Place};
 use super::terrain::{Terrain, lattice_hash, lerp};
 use super::{WorldRoot, detail_range, range_scene_meshes};
@@ -35,6 +39,8 @@ const REST: (f32, f32) = (3.0, 9.0);
 const BEAT_START: f32 = 2.0;
 const BEAT_OUT: f32 = 2.5;
 const BEAT_LENGTH: f32 = 6.0;
+/// A sentry's shorter beat beside its checkpoint.
+const SENTRY_BEAT: f32 = 3.0;
 const BODY: &[Pillar] = &[Pillar {
     x: 0.0,
     z: 0.0,
@@ -90,15 +96,43 @@ fn post(center: Vec2, half: f32, along: Vec2, out: Vec2) -> [Guard; 2] {
     })
 }
 
-/// Every guard: outside the yard's gate and on Harmont's side of the Perimeter.
+/// A sentry pacing `SENTRY_BEAT` from `at` along `along`, watching `watch`
+/// from either end.
+fn sentry(at: Vec2, along: Vec2, watch: Vec2) -> Guard {
+    Guard {
+        beat: [at, at + along * SENTRY_BEAT],
+        toward: 1,
+        rest: 0.0,
+        rests: [REST.0; 2],
+        watch,
+    }
+}
+
+/// Every guard: outside the yard's gate, on Harmont's side of the Perimeter
+/// gate, and the sentries by the two checkpoints, clear of the patrol's lanes.
 fn guards() -> impl Iterator<Item = Guard> {
-    [
+    let posts = [
         post(GATE, GATE_HALF, Vec2::X, Vec2::Y),
         post(PERIMETER_GATE, PERIMETER_GATE_HALF, Vec2::Y, Vec2::X),
-        post(BREACH, BREACH_HALF, Vec2::Y, Vec2::X),
-    ]
-    .into_iter()
-    .flatten()
+    ];
+    let sentries = [
+        // Between the Institute gate's checkpoint and the road, and behind it.
+        sentry(
+            PERIMETER_CHECKPOINT + Vec2::new(-1.0, 8.5),
+            Vec2::X,
+            Vec2::Y,
+        ),
+        sentry(PERIMETER_CHECKPOINT + Vec2::new(8.0, 8.0), Vec2::X, Vec2::Y),
+        sentry(
+            PERIMETER_CHECKPOINT + Vec2::new(9.0, -5.0),
+            Vec2::Y,
+            Vec2::X,
+        ),
+        // Inside the hangar yard, south and west of its checkpoint.
+        sentry(CHECKPOINT + Vec2::new(-2.0, -6.5), Vec2::X, Vec2::Y),
+        sentry(CHECKPOINT + Vec2::new(-9.0, -1.0), Vec2::NEG_Y, Vec2::X),
+    ];
+    posts.into_iter().flatten().chain(sentries)
 }
 
 fn heading(direction: Vec2) -> Quat {
@@ -282,14 +316,18 @@ mod tests {
     use crate::world::sites;
 
     #[test]
-    fn two_guards_watch_each_way_through_a_cordon() {
+    fn two_guards_watch_each_way_through_a_cordon_and_sentries_the_checkpoints() {
         let all: Vec<_> = guards().collect();
-        assert_eq!(all.len(), 6);
-        for (opening, half) in [
-            (GATE, GATE_HALF),
-            (PERIMETER_GATE, PERIMETER_GATE_HALF),
-            (BREACH, BREACH_HALF),
-        ] {
+        assert_eq!(all.len(), 9);
+        // The two posts' four guards come first, then the sentries.
+        for (checkpoint, count) in [(PERIMETER_CHECKPOINT, 3), (CHECKPOINT, 2)] {
+            let near = all[4..]
+                .iter()
+                .filter(|guard| guard.beat[0].distance(checkpoint) < 12.0)
+                .count();
+            assert_eq!(near, count, "sentries at {checkpoint}");
+        }
+        for (opening, half) in [(GATE, GATE_HALF), (PERIMETER_GATE, PERIMETER_GATE_HALF)] {
             let near: Vec<_> = all
                 .iter()
                 .filter(|guard| {

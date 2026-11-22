@@ -61,6 +61,10 @@ pub const BASE_HANGAR: &str = "models/hangar/medium/hangar.glb";
 pub const BASE_VEHICLE: &str = "models/vehicles/medium/armored_vehicle.glb";
 /// The stalkers' car repainted white with a UN roof marking, for the Perimeter patrol.
 pub const UN_VEHICLE: &str = "models/vehicles/medium/un_armored_vehicle.glb";
+/// Harmont's traffic (`player/vehicle/traffic.rs`): the wheels are separate
+/// nodes (`tools/split_vehicle_wheels.py`).
+pub const STREET_SWEEPER: &str = "models/vehicles/medium/street-sweeper.glb";
+pub const TRAFFIC_SEDAN: &str = "models/vehicles/medium/sedan-traffic.glb";
 /// The UN marking for the patrol car's flanks: blue on a transparent ground.
 pub const UN_DECAL: &str = "textures/decals/un_flank.png";
 /// The Harmont map (`doc/Roadside_map.jpg`) shown on M.
@@ -224,7 +228,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
     assets.0.extend([golden_sphere.untyped(), gold.untyped()]);
     let (hangar, hangar_paint) = load_single_primitive(&server, BASE_HANGAR);
     assets.0.extend([hangar.untyped(), hangar_paint.untyped()]);
-    for vehicle in [BASE_VEHICLE, UN_VEHICLE] {
+    for vehicle in [BASE_VEHICLE, UN_VEHICLE, STREET_SWEEPER, TRAFFIC_SEDAN] {
         assets
             .0
             .push(load_vehicle_scene(&server, vehicle).untyped());

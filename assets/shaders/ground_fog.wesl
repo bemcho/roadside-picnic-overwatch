@@ -6,6 +6,10 @@
 //
 // Clouds: three layers of volumetric fog at different heights, shaped into
 // clouds with flat bases and domed, billowy tops, marched along the same ray.
+//
+// Shroud: ground the stalker has not surveyed (src/world/shroud.rs) and the fog
+// over it lie under black, slowly drifting smoke. It is drawn here, after the
+// sky's aerial perspective, so nothing of that ground shows from any height.
 
 import bevy_core_pipeline::fullscreen_vertex_shader::FullscreenVertexOutput;
 import bevy_pbr::atmosphere::{
@@ -39,6 +43,8 @@ struct GroundFog {
     clear_box: vec4<f32>,
     // Cloud cover (0-1) and how dark rain clouds grow (0-1).
     clouds: vec4<f32>,
+    // Shroud mask corner (x, z) and one over its extent.
+    shroud: vec4<f32>,
 }
 
 @group(1) @binding(0) var<uniform> ground: GroundFog;
@@ -49,6 +55,9 @@ struct GroundFog {
 // r + g: surface height; b: fog affinity.
 @group(1) @binding(2) var field_texture: texture_2d<f32>;
 @group(1) @binding(3) var field_sampler: sampler;
+// r: 1 where surveyed, 0 under the shroud.
+@group(1) @binding(4) var shroud_mask: texture_2d<f32>;
+@group(1) @binding(5) var shroud_sampler: sampler;
 
 const PI: f32 = 3.14159265;
 const MAX_STEPS: u32 = 96u;
@@ -419,6 +428,43 @@ fn march_ground_fog(camera: vec3<f32>, ray: vec3<f32>, end: f32, jitter: f32) ->
     return vec4(scattered, transmittance);
 }
 
+// How far the shroud covers ground at `p`: fully over unsurveyed cells, easing
+// off over the cell between, its edge wobbled so the survey grid doesn't show.
+fn shroud_at(p: vec2<f32>) -> f32 {
+    let wobble = vec2<f32>(
+        sin(p.y * 0.043 + 2.0 * sin(p.x * 0.019)),
+        cos(p.x * 0.051 + 2.0 * sin(p.y * 0.017)),
+    ) * 9.0;
+    let uv = (p + wobble - ground.shroud.xy) * ground.shroud.zw;
+    let seen = textureSampleLevel(shroud_mask, shroud_sampler, uv, 0.0).r;
+    return 1.0 - smoothstep(0.2, 0.8, seen);
+}
+
+// The shroud's black smoke at `p`, drifting slowly.
+fn smoke_at(p: vec2<f32>) -> vec3<f32> {
+    let drift = vec2<f32>(1.3, 0.7) * globals.time;
+    let smoke = 0.6 * smoke_noise((p + drift) / 47.0) + 0.4 * smoke_noise((p - 1.7 * drift) / 13.0);
+    return vec3<f32>(0.012, 0.013, 0.016) * (0.3 + 2.2 * smoke * smoke);
+}
+
+fn smoke_hash(cell: vec2<f32>) -> f32 {
+    var p = fract(vec3<f32>(cell.xyx) * vec3<f32>(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yzx + 33.33);
+    return fract((p.x + p.y) * p.z);
+}
+
+// Smooth value noise, from 0 to 1.
+fn smoke_noise(p: vec2<f32>) -> f32 {
+    let i = floor(p);
+    let f = fract(p);
+    let u = f * f * (3.0 - 2.0 * f);
+    let a = smoke_hash(i);
+    let b = smoke_hash(i + vec2<f32>(1.0, 0.0));
+    let c = smoke_hash(i + vec2<f32>(0.0, 1.0));
+    let d = smoke_hash(i + vec2<f32>(1.0, 1.0));
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
 @fragment
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let frag = in.position.xy;
@@ -427,18 +473,28 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let camera = view.world_position;
     let ray = normalize(position_ndc_to_world(vec3(ndc, 1.0)) - camera);
     var end = FAR;
+    var shroud = 0.0;
     if depth > 0.0 {
-        end = min(distance(position_ndc_to_world(vec3(ndc, depth)), camera), FAR);
+        let hit = position_ndc_to_world(vec3(ndc, depth));
+        end = min(distance(hit, camera), FAR);
+        shroud = shroud_at(hit.xz);
     }
     let jitter = interleaved_gradient_noise(frag, globals.frame_count);
     let fog = march_ground_fog(camera, ray, end, jitter);
     let clouds = march_clouds(camera, ray, end, jitter);
-    // The clouds float above the ground fog: a ray heading down meets them first.
-    var near = fog;
+    // Unsurveyed ground and the fog over it lie under the shroud's smoke.
+    var below = fog;
+    if shroud > 0.0 {
+        let hit = camera + ray * end;
+        below = vec4(mix(fog.rgb, smoke_at(hit.xz), shroud), fog.a * (1.0 - shroud));
+    }
+    // The clouds float above the ground fog and the shroud: a ray heading down
+    // meets them first.
+    var near = below;
     var far = clouds;
     if ray.y < 0.0 {
         near = clouds;
-        far = fog;
+        far = below;
     }
     let scattered = near.rgb + near.a * far.rgb;
     return vec4(scattered, 1.0 - near.a * far.a);

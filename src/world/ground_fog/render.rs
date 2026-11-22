@@ -2,7 +2,8 @@
 //! raymarch over the fog field and through the clouds aloft, drawn over the
 //! opaque scene and the sky before post-processing. It uses the
 //! view's own bindings, so the fog is lit by the sun and moon through the
-//! atmosphere and shadowed by their cascades.
+//! atmosphere and shadowed by their cascades. Last, it covers unsurveyed ground
+//! with the shroud's black smoke (`shroud.rs`).
 
 use bevy::core_pipeline::{Core3dSystems, FullscreenShader, schedule::Core3d};
 use bevy::pbr::{
@@ -37,6 +38,8 @@ use bevy::render::{
 
 use crate::assets;
 
+use super::super::shroud::ShroudMask;
+
 /// Per-camera fog parameters, uploaded as the shader's `GroundFog` uniform.
 #[derive(Component, Clone, Copy, Default, ExtractComponent, ShaderType)]
 #[extract_app(RenderApp)]
@@ -55,6 +58,8 @@ pub(crate) struct GroundFog {
     pub(super) clear_box: Vec4,
     /// Cloud cover of the cloud layers (0-1) and how dark rain clouds grow.
     pub(super) clouds: Vec4,
+    /// Shroud mask corner (x, z) and one over its extent.
+    pub(super) shroud: Vec4,
 }
 
 /// The fog field texture, shared with the render world.
@@ -70,6 +75,7 @@ impl Plugin for GroundFogRenderPlugin {
             ExtractComponentPlugin::<GroundFog>::default(),
             UniformComponentPlugin::<GroundFog>::default(),
             ExtractResourcePlugin::<GroundFogField>::default(),
+            ExtractResourcePlugin::<ShroudMask>::default(),
         ));
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -126,6 +132,8 @@ fn init_pipeline(
                 (
                     uniform_buffer::<GroundFog>(true),
                     depth,
+                    texture_2d(TextureSampleType::Float { filterable: true }),
+                    sampler(SamplerBindingType::Filtering),
                     texture_2d(TextureSampleType::Float { filterable: true }),
                     sampler(SamplerBindingType::Filtering),
                 ),
@@ -228,15 +236,16 @@ fn draw_ground_fog(
     cache: Res<PipelineCache>,
     pipeline: Res<GroundFogPipeline>,
     uniforms: Res<ComponentUniforms<GroundFog>>,
-    field: Option<Res<GroundFogField>>,
+    (field, shroud): (Option<Res<GroundFogField>>, Option<Res<ShroudMask>>),
     images: Res<RenderAssets<GpuImage>>,
     mut ctx: RenderContext,
 ) {
     let (target, depth, view_bind_group, pipeline_id, uniform_index, msaa) = view.into_inner();
-    let (Some(render_pipeline), Some(uniform), Some(field), Some(depth)) = (
+    let (Some(render_pipeline), Some(uniform), Some(field), Some(shroud), Some(depth)) = (
         cache.get_render_pipeline(pipeline_id.0),
         uniforms.uniforms().binding(),
         field.and_then(|field| images.get(&field.0)),
+        shroud.and_then(|shroud| images.get(&shroud.0)),
         depth.attachment.depth_stencil_views().depth_only_view(),
     ) else {
         return;
@@ -245,7 +254,14 @@ fn draw_ground_fog(
     let bind_group = ctx.render_device().create_bind_group(
         "ground_fog_bind_group",
         &cache.get_bind_group_layout(&pipeline.layouts[usize::from(multisampled)]),
-        &BindGroupEntries::sequential((uniform, depth, &field.texture_view, &pipeline.sampler)),
+        &BindGroupEntries::sequential((
+            uniform,
+            depth,
+            &field.texture_view,
+            &pipeline.sampler,
+            &shroud.texture_view,
+            &shroud.sampler,
+        )),
     );
     let diagnostics = ctx.diagnostic_recorder();
     let diagnostics = diagnostics.as_deref();

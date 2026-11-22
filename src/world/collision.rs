@@ -5,7 +5,9 @@
 //! A collider with a [`Weight`] gives way to a heavier [`Crusher`] (the stalker,
 //! a car), which runs through it and knocks it down. The stalker climbs solids
 //! and stands on their pillars' tops, except [`Unclimbable`] ones (the cordon
-//! walls and checkpoints, trees, guards), which block at any height.
+//! walls and checkpoints, trees, guards), which block at any height; a body
+//! that fits under an unclimbable pillar's bottom still passes below it, as
+//! the crawling stalker does through the breach under the Perimeter wall.
 
 use bevy::prelude::*;
 
@@ -45,8 +47,8 @@ pub struct Collider(pub &'static [Pillar]);
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Weight(pub f32);
 
-/// A collider nothing climbs and no height clears: the cordon walls and
-/// checkpoints, trees, guards.
+/// A collider nothing climbs and no height clears, though a body small enough
+/// passes under it: the cordon walls and checkpoints, trees, guards.
 #[derive(Component, Default)]
 pub struct Unclimbable;
 
@@ -110,10 +112,12 @@ pub fn push_out<'a>(
         })
 }
 
-/// Keeps `point` at least `radius` from every pillar, whatever their height.
+/// Keeps `body`, with feet at `feet` and standing at `point`, out of every
+/// pillar however high it stands, unless it fits under the pillar's bottom.
 pub fn fence_out<'a>(
     point: Vec2,
-    radius: f32,
+    feet: f32,
+    body: Body,
     colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
 ) -> Vec2 {
     colliders
@@ -122,7 +126,10 @@ pub fn fence_out<'a>(
             let (scale, _, _) = transform.to_scale_rotation_translation();
             collider.0.iter().fold(point, |point, pillar| {
                 let center = transform.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
-                separate(point, center.xz(), pillar.radius * scale.x + radius)
+                if center.y + pillar.bottom * scale.y >= feet + body.height {
+                    return point;
+                }
+                separate(point, center.xz(), pillar.radius * scale.x + body.radius)
             })
         })
 }
@@ -227,8 +234,17 @@ mod tests {
     fn walls_fence_bodies_out_at_any_height_and_tops_carry_climbers() {
         let (collider, transform) = posed(TRUNK);
         // Ten meters up, far above the 10 m pillar's top, it still fences out.
-        let fenced = fence_out(Vec2::new(10.2, 0.0), 0.3, [(&collider, &transform)]);
+        let fenced = fence_out(Vec2::new(10.2, 0.0), 10.0, BODY, [(&collider, &transform)]);
         assert!((fenced.distance(Vec2::new(10.0, 0.0)) - 0.8).abs() < 1e-5);
+        // A body that fits under a raised pillar passes below it.
+        let (raised, pose) = posed(BRANCH);
+        let crawler = Body {
+            radius: 0.3,
+            height: 0.5,
+        };
+        let under = Vec2::new(10.2, 0.0);
+        assert_eq!(fence_out(under, 0.0, crawler, [(&raised, &pose)]), under);
+        assert_ne!(fence_out(under, 0.0, BODY, [(&raised, &pose)]), under);
         // Its top carries a climber who reached it, under any part of the
         // body's footprint, but not one still below.
         let solid = || [(&collider, &transform)];

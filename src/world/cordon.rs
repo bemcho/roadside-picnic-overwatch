@@ -1,5 +1,11 @@
 //! Concrete cordons: around the hangar yard, along the Perimeter that
 //! separates Harmont from the Zone, and at the edge of the map.
+//!
+//! The Perimeter stands three times as high as the others. A boom closes the
+//! Institute gate's road and lifts only for someone on Institute business
+//! (`InstitutePass`); the stalkers' old breach is walled up, and the way into
+//! the Zone on foot is a crawl hole dug under the wall south of it, hidden in a
+//! thicket (`CRAWL_HOLE`).
 
 use bevy::asset::RenderAssetUsages;
 use bevy::gltf::GltfMaterial;
@@ -10,10 +16,12 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::assets::{self, PreloadedAssets};
+use crate::player::Player;
 
 use super::collision::{Collider, Pillar, Unclimbable};
 use super::hydrology::{WATER_LEVEL, Wetlands};
-use super::terrain::{BASE, HALF_SIZE, SPACING, TILE_SIZE, Terrain, smoothstep};
+use super::places::{Describe, Place};
+use super::terrain::{BASE, HALF_SIZE, SPACING, TILE_SIZE, Terrain, lerp, smoothstep};
 use super::{StreamAnchor, WorldRoot, anchor_tiles, detail_range, near_anchor, neighborhoods};
 
 const YARD_MIN: Vec2 = Vec2::new(BASE.0 - 64.0, BASE.1 - 64.0);
@@ -29,27 +37,41 @@ const CHECKPOINT_DATUM: f32 = -0.41;
 /// the Zone (-X). Seen from above with +Z up, the Zone lies to the right, as on
 /// the Harmont map.
 pub(crate) const PERIMETER_X: f32 = 700.0;
-/// The official Institute gate, where the highway leaves Harmont (map px 413, 350).
+/// The official Institute gate, where the highway leaves Harmont (map px 413, 350):
+/// an opening as wide as the road, closed by a boom.
 pub(super) const PERIMETER_GATE: Vec2 = Vec2::new(PERIMETER_X, 79.0);
-pub(super) const PERIMETER_GATE_HALF: f32 = 12.0;
+pub(super) const PERIMETER_GATE_HALF: f32 = 6.0;
 /// The checkpoint guarding the Perimeter gate, on the Harmont side.
 pub(super) const PERIMETER_CHECKPOINT: Vec2 = Vec2::new(PERIMETER_X + 14.0, 61.0);
-/// The stalkers' illegal breach in the Perimeter, south of the gate (map px 410, 510).
+/// The stalkers' old breach in the Perimeter, south of the gate (map px 410,
+/// 510), now walled up; the Chapter 4 track still leads to it.
 pub(super) const BREACH: Vec2 = Vec2::new(PERIMETER_X, -305.0);
-pub(super) const BREACH_HALF: f32 = 9.0;
+/// A crawl hole dug under the Perimeter south of the old breach: `HOLE_DEPTH`
+/// deep on its floor, which reaches `HOLE_FLOOR` across and along the wall,
+/// easing up to the ground at `HOLE_RIM`.
+pub(crate) const CRAWL_HOLE: Vec2 = Vec2::new(PERIMETER_X, -335.0);
+const HOLE_DEPTH: f32 = 1.0;
+const HOLE_FLOOR: Vec2 = Vec2::new(2.0, 1.5);
+const HOLE_RIM: Vec2 = Vec2::new(4.5, 4.0);
+/// Where the hole is this deep, a crawling stalker fits under the wall.
+const HOLE_CRAWL_DEPTH: f32 = 0.6;
+/// The stalker notices the hole, and the pointer names it, only this close.
+const HOLE_NOTICE: f32 = 8.0;
 /// The UN patrol's loop beside the Perimeter on Harmont's side: every point
 /// `PATROL_RADIUS` from the segment between the two turn centers, so it runs
-/// north along the wall, turns out short of the gate's checkpoint, comes back
-/// south past the breach and turns in again.
+/// north along the wall from 50 m short of the hangar to 50 m past the
+/// Institute, past the gate's checkpoint, and back on the far lane.
 pub(crate) const PATROL_TURNS: [Vec2; 2] = [
-    Vec2::new(PERIMETER_X + 19.0, -640.0),
-    Vec2::new(PERIMETER_X + 19.0, 40.0),
+    Vec2::new(PERIMETER_X + 19.0, BASE.1 - 50.0),
+    Vec2::new(PERIMETER_X + 19.0, 560.0),
 ];
 pub(crate) const PATROL_RADIUS: f32 = 12.0;
 /// Half the width the patrol's track keeps clear of scenery.
 const PATROL_HALF_WIDTH: f32 = 3.5;
 const EDGE: f32 = HALF_SIZE - 4.0;
 const WALL_HEIGHT_SCALE: f32 = 7.4;
+/// The Perimeter stands this many times as high as the other cordons.
+const PERIMETER_RISE: f32 = 3.0;
 const PANEL_SPAN: f32 = 0.86;
 const SINK: f32 = 0.09;
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
@@ -61,6 +83,41 @@ const WALL_PILLAR: &[Pillar] = &[Pillar {
     bottom: -0.65,
     top: 2.48,
 }];
+const PERIMETER_PILLAR: &[Pillar] = &[Pillar {
+    top: 2.48 * PERIMETER_RISE,
+    ..WALL_PILLAR[0]
+}];
+/// Over the crawl hole the wall's foot stands on the undug ground.
+const HOLE_PILLAR: &[Pillar] = &[Pillar {
+    bottom: -0.05,
+    ..PERIMETER_PILLAR[0]
+}];
+/// The boom at the Institute gate: its post stands at the south jamb on
+/// Harmont's side and its arm spans the road along +Z, `BOOM_LENGTH` long.
+const BOOM_POST: Vec2 = Vec2::new(PERIMETER_X + 1.0, PERIMETER_GATE.y - PERIMETER_GATE_HALF);
+const BOOM_LENGTH: f32 = 2.0 * PERIMETER_GATE_HALF;
+const BOOM_HINGE: f32 = 1.0;
+/// It lifts while someone on Institute business is this near the gate, a
+/// whole swing taking 1 / `BOOM_RATE` seconds, and stops nobody once this far up.
+const BOOM_REACH: f32 = 40.0;
+const BOOM_RATE: f32 = 0.8;
+const BOOM_OPEN: f32 = 0.7;
+/// The lowered arm, from below the ground so nobody crawls under it.
+const BOOM_PILLARS: &[Pillar] = &{
+    let mut pillars = [Pillar {
+        x: 0.0,
+        z: 0.0,
+        radius: 0.3,
+        bottom: -0.5,
+        top: BOOM_HINGE + 0.3,
+    }; 24];
+    let mut i = 0;
+    while i < pillars.len() {
+        pillars[i].z = (i as f32 + 0.5) * BOOM_LENGTH / 24.0;
+        i += 1;
+    }
+    pillars
+};
 
 const SOUTHWEST: Vec2 = YARD_MIN;
 const SOUTHEAST: Vec2 = Vec2::new(YARD_MAX.x, YARD_MIN.y);
@@ -92,6 +149,69 @@ pub(crate) fn in_zone(at: Vec2) -> bool {
     at.x < PERIMETER_X
 }
 
+/// How deep the crawl hole is dug at `at`: `HOLE_DEPTH` on its floor, easing
+/// to nothing at its rim.
+pub(super) fn hole_depth(at: Vec2) -> f32 {
+    let offset = (at - CRAWL_HOLE).abs();
+    if offset.cmpge(HOLE_RIM).any() {
+        return 0.0;
+    }
+    let edge = ((offset - HOLE_FLOOR) / (HOLE_RIM - HOLE_FLOOR)).max(Vec2::ZERO);
+    HOLE_DEPTH * smoothstep(1.0, 0.0, edge.length())
+}
+
+/// Someone on official Institute business: the boom at the Institute gate
+/// lifts for them.
+#[derive(Component)]
+pub(crate) struct InstitutePass;
+
+/// The boom across the Institute gate's road, `lift` from lowered (0) to up (1).
+#[derive(Component, Default)]
+#[require(Unclimbable)]
+pub(crate) struct Boom {
+    lift: f32,
+}
+
+/// The boom's arm, hinged at the top of its post.
+#[derive(Component)]
+pub(super) struct BoomArm;
+
+/// What names the crawl hole under the pointer, shown once the stalker is near.
+#[derive(Component)]
+pub(super) struct HoleSign;
+
+pub(super) fn spawn_hole_sign(mut commands: Commands, terrain: Res<Terrain>) {
+    commands.spawn((
+        WorldRoot,
+        HoleSign,
+        Describe {
+            place: Place::CrawlHole,
+            radius: 2.5,
+            height: 1.5,
+        },
+        Transform::from_translation(CRAWL_HOLE.extend(terrain.mesh_height_at(CRAWL_HOLE)).xzy()),
+        Visibility::Hidden,
+    ));
+}
+
+/// Lets the pointer name the crawl hole while the stalker is within `HOLE_NOTICE`.
+pub(super) fn notice_crawl_hole(
+    stalker: Query<&Transform, With<Player>>,
+    mut signs: Query<&mut Visibility, With<HoleSign>>,
+) {
+    let near = stalker
+        .iter()
+        .any(|at| at.translation.xz().distance(CRAWL_HOLE) < HOLE_NOTICE);
+    let shown = if near {
+        Visibility::Inherited
+    } else {
+        Visibility::Hidden
+    };
+    for mut visibility in &mut signs {
+        visibility.set_if_neq(shown);
+    }
+}
+
 pub(super) fn reserve_scenery(at: Vec2, clearance: f32) -> bool {
     let margin = Vec2::splat(clearance);
     (at.cmpge(YARD_MIN - margin).all() && at.cmple(YARD_MAX + margin).all())
@@ -99,6 +219,11 @@ pub(super) fn reserve_scenery(at: Vec2, clearance: f32) -> bool {
         || (at.x - PERIMETER_X).abs() < clearance + 3.0
         || near_checkpoint(at, PERIMETER_CHECKPOINT, clearance + 3.0)
         || on_patrol_track(at, clearance)
+}
+
+#[cfg(test)]
+pub(super) fn reserve_patrol_track(at: Vec2) -> bool {
+    on_patrol_track(at, 0.0)
 }
 
 /// Within `clearance` of the UN patrol's track.
@@ -133,7 +258,17 @@ pub(super) fn near_wall_or_checkpoint(at: Vec2, clearance: f32) -> bool {
         })
 }
 
+/// How densely bushes and weeds grow in a belt: behind and beside the
+/// hangar, along both sides of the Perimeter (clear of the patrol's track) and
+/// in a thicket hiding the crawl hole.
 pub(super) fn shelterbelt(at: Vec2) -> f32 {
+    hangar_belt(at)
+        .max(perimeter_belt(at))
+        .max(hole_thicket(at))
+}
+
+/// The dense belt behind and beside the hangar, from 0.0 to 1.0.
+pub(super) fn hangar_belt(at: Vec2) -> f32 {
     let offset = at - Vec2::from(BASE);
     let side = offset.x.abs();
     if side < 103.0 && (-113.0..-44.0).contains(&offset.y) {
@@ -142,6 +277,37 @@ pub(super) fn shelterbelt(at: Vec2) -> f32 {
         0.68
     } else {
         0.0
+    }
+}
+
+/// Where the Perimeter's belt may grow: within this far of the wall on the
+/// Zone's side, and past the patrol's track on Harmont's.
+pub(super) const PERIMETER_BELT: (f32, f32) = (-15.0, 46.0);
+
+fn perimeter_belt(at: Vec2) -> f32 {
+    let off = at.x - PERIMETER_X;
+    if !(PERIMETER_BELT.0..PERIMETER_BELT.1).contains(&off)
+        || off.abs() < 3.0
+        || on_patrol_track(at, 1.0)
+        || near_checkpoint(at, PERIMETER_CHECKPOINT, 3.0)
+        || (at - PERIMETER_GATE).abs().max_element() < 22.0
+    {
+        return 0.0;
+    }
+    if off < 0.0 {
+        // Thickest against the wall on the Zone's side.
+        lerp(0.8, 0.4, off / PERIMETER_BELT.0)
+    } else {
+        0.55
+    }
+}
+
+fn hole_thicket(at: Vec2) -> f32 {
+    let offset = (at - CRAWL_HOLE).abs();
+    if offset.x > 9.0 || offset.y > 12.0 || on_patrol_track(at, 0.5) {
+        0.0
+    } else {
+        1.0
     }
 }
 
@@ -207,16 +373,113 @@ pub(super) fn prepare_cordon(
     });
 }
 
+/// Paints the boom across the Institute gate: a post, and an arm of red and
+/// white stripes a meter long each.
+pub(super) fn spawn_boom(
+    mut commands: Commands,
+    terrain: Res<Terrain>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let paint = |color: Color| StandardMaterial {
+        base_color: color,
+        perceptual_roughness: 0.6,
+        ..default()
+    };
+    let post = materials.add(paint(Color::srgb(0.32, 0.33, 0.31)));
+    let stripes = [Color::srgb(0.62, 0.05, 0.04), Color::srgb(0.85, 0.84, 0.8)]
+        .map(|color| materials.add(paint(color)));
+    let segments = BOOM_LENGTH.round() as usize;
+    let length = BOOM_LENGTH / segments as f32;
+    let segment = meshes.add(Cuboid::new(0.12, 0.12, length));
+    commands
+        .spawn((
+            WorldRoot,
+            Name::new("Institute gate boom"),
+            Boom::default(),
+            Collider(BOOM_PILLARS),
+            Transform::from_xyz(BOOM_POST.x, terrain.mesh_height_at(BOOM_POST), BOOM_POST.y),
+            Visibility::default(),
+            detail_range(400.0, 40.0),
+        ))
+        .with_children(|boom| {
+            boom.spawn((
+                Mesh3d(meshes.add(Cuboid::new(0.3, BOOM_HINGE + 0.4, 0.3))),
+                MeshMaterial3d(post),
+                Transform::from_xyz(0.0, (BOOM_HINGE + 0.4) * 0.5 - 0.2, 0.0),
+            ));
+            boom.spawn((
+                BoomArm,
+                Transform::from_xyz(0.0, BOOM_HINGE, 0.0),
+                Visibility::default(),
+            ))
+            .with_children(|arm| {
+                for i in 0..segments {
+                    arm.spawn((
+                        Mesh3d(segment.clone()),
+                        MeshMaterial3d(stripes[i % 2].clone()),
+                        Transform::from_xyz(0.0, 0.0, (i as f32 + 0.5) * length),
+                    ));
+                }
+            });
+        });
+}
+
+/// Lifts the boom while anyone on Institute business is near the gate and
+/// lowers it again after them; only the lowered arm stops anyone.
+pub(super) fn lift_boom(
+    time: Res<Time>,
+    passes: Query<&GlobalTransform, With<InstitutePass>>,
+    mut booms: Query<(&mut Boom, &mut Collider, &Children)>,
+    mut arms: Query<&mut Transform, With<BoomArm>>,
+) {
+    let business = passes
+        .iter()
+        .any(|pose| pose.translation().xz().distance(PERIMETER_GATE) < BOOM_REACH);
+    let step = BOOM_RATE * time.delta_secs() * if business { 1.0 } else { -1.0 };
+    for (mut boom, mut collider, children) in &mut booms {
+        boom.lift = (boom.lift + step).clamp(0.0, 1.0);
+        let solid = if boom.lift < BOOM_OPEN {
+            BOOM_PILLARS
+        } else {
+            &[]
+        };
+        if collider.0.len() != solid.len() {
+            collider.0 = solid;
+        }
+        // The arm swings up about the hinge, from along +Z to nearly upright.
+        let angle = -1.45 * smoothstep(0.0, 1.0, boom.lift);
+        for &child in children {
+            if let Ok(mut arm) = arms.get_mut(child) {
+                arm.rotation = Quat::from_rotation_x(angle);
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug)]
 struct Panel {
     center: Vec2,
     along: Vec2,
     length: f32,
+    /// How many times as high as the standard cordon it stands.
+    rise: f32,
 }
 
 impl Panel {
     fn across(self) -> Vec2 {
         self.along.perp()
+    }
+
+    /// The collider of the pillar at `at`, one of this panel's.
+    fn collider(self, at: Vec2) -> &'static [Pillar] {
+        if self.rise == 1.0 {
+            WALL_PILLAR
+        } else if hole_depth(at) > HOLE_CRAWL_DEPTH {
+            HOLE_PILLAR
+        } else {
+            PERIMETER_PILLAR
+        }
     }
 
     fn pillars(self) -> impl Iterator<Item = Vec2> {
@@ -238,9 +501,8 @@ fn wall_chunks() -> HashMap<IVec2, Vec<Panel>> {
     let d = Vec2::new(-EDGE, EDGE);
     let perimeter = |z: f32| Vec2::new(PERIMETER_X, z);
     let perimeter_runs = [
-        (perimeter(-EDGE), perimeter(BREACH.y - BREACH_HALF)),
         (
-            perimeter(BREACH.y + BREACH_HALF),
+            perimeter(-EDGE),
             perimeter(PERIMETER_GATE.y - PERIMETER_GATE_HALF),
         ),
         (
@@ -249,10 +511,11 @@ fn wall_chunks() -> HashMap<IVec2, Vec<Panel>> {
         ),
     ];
     let mut chunks: HashMap<_, Vec<_>> = HashMap::default();
-    for (from, to) in YARD_RUNS
+    for (from, to, rise) in YARD_RUNS
         .into_iter()
         .chain([(a, b), (b, c), (c, d), (d, a)])
-        .chain(perimeter_runs)
+        .map(|(from, to)| (from, to, 1.0))
+        .chain(perimeter_runs.map(|(from, to)| (from, to, PERIMETER_RISE)))
     {
         let span = from.distance(to);
         let along = (to - from) / span;
@@ -264,6 +527,7 @@ fn wall_chunks() -> HashMap<IVec2, Vec<Panel>> {
                 center,
                 along,
                 length,
+                rise,
             });
         }
     }
@@ -333,12 +597,14 @@ fn spawn_wall_chunk(
         root.insert(NotShadowCaster);
     }
     root.with_children(|wall| {
-        for at in panels.iter().flat_map(|panel| panel.pillars()) {
-            wall.spawn((
-                Collider(WALL_PILLAR),
-                Unclimbable,
-                wall_pillar_pose(terrain, at, origin),
-            ));
+        for &panel in panels {
+            for at in panel.pillars() {
+                wall.spawn((
+                    Collider(panel.collider(at)),
+                    Unclimbable,
+                    wall_pillar_pose(terrain, at, origin),
+                ));
+            }
         }
     })
     .id()
@@ -394,6 +660,7 @@ impl WallModel {
             let scale_x = panel.length / PANEL_SPAN;
             let extents = panel.along.abs() * (0.51 * scale_x) + panel.across().abs() * 0.70;
             let floor = GroundPatch::new(terrain, panel.center - extents, panel.center + extents);
+            let rise = WALL_HEIGHT_SCALE * panel.rise;
             let offset = positions.len() as u32;
             for (&[x, y, z], &[nx, ny, nz]) in self.positions.iter().zip(&self.normals) {
                 let at = panel.center
@@ -402,11 +669,11 @@ impl WallModel {
                 let base = floor.sample(at);
                 // Continue over lakes and rivers on a concrete foundation, not a floating row of panels.
                 let stretch = (y / 0.15).min(1.0);
-                let height = y * WALL_HEIGHT_SCALE + base.value.x + stretch * base.value.y - SINK;
+                let height = y * rise + base.value.x + stretch * base.value.y - SINK;
                 let horizontal =
                     panel.along * (nx / scale_x) + panel.across() * (nz / WALL_HEIGHT_SCALE);
                 let vertical = ny
-                    / (WALL_HEIGHT_SCALE
+                    / (rise
                         + if stretch < 1.0 {
                             base.value.y / 0.15
                         } else {
@@ -439,7 +706,8 @@ impl WallModel {
 }
 
 fn floor_point(terrain: &Terrain, at: Vec2) -> Vec2 {
-    let ground = terrain.mesh_height_at(at);
+    // The wall spans the crawl hole on the undug ground.
+    let ground = terrain.mesh_height_at(at) + hole_depth(at);
     let rise = if Wetlands::at(at.x, at.y).depth(ground) > 0.02 {
         (WATER_LEVEL - 0.25 - ground).max(0.0)
     } else {
@@ -507,10 +775,21 @@ impl GroundPatch {
 mod tests {
     use std::time::Duration;
 
+    use bevy::time::TimeUpdateStrategy;
+
     use super::*;
     use crate::player::Player;
     use crate::player::vehicle::{Driving, Vehicle, blocked, drive_vehicle};
-    use crate::world::{Body, push_out};
+    use crate::world::{Body, fence_out, push_out};
+
+    const STANDING: Body = Body {
+        radius: 0.35,
+        height: 1.8,
+    };
+    const PRONE: Body = Body {
+        radius: 0.35,
+        height: 0.5,
+    };
 
     fn solids_near(
         terrain: &Terrain,
@@ -521,10 +800,10 @@ mod tests {
             .into_values()
             .flatten()
             .filter(|panel| panel.center.distance(origin) < radius + panel.length)
-            .flat_map(Panel::pillars)
-            .map(|at| {
+            .flat_map(|panel| panel.pillars().map(move |at| (panel, at)))
+            .map(|(panel, at)| {
                 (
-                    Collider(WALL_PILLAR),
+                    Collider(panel.collider(at)),
                     wall_pillar_pose(terrain, at, Vec2::ZERO).into(),
                 )
             })
@@ -647,6 +926,131 @@ mod tests {
             &Transform::from_xyz(corner.x, y + 0.04, corner.y),
             obstacles
         ));
+    }
+
+    #[test]
+    fn the_perimeter_stands_three_times_as_high_and_opens_only_at_the_gate() {
+        let mut pillars = wall_chunks()
+            .into_values()
+            .flatten()
+            .filter(|panel| panel.rise > 1.0)
+            .flat_map(|panel| panel.pillars().map(move |at| (panel, at)))
+            .collect::<Vec<_>>();
+        assert!(pillars.iter().all(|(_, at)| at.x == PERIMETER_X));
+        assert!(
+            pillars
+                .iter()
+                .all(|&(panel, at)| panel.collider(at)[0].top > 3.0 * 2.4)
+        );
+        pillars.sort_unstable_by(|a, b| a.1.y.total_cmp(&b.1.y));
+        let gaps = pillars
+            .windows(2)
+            .filter(|pair| pair[1].1.y - pair[0].1.y > 0.78)
+            .map(|pair| (pair[0].1.y, pair[1].1.y))
+            .collect::<Vec<_>>();
+        // The old breach is walled up: the gate's road is the one way through.
+        assert_eq!(gaps.len(), 1, "{gaps:?}");
+        let (south, north) = gaps[0];
+        assert!(south < PERIMETER_GATE.y - PERIMETER_GATE_HALF + 0.4);
+        assert!(north > PERIMETER_GATE.y + PERIMETER_GATE_HALF - 0.4);
+        assert!(BREACH.y < south);
+    }
+
+    #[test]
+    fn only_a_crawler_fits_under_the_wall_at_the_hidden_hole() {
+        let terrain = Terrain::new();
+        let solids = solids_near(&terrain, CRAWL_HOLE, 14.0);
+        let obstacles = || solids.iter().map(|(solid, pose)| (solid, pose));
+        assert_eq!(
+            terrain.water_depth_at(CRAWL_HOLE.x, CRAWL_HOLE.y),
+            0.0,
+            "the hole floods"
+        );
+        // Straight through, from Harmont's side into the Zone.
+        for i in -60..=60 {
+            let at = CRAWL_HOLE + Vec2::new(i as f32 * 0.1, 0.0);
+            let feet = terrain.mesh_height_at(at);
+            assert_eq!(fence_out(at, feet, PRONE, obstacles()), at, "stuck at {at}");
+            assert_eq!(push_out(at, feet, PRONE, obstacles()), at, "stuck at {at}");
+        }
+        let feet = terrain.mesh_height_at(CRAWL_HOLE);
+        let dug = floor_point(&terrain, CRAWL_HOLE).x - feet;
+        assert!((0.9..1.1).contains(&dug), "dug {dug} m");
+        assert_ne!(
+            push_out(CRAWL_HOLE, feet, STANDING, obstacles()),
+            CRAWL_HOLE
+        );
+        // Beside the hole the wall's foot reaches into the ground again.
+        let beside = CRAWL_HOLE + Vec2::Y * 6.0;
+        let feet = terrain.mesh_height_at(beside);
+        assert_ne!(fence_out(beside, feet, PRONE, obstacles()), beside);
+        // The wall keeps a level foot across the hole: its base is the undug ground.
+        let floor = floor_point(&terrain, CRAWL_HOLE).x;
+        let either_side = [5.0, -5.0].map(|z| floor_point(&terrain, CRAWL_HOLE + Vec2::Y * z).x);
+        let undug = (either_side[0] + either_side[1]) * 0.5;
+        assert!((floor - undug).abs() < 0.15, "{floor} {either_side:?}");
+    }
+
+    #[test]
+    fn the_gate_boom_lifts_for_institute_business_and_lowers_after() {
+        let terrain = Terrain::new();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .add_systems(Update, lift_boom);
+        let world = app.world_mut();
+        let arm = world.spawn((BoomArm, Transform::IDENTITY)).id();
+        let post = BOOM_POST.extend(terrain.mesh_height_at(BOOM_POST)).xzy();
+        let boom = world
+            .spawn((
+                Boom::default(),
+                Collider(BOOM_PILLARS),
+                GlobalTransform::from_translation(post),
+            ))
+            .add_child(arm)
+            .id();
+        // The car waits on the road on Harmont's side of the lowered boom.
+        let road = PERIMETER_GATE + Vec2::X * 3.0;
+        let car = Transform::from_xyz(road.x, terrain.mesh_height_at(road) + 0.03, road.y)
+            .looking_to(Vec3::NEG_X, Vec3::Y);
+        let mut solids = solids_near(&terrain, PERIMETER_GATE, 20.0);
+        solids.push((
+            Collider(BOOM_PILLARS),
+            GlobalTransform::from_translation(post),
+        ));
+        assert!(blocked(&car, solids.iter().map(|(s, p)| (s, p))));
+        let stalker = app
+            .world_mut()
+            .spawn(GlobalTransform::from_translation(road.extend(0.0).xzy()))
+            .id();
+        for _ in 0..60 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().get::<Collider>(boom).unwrap().0.len(),
+            BOOM_PILLARS.len()
+        );
+
+        app.world_mut().entity_mut(stalker).insert(InstitutePass);
+        for _ in 0..60 {
+            app.update();
+        }
+        assert!(app.world().get::<Collider>(boom).unwrap().0.is_empty());
+        let up = app.world().get::<Transform>(arm).unwrap().rotation * Vec3::Z;
+        assert!(up.y > 0.95, "arm at {up}");
+        solids.pop();
+        assert!(!blocked(&car, solids.iter().map(|(s, p)| (s, p))));
+
+        app.world_mut().entity_mut(stalker).despawn();
+        for _ in 0..60 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().get::<Collider>(boom).unwrap().0.len(),
+            BOOM_PILLARS.len()
+        );
     }
 
     #[test]

@@ -1,11 +1,13 @@
-//! Point-and-click movement: left-click the ground to send the stalker there.
-//! WASD still steers directly and cancels the order.
+//! Point-and-click movement: left-click the ground to send the stalker there,
+//! Shift + left click to add a waypoint after the orders already given. Each
+//! waypoint shows a ring on the ground until it is reached. WASD still steers
+//! directly and cancels the order.
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::states::AppState;
-use crate::world::{Body, Collider, Terrain, Weight};
+use crate::world::{Body, Boom, Collider, InstitutePass, Terrain, Weight};
 
 use super::path::find_path;
 use super::vehicle::{CAR, Driving, FORD_DEPTH};
@@ -32,10 +34,12 @@ const STALL_SECONDS: f32 = 0.8;
 /// Farthest point on the ground a click can reach, in meters.
 const CLICK_REACH: f32 = 12_000.0;
 
-/// Where the stalker was told to go: the remaining waypoints, target last.
+/// Where the stalker was told to go: the remaining path, target last, and
+/// the clicked stops along it still ahead.
 #[derive(Component, Default)]
 pub struct MoveOrder {
     waypoints: Vec<Vec2>,
+    stops: Vec<Vec2>,
     run: bool,
     arrival: f32,
     stalled: f32,
@@ -45,10 +49,19 @@ impl MoveOrder {
     pub(super) fn give(&mut self, waypoints: Vec<Vec2>, from: Vec2, run: bool, arrival: f32) {
         *self = Self {
             run: run || path_length(from, &waypoints) > RUN_DISTANCE,
+            stops: waypoints.last().copied().into_iter().collect(),
             waypoints,
             arrival,
             stalled: 0.0,
         };
+    }
+
+    /// Adds a leg after the current target; the whole trip decides whether
+    /// the stalker runs.
+    pub(super) fn append(&mut self, leg: Vec<Vec2>, from: Vec2) {
+        self.stops.extend(leg.last().copied());
+        self.waypoints.extend(leg);
+        self.run = self.run || path_length(from, &self.waypoints) > RUN_DISTANCE;
     }
 
     /// Distance still to travel along the remaining waypoints.
@@ -76,6 +89,9 @@ impl MoveOrder {
                 return Some((next - at).normalize());
             }
             self.waypoints.remove(0);
+            if self.stops.first() == Some(&next) {
+                self.stops.remove(0);
+            }
         }
         self.cancel();
         None
@@ -110,29 +126,47 @@ fn path_length(from: Vec2, waypoints: &[Vec2]) -> f32 {
         .1
 }
 
-/// Ground ring showing the current move target.
+/// A ground ring showing one of the order's stops.
 #[derive(Component)]
 pub(super) struct OrderMarker;
 
-pub(super) fn spawn_order_marker(
+/// The rings' shared mesh and glow.
+#[derive(Resource)]
+pub(super) struct OrderMarkerLook {
+    mesh: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
+}
+
+pub(super) fn prepare_order_markers(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    commands.spawn((
-        OrderMarker,
-        Mesh3d(meshes.add(Annulus::new(0.32, 0.45))),
-        MeshMaterial3d(materials.add(StandardMaterial {
+    commands.insert_resource(OrderMarkerLook {
+        mesh: meshes.add(Annulus::new(0.32, 0.45)),
+        material: materials.add(StandardMaterial {
             base_color: Color::srgb(0.95, 0.78, 0.35),
             emissive: LinearRgba::rgb(900.0, 620.0, 180.0),
             unlit: true,
             ..default()
-        })),
-        Transform::from_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2)),
-        Visibility::Hidden,
-        DespawnOnExit(AppState::InGame),
-    ));
+        }),
+    });
 }
+
+/// What a route may be blocked by, and whether it is the Institute gate's boom
+/// or carries a pass through it.
+type Solids<'w, 's> = Query<
+    'w,
+    's,
+    (
+        Entity,
+        &'static Collider,
+        &'static GlobalTransform,
+        Option<&'static Weight>,
+        Has<Boom>,
+        Has<InstitutePass>,
+    ),
+>;
 
 /// Turns a left click on the ground into a pathfound move order for the stalker,
 /// or for the vehicle while the stalker drives it.
@@ -142,7 +176,7 @@ pub(super) fn issue_move_order(
     terrain: Res<Terrain>,
     window: Single<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<PlayerCamera>>,
-    colliders: Query<(Entity, &Collider, &GlobalTransform, Option<&Weight>)>,
+    colliders: Solids,
     mut players: Query<(&Transform, &mut MoveOrder, Option<&Driving>), With<Player>>,
 ) {
     if !mouse.just_pressed(MouseButton::Left) {
@@ -168,42 +202,74 @@ pub(super) fn issue_move_order(
         Some(_) => (VEHICLE_BODY, FORD_DEPTH, VEHICLE_ARRIVAL, CAR),
         None => (STANDING, WADE_DEPTH, STALKER_ARRIVAL, STALKER),
     };
-    // The driven vehicle must not block its own route, nor anything lighter.
+    // The driven vehicle must not block its own route, nor anything lighter,
+    // nor the Institute gate's boom when it carries a pass.
+    let pass = vehicle
+        .and_then(|car| colliders.get(car).ok())
+        .is_some_and(|(.., pass)| pass);
     let obstacles = colliders
         .iter()
-        .filter(|&(entity, _, _, weight)| Some(entity) != vehicle && mover.blocked_by(weight))
-        .map(|(_, collider, pose, _)| (collider, pose));
-    let Some(path) = find_path(&terrain, obstacles, from, target.xz(), body, depth) else {
+        .filter(|&(entity, _, _, weight, boom, _)| {
+            Some(entity) != vehicle && mover.blocked_by(weight) && !(boom && pass)
+        })
+        .map(|(_, collider, pose, ..)| (collider, pose));
+    // Shift queues the new leg after the current target.
+    let queue = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    let start = match order.target() {
+        Some(last) if queue => last,
+        _ => from,
+    };
+    let Some(path) = find_path(&terrain, obstacles, start, target.xz(), body, depth) else {
         return;
     };
-    let run = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    order.give(path, from, run, arrival);
+    if start == from {
+        order.give(path, from, false, arrival);
+    } else {
+        order.append(path, from);
+    }
 }
 
-/// Shows the marker at an active target; boarding or leaving a vehicle drops the order.
-pub(super) fn sync_order_marker(
+/// Shows a ring at each stop still ahead, spawning more as orders queue up;
+/// boarding or leaving a vehicle drops the order.
+pub(super) fn sync_order_markers(
+    mut commands: Commands,
     terrain: Res<Terrain>,
+    look: Res<OrderMarkerLook>,
     mut was_driving: Local<bool>,
     mut players: Query<(&mut MoveOrder, Has<Driving>), With<Player>>,
     mut markers: Query<(&mut Transform, &mut Visibility), With<OrderMarker>>,
 ) {
-    let (Ok((mut order, driving)), Ok((mut marker, mut visibility))) =
-        (players.single_mut(), markers.single_mut())
-    else {
+    let Ok((mut order, driving)) = players.single_mut() else {
         return;
     };
     if driving != *was_driving {
         *was_driving = driving;
         order.cancel();
     }
-    let shown = match order.target() {
-        Some(at) => {
-            marker.translation = at.extend(terrain.mesh_height_at(at) + 0.06).xzy();
-            Visibility::Inherited
-        }
-        None => Visibility::Hidden,
+    let place = |at: Vec2| {
+        Transform::from_translation(at.extend(terrain.mesh_height_at(at) + 0.06).xzy())
+            .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
     };
-    visibility.set_if_neq(shown);
+    let mut stops = order.stops.iter().copied();
+    for (mut marker, mut visibility) in &mut markers {
+        let shown = match stops.next() {
+            Some(at) => {
+                *marker = place(at);
+                Visibility::Inherited
+            }
+            None => Visibility::Hidden,
+        };
+        visibility.set_if_neq(shown);
+    }
+    for at in stops {
+        commands.spawn((
+            OrderMarker,
+            Mesh3d(look.mesh.clone()),
+            MeshMaterial3d(look.material.clone()),
+            place(at),
+            DespawnOnExit(AppState::InGame),
+        ));
+    }
 }
 
 /// Where a view ray first meets the rendered terrain.
@@ -284,5 +350,29 @@ mod tests {
         assert!(order.target().is_some());
         order.track_progress(0.0, 0.2, 0.5);
         assert!(order.target().is_none(), "a blocked order is dropped");
+    }
+
+    #[test]
+    fn shift_clicks_queue_stops_that_clear_as_they_are_reached() {
+        let mut order = MoveOrder::default();
+        order.give(
+            vec![Vec2::new(4.0, 0.0)],
+            Vec2::ZERO,
+            false,
+            STALKER_ARRIVAL,
+        );
+        order.append(vec![Vec2::new(4.0, 3.0), Vec2::new(6.0, 3.0)], Vec2::ZERO);
+        assert_eq!(order.stops, [Vec2::new(4.0, 0.0), Vec2::new(6.0, 3.0)]);
+        assert_eq!(order.target(), Some(Vec2::new(6.0, 3.0)));
+        assert!(!order.runs(), "a short trip walks");
+        order.append(vec![Vec2::new(16.0, 3.0)], Vec2::ZERO);
+        assert!(order.runs(), "a long trip runs");
+        // Reaching the first stop clears it and heads on to the next leg.
+        assert_eq!(order.steer(Vec2::new(4.0, 0.2)), Some(Vec2::Y));
+        assert_eq!(order.stops, [Vec2::new(6.0, 3.0), Vec2::new(16.0, 3.0)]);
+        assert_eq!(order.steer(Vec2::new(4.0, 3.0)), Some(Vec2::X));
+        assert_eq!(order.stops.len(), 2, "a path point is no stop");
+        assert_eq!(order.steer(Vec2::new(6.0, 3.0)), Some(Vec2::X));
+        assert_eq!(order.stops, [Vec2::new(16.0, 3.0)]);
     }
 }

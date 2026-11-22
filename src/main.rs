@@ -5,6 +5,7 @@
 mod assets;
 mod audio;
 mod player;
+mod save;
 mod states;
 mod ui;
 mod world;
@@ -14,6 +15,7 @@ use bevy::prelude::*;
 
 use assets::{PreloadedAssets, preload_game_assets};
 use player::PlayerPlugin;
+use save::SavePlugin;
 use states::{AppState, InGamePhase, SplashPhase, toggle_pause};
 use ui::UiPlugin;
 use world::WorldPlugin;
@@ -33,6 +35,7 @@ fn main() {
             PlayerPlugin,
             ZonePlugin,
             UiPlugin,
+            SavePlugin,
         ))
         .add_systems(Update, toggle_pause.run_if(in_state(AppState::InGame)))
         .add_systems(Update, quit_on_q.run_if(in_state(AppState::InGame)))

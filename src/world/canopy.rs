@@ -16,7 +16,7 @@ use crate::assets::{self, PreloadedAssets};
 use crate::player::PlayerCamera;
 
 use super::collision::{Collider, Pillar, Weight};
-use super::cordon::{inside_yard, near_wall_or_checkpoint, shelterbelt};
+use super::cordon::{hangar_belt, inside_yard, near_wall_or_checkpoint, shelterbelt};
 use super::hydrology::SWAMP;
 use super::terrain::{
     BALD_CENTER, BASE, QUARRY_CENTER, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep,
@@ -300,7 +300,7 @@ pub(super) fn hangar_trees(terrain: &Terrain, tile: IVec2) -> Vec<ForestTree> {
             let at = (Vec2::new(x as f32, z as f32)
                 + Vec2::new(lerp(0.24, 0.76, roll(0)), lerp(0.24, 0.76, roll(1))))
                 * cell;
-            if roll(2) >= shelterbelt(at) * 0.60
+            if roll(2) >= hangar_belt(at) * 0.60
                 || near_wall_or_checkpoint(at, 2.6)
                 || terrain.normal_at(at.x, at.y).y < 0.88
             {

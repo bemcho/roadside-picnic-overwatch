@@ -52,6 +52,11 @@ impl WorldClock {
         Self { hours }
     }
 
+    /// Hours since midnight before the first day.
+    pub fn hours(&self) -> f32 {
+        self.hours
+    }
+
     /// Hour of the day, from 0.0 up to 24.0.
     pub fn hour(&self) -> f32 {
         self.hours.rem_euclid(24.0)

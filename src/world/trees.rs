@@ -201,8 +201,8 @@ mod tests {
         let terrain = Terrain::new();
         let sites = all_sites(&terrain);
         assert_eq!(sites, all_sites(&terrain));
-        // The three dense woods hold undergrowth stands too.
-        assert!((12..=200).contains(&sites.len()), "{} stands", sites.len());
+        // The three dense woods and the Perimeter's belt hold stands too.
+        assert!((12..=260).contains(&sites.len()), "{} stands", sites.len());
         assert!(
             sites
                 .iter()

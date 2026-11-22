@@ -28,7 +28,9 @@ The upper-right in-game HUD shows the smoothed frame rate.
 
 - **Any key** — enter the Zone from the hangar splash once loading finishes
 - **Left click** — move the stalker there (pathfinding around obstacles and deep
-  water; long trips or **Shift**-click run). While driving, click to drive there.
+  water; long trips run). While driving, click to drive there.
+- **Shift + left click** — add a waypoint after the orders already given; a ring
+  marks each one until it is reached
 - **WASD** — steer directly (camera-relative) and cancel a click order; hold **Shift** to run
 - Walk into a rock, building or other solid to **climb** onto it; the cordon walls,
   checkpoints, trees and guards can't be climbed
@@ -47,7 +49,9 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **M** — open / close the Harmont map
 - **N** — mute / unmute game audio
 - **V** — lift / restore the fog of war (for testing)
+- **F5** — save progress (it also saves every minute and on quitting)
 - **Q** — quit
+- Start with `cargo run --release -- --new` to ignore the save and begin afresh
 
 ## Tactical view
 
@@ -68,16 +72,20 @@ Hover descriptions (`ui/tooltip.rs`) pick, in order, a `Describe`d entity
 (`world/places.rs`: water from the hydrology profiles, quarry, bald hill, yard).
 The stalker surveys an `Explored` grid within 150 m as they travel.
 Unsurveyed ground lies under a shroud (fog of war, `world/shroud.rs`): the
-terrain and water shaders darken it from a mask texture of that grid (one
-texel per 32 m cell, its edges softened and wobbled), and `cull_shrouded`
+ground fog pass, drawn after the sky, covers it and the fog over it with
+opaque, slowly drifting black smoke from a mask texture of that grid (one
+texel per 32 m cell, its edges softened and wobbled), so nothing of it shows
+from any height (the clouds still float over it), and `cull_shrouded`
 drops every other entity standing wholly on it from the cameras' and the sun's
 visible lists after Bevy's own culling, so it costs no draws or shadow passes.
 V lifts the shroud for testing. M opens the Harmont map (`ui/map.rs`):
 `doc/Roadside_map.jpg` (as `textures/ui/roadside_map.png`) with the stalker's
-marker, haze over unsurveyed cells and a few birds wheeling over it.
+marker, opaque near-black smoke over unsurveyed cells and a few birds wheeling over it.
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
-in `drive_vehicle`. A yellow ring (`ui/locator.rs`) lies on the ground around
+in `drive_vehicle`. Shift-clicks append legs pathfound from the last stop
+(`MoveOrder::append`). A car with an `InstitutePass` routes through the
+Institute gate's closed boom, which lifts as it arrives. A yellow ring (`ui/locator.rs`) lies on the ground around
 the stalker, or the car they drive, at every zoom: its vertices follow the
 rendered terrain (or the water when wading), it never shrinks under 34 px wide,
 a relative depth bias keeps it over road slabs and stones, and it pulses while
@@ -202,9 +210,18 @@ the stalker stands still.
 - **Cordons** (`src/world/cordon.rs`): the enclosed hangar yard has a level
   staging area, with a checkpoint beside the 16 m opening on the north road.
   The Perimeter wall (`PERIMETER_X`) runs the map's length between Harmont and
-  the Zone, with the Institute gate on the highway (guarded by a second
-  checkpoint) and the stalkers' breach on the Chapter 4 track; `in_zone` tells
-  the sides apart. A separate continuous wall marks the map's edge; the panels
+  the Zone at three times the panel's height (`PERIMETER_RISE`); `in_zone`
+  tells the sides apart. Its one gate is the Institute's on the highway,
+  narrowed to the road and closed by a red-and-white boom (`Boom`) that lifts
+  only for a body carrying an `InstitutePass` (the stalkers' car, on Institute
+  papers) and lowers once it has passed; a second checkpoint guards it. The
+  old breach on the Chapter 4 track is walled up. The only other way through
+  is the crawl hole (`CRAWL_HOLE`): the ground is dug a metre under the wall
+  (`hole_depth`, applied in `land_height`), and over it the wall's pillars
+  start just below ground, so only a crawling stalker fits under. A thicket
+  hides it, and its tooltip shows only within 8 m. A belt of weeds and bushes
+  (`PERIMETER_BELT`) lines both sides of the Perimeter, clear of the patrol
+  track and the gate. A separate continuous wall marks the map's edge; the panels
   follow the rendered terrain and stay above the water. Wall meshes and solid collision stream in nearby terrain tiles.
   Keep the staging area and driveway clear; the tree and bush shelterbelt is
   concentrated behind the hangar and along the sides.
@@ -234,7 +251,11 @@ the stalker stands still.
   scan's collision and relief with `tools/sample_landmark_ground.py` (see its
   docstring). All scans at once outgrow a 6 GB GPU, so each site shows a light
   stand-in from `low/` and streams its full UHD scene in within 150 m of its
-  footprint around any `StreamAnchor`. Build a stand-in from the JPEG source
+  footprint around any `StreamAnchor`. The Institute's Tripo scan came without
+  UVs or textures: `tools/prepare_institute_asset.py` (headless Blender) paints
+  it with one atlas from its concept image in the workspace (window bays on the
+  front and back, precast panels on the sides and roof), then builds its
+  stand-in as below. Build a stand-in from the JPEG source
   with glTF Transform `simplify --ratio 0.02 --error 0.002` and `resize --width
   1024 --height 1024`, then compress; never ground or recenter it.
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town
@@ -263,16 +284,26 @@ the stalker stands still.
   near the view and a `low/` copy farther out, to a range that grows with its
   size. Their colliders (`world/pillars/rock_*.rs`) come from
   `tools/trim_tree_base.py ... --cell 0.2`; the stalker can climb them.
-- **Guards** (`src/world/guards.rs`): two UN soldiers
+- **Guards** (`src/world/guards.rs`): UN soldiers
   (`assets/models/soldiers/medium/`, rigged by `tools/rig_stalker.py`;
-  `--walk-arms` sets the walk clip's arm swing) at each way through a cordon:
-  the hangar yard's gate, the Institute gate and the breach. Each paces a short
-  beat beside the opening, swinging its arms, and stands watching at either end.
-- **UN patrol** (`src/player/vehicle/patrol.rs`): a white armored car
+  `--walk-arms` sets the walk clip's arm swing, `--armature` keeps a Tripo
+  rig's own skeleton): two at each gate (the hangar yard's and the Institute's)
+  pace a short beat beside the opening, and five sentries walk short beats
+  beside the two checkpoints. Each idles watching at either end of its beat.
+- **UN patrol** (`src/player/vehicle/patrol.rs`): four white armored cars
   (`UN_VEHICLE`, the stalkers' car repainted with a UN marking in its roof
   atlas; the flank plates are separate quads with `textures/decals/un_flank.png`)
-  laps a loop beside the Perimeter wall on Harmont's side
-  (`cordon::PATROL_TURNS`) and halts while the stalker or their car is in its way.
+  lap a loop beside the Perimeter wall on Harmont's side, a quarter lap apart,
+  from 50 m south of the hangar to beyond the Institute
+  (`cordon::PATROL_TURNS`), and halt while the stalker, their car or another
+  patrol is in their way.
+- **Harmont traffic** (`src/player/vehicle/traffic.rs`): a street sweeper up
+  and down New Harmont's plaza avenue, two sedans round the town's ring street
+  and two between the Institute and the Borscht (`roads::traffic_routes`). They
+  keep right, turn round at dead ends, slow for bends and stop for the stalker,
+  their car, a patrol or each other. Both models are Tripo scans split into a
+  chassis and four wheel nodes by `tools/split_vehicle_wheels.py` (its
+  docstring has the commands); the wheels roll and the front pair steers.
 - **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
   textured sources in `assets/models/{animals,birds}/medium/` share mesh handles
   and preserve the original PBR maps. Rebuild with glTF Transform `simplify
@@ -519,13 +550,14 @@ This project follows idiomatic Bevy ECS. Read these before adding code:
 
 ### Module layout
 
-`src/main.rs` composes Bevy with five project plugins: `GameAudioPlugin`,
-`WorldPlugin`, `PlayerPlugin`, `ZonePlugin` and `UiPlugin`.
+`src/main.rs` composes Bevy with six project plugins: `GameAudioPlugin`,
+`WorldPlugin`, `PlayerPlugin`, `ZonePlugin`, `UiPlugin` and `SavePlugin`.
 
 ```
 src/
 ├── main.rs          # App entry point: default plugins + state setup
 ├── states.rs        # AppState + InGamePhase, state transitions, pause toggle
+├── save.rs          # saved progress: survey, clock, stalker and car positions
 ├── assets/          # asset path constants + startup preload handles
 ├── audio/           # synthesized ambience, effects, positional creature cues
 ├── player/          # stalker, animation, camera, orders/pathfinding, vehicle
@@ -537,7 +569,14 @@ src/
 ```
 
 The world is rebuilt deterministically from fixed seeds and placements; there is
-no physics crate, networking or save system.
+no physics crate or networking. `save.rs` keeps the player's progress: the
+`Explored` survey, the clock and where the stalker and their car stand, in a
+plain text file (`progress.txt` in `$XDG_DATA_HOME/roadside-picnic`,
+`~/.local/share/roadside-picnic`, `%APPDATA%` or `~/Library/Application
+Support`), written atomically on F5, every minute and on quitting, and restored
+on the first in-game frame. The web build keeps none. Playtests should set
+`XDG_DATA_HOME` to a scratch folder so they neither load nor overwrite the
+player's save.
 
 ### Asset tiers
 
@@ -555,6 +594,16 @@ unrigged scans, the 4K artifact scans) are in
 `~/Projects/agentic/RoadSide-Picnic/archived/roadside-picnic-unused-assets-2026-11-22.zip`, with sha256 sums in its `MANIFEST.txt`, and in the Git LFS
 history. Restore them from the repo root before re-running a pipeline that
 needs them: `unzip -n <zip> 'assets/*' -d .`.
+
+### Assets workspace
+
+`~/Projects/agentic/RoadSide-Picnic` is the **assets workspace**, or just **the
+workspace**: whenever a request says "workspace", it means this folder. It holds
+the Tripo generations (task records in `models/tripo-out/`, their concept and
+preview images in `images/<name>-<id8>/`), every source model by category and
+tier under `models/<kind>/{low,medium,uhd}/`, the reference boards and the
+`archived/` zip above. Look there first for a source to build or texture an
+asset from, and follow its `AGENTS.md` for where generated files go.
 
 ### Further reading
 

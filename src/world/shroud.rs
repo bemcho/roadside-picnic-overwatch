@@ -1,9 +1,10 @@
 //! The shroud over what the stalker has not surveyed yet (fog of war).
 //!
-//! The ground and the water there turn dark and grey, their relief faintly
-//! showing; a mask texture of the survey grid ([`Explored`]) tells the terrain
-//! and water shaders where, its linear filtering softening the edges over a
-//! cell. Everything else standing there is dropped from the views' and the
+//! Black, slowly drifting smoke covers the ground there and the fog over it:
+//! the ground fog pass (`ground_fog/render.rs`, after the sky) draws it from a
+//! mask texture of the survey grid ([`Explored`]), its linear filtering
+//! softening the edges over a cell, so nothing of that ground shows from any
+//! height. Everything else standing there is dropped from the views' and the
 //! sun's visible lists after Bevy's own culling, so it costs no draw calls or
 //! shadow passes. What frustum culling may not cull (`NoFrustumCulling`, such
 //! as the locator ring), the terrain and the water always stay.
@@ -18,6 +19,8 @@ use bevy::camera::visibility::{
 use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
 use bevy::light::SimulationLightSystems;
 use bevy::prelude::*;
+use bevy::render::RenderApp;
+use bevy::render::extract_resource::ExtractResource;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::states::{AppState, InGamePhase};
@@ -35,8 +38,10 @@ pub(crate) enum Shroud {
     Lifted,
 }
 
-/// The survey grid as a texture: 255 where surveyed, 0 elsewhere.
-#[derive(Resource)]
+/// The survey grid as a texture: 255 where surveyed, 0 elsewhere. The fog
+/// pass (`ground_fog/render.rs`) draws the shroud from it.
+#[derive(Resource, Clone, ExtractResource)]
+#[extract_app(RenderApp)]
 pub(super) struct ShroudMask(pub Handle<Image>);
 
 pub(super) struct ShroudPlugin;
@@ -146,8 +151,8 @@ fn shrouded(explored: &Explored, center: Vec2, radius: f32) -> bool {
     .all(|&corner| explored.hides(center + corner * reach))
 }
 
-/// What the shroud may hide: not what frustum culling skips, the ground or the
-/// water.
+/// What the shroud may hide: not what frustum culling skips, nor the ground
+/// and the water, whose depth tells the fog pass where to draw the smoke.
 type Shroudable = (
     Without<NoFrustumCulling>,
     Without<MeshMaterial3d<TerrainMaterial>>,

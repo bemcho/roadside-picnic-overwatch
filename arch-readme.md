@@ -9,17 +9,26 @@ For detailed asset recipes and contributor rules, read
 
 Roadside-Picnic is a Bevy 0.20 ECS application. The top-level composition root
 is [`src/main.rs`](./src/main.rs). It installs Bevy's default plugins, the
-state machine, shared asset preloading, and five project plugins:
+state machine, shared asset preloading, and six project plugins:
 
 - `GameAudioPlugin`: synthesized audio, footsteps, engine, mute, and creature cues.
 - `WorldPlugin`: terrain, water, roads, scenery, base, sites, wildlife, and lighting.
 - `PlayerPlugin`: stalker, animation, camera, input, collision, and armored vehicle.
 - `ZonePlugin`: the current run's anomaly and collectible-object loop.
 - `UiPlugin`: splash, loading state, entry curtain, HUD, vehicle prompt, pause menu, and FPS.
+- `SavePlugin` (`src/save.rs`): saved progress (survey, clock, stalker and car).
 
-There is deliberately no separate engine, physics crate, networking layer, or
-save system. Most runtime state is local ECS data, and the world is rebuilt
-deterministically from fixed seeds and placements.
+There is deliberately no separate engine, physics crate or networking layer.
+Most runtime state is local ECS data, and the world is rebuilt
+deterministically from fixed seeds and placements. Only the player's progress
+is saved: `read_progress` reads the save at `Startup` into `SavedProgress`
+(unless `--new` is passed), `restore_progress` applies it on the first
+in-game frame (the `Explored` grid, `WorldClock`, the stalker's and the car's
+transforms) and removes it, and `save_progress` runs in `Last` when
+`save_due` says so: on F5, every 60 s, or on an `AppExit` message. It writes
+a plain text file atomically (temporary file, then rename) and sends
+`ProgressSaved` for the HUD notice. A stalker saved at the wheel is restored
+on foot beside the car. The web build reads and writes nothing.
 
 ## Bird's-eye runtime graph
 
@@ -73,6 +82,7 @@ flowchart LR
 | Area | Source | Owns |
 |---|---|---|
 | Entry point | `src/main.rs` | App composition, global pause and quit |
+| Saved progress | `src/save.rs` | `SavePlugin`: the progress file, F5/autosave/quit saves, restore on entry |
 | States | `src/states.rs` | `AppState::Loading/InGame`, `InGamePhase::Running/Paused` |
 | Asset paths | `src/assets/` | Canonical paths, preload handles, shared GLB loader helpers |
 | Player | `src/player/` | Stalker, camera, input, gravity, crawling, vehicle interaction |
@@ -80,15 +90,17 @@ flowchart LR
 | World | `src/world/mod.rs` | World plugin, terrain/material setup, sky, fog, spawn and teardown |
 | Terrain | `src/world/terrain.rs`, `hydrology.rs`, `roads.rs` | Deterministic heights, water, road grading and masks |
 | Day/night and weather | `src/world/weather.rs` | `WorldClock`, daily `Weather` (temperature, humidity, fog tendency), sun/moon, exposure |
-| Ground fog | `src/world/ground_fog.rs`, `ground_fog/{field,render}.rs` | Fog field texture, terrain-hugging raymarch pass, regional distance fog |
+| Ground fog | `src/world/ground_fog.rs`, `ground_fog/{field,render}.rs` | Fog field texture, terrain-hugging raymarch pass with the clouds and the shroud's smoke, regional distance fog |
 | Places | `src/world/places.rs` | Named places at a point or along a ray, `Describe`, the `Explored` survey grid |
-| Fog of war | `src/world/shroud.rs` | `Shroud` state (V), survey mask texture for the terrain/water shaders, culling of shrouded entities |
+| Fog of war | `src/world/shroud.rs` | `Shroud` state (V), survey mask texture for the ground fog pass (opaque drifting black smoke, drawn after the sky), culling of shrouded entities |
 | Streaming | `src/world/landscape.rs`, `scenery.rs` | Async terrain build, LOD swaps, 3x3 scenery/collider streaming |
 | Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
+| Cordons | `src/world/cordon.rs` | Yard wall, 3× Perimeter, Institute gate `Boom` and `InstitutePass`, crawl hole (`hole_depth`), shelterbelts |
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
 | Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `old_road.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway and asphalt roads, marsh props, big rocks |
-| Cordon guards | `src/world/guards.rs` | Two pacing, rigged UN soldiers at each way through a cordon |
-| UN patrol | `src/player/vehicle/patrol.rs` | White armored car lapping the Perimeter wall, flank plates |
+| Cordon guards | `src/world/guards.rs` | Two pacing, rigged UN soldiers at each gate and five sentries by the checkpoints |
+| UN patrol | `src/player/vehicle/patrol.rs` | Four white armored cars lapping the Perimeter wall, flank plates, shared `CarWheel`/`in_the_way` |
+| Harmont traffic | `src/player/vehicle/traffic.rs` | Sweeper and sedans on `roads::traffic_routes`: right-hand lanes, U-turns, right of way |
 | Wildlife | `src/world/wildlife/` | Shared rigs, gaits, flyers, predator/mutant AI, spatial cues |
 | Collision | `src/world/collision.rs`, `world/pillars/` | Static `Pillar` colliders, push-out, climbing, `Weight`/`Crusher`/`Unclimbable` |
 | Crushing | `src/world/crush.rs` | Trampled plants, knocking down lighter solids |
@@ -270,8 +282,9 @@ in-scattering by the box's bounding radius, which turns a dense thin layer
 black. The pass runs in `Core3d` after the main pass and before early
 post-processing. It binds the view's own `MeshViewBindGroup` (lights, shadow
 cascades, atmosphere transmittance), the view depth, the per-camera `GroundFog`
-uniform and the fog field. `ground_fog.wesl` marches each pixel's ray from the
-camera to the depth buffer:
+uniform, the fog field and the shroud mask (`ShroudMask`, extracted from
+`shroud.rs`). `ground_fog.wesl` marches each pixel's ray from the camera to the
+depth buffer:
 
 - It jumps toward the layer's ceiling over rising ground.
 - It drops through clear air to the local fog top.
@@ -307,6 +320,14 @@ marches in the order the ray meets them: clouds first looking down, the ground
 fog first looking up. `update_ground_fog` feeds the cover in
 `GroundFog::clouds`, 0.3 on a clear day up to 0.6 in rain
 (`Weather::cloud`).
+
+The pass also draws the fog of war. Where the depth buffer meets unsurveyed
+ground (`shroud_at`: the survey mask at the hit, its edge wobbled), the ground
+and the fog over it give way to opaque, drifting black smoke (`smoke_at`) under
+the clouds. Drawing it here rather than in the terrain and water shaders keeps
+it black from any height: Bevy's `render_sky` lays the atmosphere's aerial
+perspective over the opaque scene first, which would lighten a black ground
+into blue haze from a raised camera.
 
 `update_distance_fog` derives a regional visibility from a periodic cloud field
 and lowland height, shortened by humid air. It varies between 1,280 and 2,048 m
@@ -397,9 +418,13 @@ current Zone run loop.
 
 `Player` holds movement speeds. `Locomotion` holds live velocity, vertical
 velocity, grounded state, and `Gait`. `MoveOrder` holds the waypoints of a
-point-and-click order: `issue_move_order` ray-casts the click onto the rendered
-terrain (`orders::cast_to_ground`) and plans the route with grid A* around
-collider pillars and deep water (`player/path.rs`). `move_player`:
+point-and-click order and its clicked stops: `issue_move_order` ray-casts the
+click onto the rendered terrain (`orders::cast_to_ground`) and plans the route
+with grid A* around collider pillars and deep water (`player/path.rs`); with
+Shift held it plans from the last stop and appends the leg
+(`MoveOrder::append`). A driven car with an `InstitutePass` ignores the gate's
+`Boom` when planning. `sync_order_markers` keeps one ground ring per stop,
+spawning more from `OrderMarkerLook` as needed. `move_player`:
 
 1. reads camera-relative WASD input (which cancels an order), otherwise
    steers toward the order's next waypoint,
@@ -731,11 +756,11 @@ Important paths:
 
 25. **Mind the shroud when adding meshes or materials.**
     `shroud::cull_shrouded` drops any entity with an `Aabb` that stands wholly
-    on unsurveyed ground from the views' visible lists. Ground-like materials
-    that should stay drawn and veil themselves in their shader belong in
-    `shroud::Shroudable`'s exemptions; `NoFrustumCulling` entities are never
-    culled. A new terrain-like shader samples the same mask (`shroud_at`,
-    `veil` in `terrain.wesl`/`water.wesl`).
+    on unsurveyed ground from the views' visible lists. The ground and the
+    water stay drawn (`shroud::Shroudable`'s exemptions): the fog pass finds
+    unsurveyed ground through their depth and draws the smoke over it, so no
+    material needs shroud code of its own. A new ground-like material belongs
+    in those exemptions; `NoFrustumCulling` entities are never culled.
 
 ## How to add a static site model
 

@@ -33,8 +33,14 @@ pub enum Place {
     Vehicle,
     /// A UN soldier guarding a way through a cordon.
     Guard,
-    /// The UN armored car patrolling the Perimeter.
+    /// The UN armored cars patrolling the Perimeter.
     Patrol,
+    /// Harmont's street sweeper.
+    Sweeper,
+    /// A Harmont sedan in town traffic.
+    Sedan,
+    /// The hole dug under the Perimeter, described only up close.
+    CrawlHole,
     Artifact(usize),
 }
 
@@ -203,8 +209,14 @@ impl Explored {
     }
 
     /// Every cell, row by row from the map's -X, -Z corner: surveyed or not.
-    pub(super) fn cells(&self) -> impl Iterator<Item = bool> + '_ {
+    pub(crate) fn cells(&self) -> impl Iterator<Item = bool> + '_ {
         self.seen.iter().copied()
+    }
+
+    /// The survey from its cells, as [`Self::cells`] lists them; `None` if
+    /// they don't cover the grid.
+    pub(crate) fn from_cells(seen: Vec<bool>) -> Option<Self> {
+        (seen.len() == SURVEY_CELLS * SURVEY_CELLS).then_some(Self { seen })
     }
 
     pub(crate) fn survey(&mut self, at: Vec2) {

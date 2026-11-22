@@ -212,7 +212,7 @@ impl Terrain {
             h = lerp(h, hills(BASE.0, BASE.1), pad);
         }
 
-        h
+        h - super::cordon::hole_depth(Vec2::new(x, z))
     }
 
     /// 1.0 in the level staging yard, fading into the surrounding terrain.

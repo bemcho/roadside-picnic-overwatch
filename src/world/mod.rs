@@ -37,12 +37,13 @@ pub use collision::{
 };
 #[cfg(test)]
 pub(crate) use cordon::in_zone;
-pub(crate) use cordon::{PATROL_RADIUS, PATROL_TURNS};
+pub(crate) use cordon::{Boom, InstitutePass, PATROL_RADIUS, PATROL_TURNS};
 pub(crate) use ground_fog::{CAMERA_FAR, camera_distance_fog, camera_fog};
 #[cfg(test)]
 pub(crate) use hydrology::SWAMP;
 pub(crate) use map::{MAP_SIZE, METERS_PER_PIXEL, map, map_pixel};
 pub use places::{Describe, Explored, Place, SURVEY_CELL, place_at, structure_on_ray};
+pub(crate) use roads::traffic_routes;
 #[cfg(test)]
 pub(crate) use terrain::BASE;
 pub(crate) use terrain::lattice_hash;
@@ -142,6 +143,8 @@ impl Plugin for WorldPlugin {
                 tree_fall::start_break_clock,
                 wildlife::spawn_wildlife,
                 cordon::prepare_cordon,
+                cordon::spawn_boom,
+                cordon::spawn_hole_sign,
                 sites::spawn_sites,
                 town::spawn_town,
                 railway::spawn_railway,
@@ -208,8 +211,11 @@ impl Plugin for WorldPlugin {
         )
         .add_systems(
             Update,
-            (guards::patrol_guards, guards::animate_guards)
-                .chain()
+            (
+                (guards::patrol_guards, guards::animate_guards).chain(),
+                cordon::lift_boom,
+                cordon::notice_crawl_hole,
+            )
                 .run_if(in_state(InGamePhase::Running)),
         )
         .add_systems(OnExit(AppState::InGame), despawn_world);
@@ -311,16 +317,14 @@ fn load_landscape_materials(
     mut standard: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let shroud = shroud::new_mask(&mut images);
-    commands.insert_resource(shroud::ShroudMask(shroud.clone()));
+    commands.insert_resource(shroud::ShroudMask(shroud::new_mask(&mut images)));
     commands.insert_resource(LandscapeMaterials {
         terrain: materials.add(load_terrain_material(
             &asset_server,
             &terrain.roads,
-            shroud.clone(),
             &mut images,
         )),
-        water: water_materials.add(water::material(shroud)),
+        water: water_materials.add(water::material()),
         foliage: standard.add(scenery::foliage_material(&mut images)),
     });
 }

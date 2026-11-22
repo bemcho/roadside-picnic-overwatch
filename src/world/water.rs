@@ -9,7 +9,6 @@ use bevy::shader::ShaderRef;
 use crate::assets::WATER_SHADER;
 
 use super::hydrology::WATER_LEVEL;
-use super::shroud;
 use super::terrain::{TerrainGrid, WaterVertex};
 
 pub(super) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterRipples>;
@@ -18,12 +17,6 @@ pub(super) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterRipples>
 pub(super) struct WaterRipples {
     #[uniform(100)]
     wave_scale: f32,
-    /// The shroud over unsurveyed ground (`shroud.rs`) and where it lies.
-    #[texture(101)]
-    #[sampler(102)]
-    shroud: Handle<Image>,
-    #[uniform(103)]
-    shroud_bounds: Vec4,
 }
 
 impl MaterialExtension for WaterRipples {
@@ -40,7 +33,7 @@ impl MaterialExtension for WaterRipples {
     }
 }
 
-pub(super) fn material(shroud: Handle<Image>) -> WaterMaterial {
+pub(super) fn material() -> WaterMaterial {
     WaterMaterial {
         base: StandardMaterial {
             alpha_mode: AlphaMode::Blend,
@@ -48,11 +41,7 @@ pub(super) fn material(shroud: Handle<Image>) -> WaterMaterial {
             reflectance: 0.32,
             ..default()
         },
-        extension: WaterRipples {
-            wave_scale: 1.0,
-            shroud,
-            shroud_bounds: shroud::mask_bounds(),
-        },
+        extension: WaterRipples { wave_scale: 1.0 },
     }
 }
 

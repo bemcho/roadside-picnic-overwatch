@@ -2,8 +2,10 @@
 
 mod contact;
 mod patrol;
+mod traffic;
 
 pub(super) use patrol::{Patrol, drive_patrol, spawn_patrol};
+pub(super) use traffic::{drive_traffic, spawn_traffic};
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
@@ -13,8 +15,8 @@ use bevy::world_serialization::WorldInstanceReady;
 
 use crate::assets;
 use crate::world::{
-    Collider, Crusher, Describe, Pillar, Place, STEP_HEIGHT, TERRAIN_HALF_SIZE, Terrain, Weight,
-    push_out,
+    Collider, Crusher, Describe, InstitutePass, Pillar, Place, STEP_HEIGHT, TERRAIN_HALF_SIZE,
+    Terrain, Weight, push_out,
 };
 
 use super::{
@@ -152,6 +154,8 @@ pub(crate) fn spawn_vehicle(
         Vehicle::default(),
         Collider(COLLISION),
         CAR,
+        // The stalkers' car runs on Institute papers: the gate's boom lifts for it.
+        InstitutePass,
         Describe {
             place: Place::Vehicle,
             radius: 2.4,

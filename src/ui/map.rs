@@ -20,9 +20,11 @@ use crate::world::{
 
 /// The map's height on screen, as a share of the window's.
 const HEIGHT: f32 = 78.0;
-/// Fog over unsurveyed ground: a pale haze, denser in patches.
-const FOG: [u8; 3] = [178, 184, 188];
-const FOG_ALPHA: (f32, f32) = (0.80, 0.95);
+/// Fog over unsurveyed ground: opaque near-black smoke, a shade lighter in
+/// patches. Even a few percent of the bright paper would show through, since
+/// the UI blends in linear light.
+const FOG: [u8; 3] = [9, 10, 12];
+const FOG_SMOKE: [u8; 3] = [22, 24, 28];
 const BIRDS: usize = 7;
 const MARKER: f32 = 12.0;
 
@@ -217,19 +219,23 @@ pub(super) fn update_map(
     }
 }
 
-/// Paints haze over every texel whose middle lies on unsurveyed ground.
+/// Paints smoke over every texel whose middle lies on unsurveyed ground.
 fn draw_fog(data: &mut [u8], explored: &Explored) {
     let size = fog_size();
     for (index, texel) in data.as_chunks_mut::<4>().0.iter_mut().enumerate() {
         let cell = UVec2::new(index as u32 % size.x, index as u32 / size.x);
         let pixel = (cell.as_vec2() + 0.5) / size.as_vec2() * MAP_SIZE;
+        let patch = lattice_hash(cell.x as i32, cell.y as i32, 0x3F09);
         let alpha = if explored.contains(map(pixel.x, pixel.y)) {
-            0.0
+            0
         } else {
-            let patch = lattice_hash(cell.x as i32, cell.y as i32, 0x3F09);
-            FOG_ALPHA.0 + (FOG_ALPHA.1 - FOG_ALPHA.0) * patch
+            255
         };
-        *texel = [FOG[0], FOG[1], FOG[2], (alpha * 255.0) as u8];
+        let shade = |channel: usize| {
+            let (dark, light) = (FOG[channel] as f32, FOG_SMOKE[channel] as f32);
+            (dark + (light - dark) * patch * patch) as u8
+        };
+        *texel = [shade(0), shade(1), shade(2), alpha];
     }
 }
 
@@ -286,7 +292,11 @@ mod tests {
             data[((cell.y * size.x + cell.x) * 4 + 3) as usize]
         };
         assert_eq!(alpha(Vec2::new(840.0, -113.0)), 0);
-        assert!(alpha(Vec2::new(-1200.0, 400.0)) > 190);
+        assert_eq!(
+            alpha(Vec2::new(-1200.0, 400.0)),
+            255,
+            "the smoke hides the map"
+        );
     }
 
     #[test]

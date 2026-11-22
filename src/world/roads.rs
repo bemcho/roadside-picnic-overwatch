@@ -115,6 +115,17 @@ const fn dirt(points: &'static [Vec2]) -> Route {
     }
 }
 
+/// Harmont's main road, south along the Perimeter to the old Borscht.
+const MAIN_ROAD: &[Vec2] = &[
+    YARD_TURN,
+    map(337.0, 362.0),
+    HARMONT_FORK,
+    map(307.0, 408.0),
+    PLAGUE_FORK,
+    map(292.0, 502.0),
+    OLD_BORSCHT,
+];
+
 /// The tracks of the Harmont map (`doc/Roadside_map.jpg`). Each route after
 /// the first starts on an earlier one.
 const ROUTES: &[Route] = &[
@@ -138,16 +149,7 @@ const ROUTES: &[Route] = &[
         map(757.0, 333.0),
         GARAGE,
     ]),
-    // Harmont's main road, south along the Perimeter to the old Borscht.
-    asphalt(&[
-        YARD_TURN,
-        map(337.0, 362.0),
-        HARMONT_FORK,
-        map(307.0, 408.0),
-        PLAGUE_FORK,
-        map(292.0, 502.0),
-        OLD_BORSCHT,
-    ]),
+    asphalt(MAIN_ROAD),
     // North past the motor pool to the Institute, and the avenue through
     // New Harmont's plaza.
     asphalt(&[YARD_TURN, MOTOR_POOL, AVENUE, INSTITUTE]),
@@ -208,6 +210,29 @@ const ROUTES: &[Route] = &[
         CRATER,
     ]),
 ];
+
+/// Where Harmont's traffic drives (`player/vehicle/traffic.rs`), each route
+/// with whether it closes on itself: the ring street round New Harmont's
+/// blocks, the plaza avenue short of the ring, and the road from the
+/// Institute down the main road to the Borscht.
+pub(crate) fn traffic_routes() -> [(Vec<Vec2>, bool); 3] {
+    let [west, east] = town::AVENUE;
+    let (west_side, east_side) = (town::STREETS[2], town::STREETS[3]);
+    // North, round the west side to south, then back up the east side.
+    let ring = west_side
+        .iter()
+        .chain(east_side[1..east_side.len() - 1].iter().rev())
+        .copied()
+        .collect();
+    let short_of_ring = Vec2::new(20.0, 0.0);
+    let avenue = vec![west + short_of_ring, town::PLAZA, east - short_of_ring];
+    let main = [INSTITUTE, AVENUE, MOTOR_POOL]
+        .into_iter()
+        .chain(MAIN_ROAD[1..].iter().copied())
+        .chain([BORSCHT_LANE, BORSCHT])
+        .collect();
+    [(ring, true), (avenue, false), (main, false)]
+}
 
 /// The dirt tracks and old asphalt roads outside the town's streets.
 pub(super) fn country_roads() -> impl Iterator<Item = &'static [Vec2]> {

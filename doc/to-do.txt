@@ -1,8 +1,15 @@
 extract dioramas like buildings models as separate models in order to navigate
+
 Harmont buildings are in the air
 
-add way point Shft + left click
-when player is moving legs are too spread should be close to eachother
-barier on closer to institute entry
-close the second entry only crawable breach in the wall hiddeng by plants have to be close enough to find it
-make cordon wall higher 3x with a lot of vegetation along
+add Institute vehicle https://studio.tripo3d.ai/3d-model/military-armored-vehicle-with-tracked-wheels-heavy-armor-rooftop-car-64efb0f3-6039-48fa-a8c7-44b7e3201c5f
+
+add secong long light on armoured - longer and wider light spot
+Harmont buildings are in the air
+
+skeletons, broken vehicles mark known anomalies
+
+Intro scene Earth globe showing zones
+Scene 1 trip 1
+Scene 2 need second for the trap in Quary
+Scene 3 trip 2

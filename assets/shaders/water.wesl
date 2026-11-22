@@ -6,29 +6,6 @@ import bevy_pbr::render::{
 };
 
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> wave_scale: f32;
-@group(constants::MATERIAL_BIND_GROUP) @binding(101) var shroud_mask: texture_2d<f32>;
-@group(constants::MATERIAL_BIND_GROUP) @binding(102) var shroud_sampler: sampler;
-@group(constants::MATERIAL_BIND_GROUP) @binding(103) var<uniform> shroud_bounds: vec4<f32>;
-
-// The shroud over unsurveyed ground (src/world/shroud.rs); kept in step with
-// terrain.wesl. How far it covers `p`: fully over unsurveyed cells, easing off over
-// the cell between, its edge wobbled so the survey grid doesn't show.
-fn shroud_at(p: vec2<f32>) -> f32 {
-    let wobble = vec2<f32>(
-        sin(p.y * 0.043 + 2.0 * sin(p.x * 0.019)),
-        cos(p.x * 0.051 + 2.0 * sin(p.y * 0.017)),
-    ) * 9.0;
-    let uv = (p + wobble - shroud_bounds.xy) * shroud_bounds.zw;
-    let seen = textureSampleLevel(shroud_mask, shroud_sampler, uv, 0.0).r;
-    return 1.0 - smoothstep(0.2, 0.8, seen);
-}
-
-// Unsurveyed ground turns dark, cold and grey, its relief faintly showing.
-fn veil(color: vec3<f32>, shroud: f32) -> vec3<f32> {
-    let grey = dot(color, vec3<f32>(0.2126, 0.7152, 0.0722));
-    return mix(color, grey * vec3<f32>(0.16, 0.18, 0.22), shroud);
-}
-
 fn ripple(p: vec2<f32>, direction: vec2<f32>, rate: f32, time: f32) -> vec2<f32> {
     return direction * cos(dot(p, direction) * rate + time);
 }
@@ -69,7 +46,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     pbr.material.emissive = vec4<f32>(color * (720.0 + fresnel * 620.0), 1.0);
 
     var out: FragmentOutput;
-    let lit = main_pass_post_lighting_processing(pbr, apply_pbr_lighting(pbr));
-    out.color = vec4<f32>(veil(lit.rgb, shroud_at(p)), lit.a);
+    out.color = main_pass_post_lighting_processing(pbr, apply_pbr_lighting(pbr));
     return out;
 }
