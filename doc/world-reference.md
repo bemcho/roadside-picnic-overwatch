@@ -106,16 +106,16 @@ the stalker stands still.
   over far low ground (shorter in humid air); the terrain shader masks it to low
   ground, and birds disable classic fog.
 - **Scenery** (`src/world/scenery.rs`): textured rock outcrops and reeds are drawn
-  in chunk batches. Every tree is an imported model: saplings, broadleaves, tall
-  conifers, birches, and dead trees (`assets/models/trees/medium/`) grow around
-  the hangar, in the named landmark groves and in three dense woods
+  in chunk batches. Every tree is an imported model: saplings, birches and dead
+  trees (`assets/models/trees/medium/`) grow around the hangar, in the named
+  landmark groves and in three dense woods
   (`canopy::WOODS`); open country has no trees. Their GLBs use one
   ~500-triangle primitive each: simplified textured wood and, for living
   trees, cutout crown faces baked from the supplied models. Within 8 m of the
   camera a tree swaps to its full scan (`trees/uhd/`, ~1.9M triangles), a
   child entity that crossfades by `VisibilityRange` and sways with it.
   `stream_close_trees` wants a tree's scan from `GpuScans` as the camera nears
-  (16 m from the tree's middle) and shows it once it is on the GPU (the five
+  (16 m from the tree's middle) and shows it once it is on the GPU (the three
   are pinned there behind the entry curtain). It drops the instance 5 m
   further out, or if the scan leaves the GPU.
   `src/world/canopy.rs` fits the roots and trunks, limits
@@ -429,7 +429,7 @@ the stalker stands still.
   (it works on the compressed file and keeps its KTX2 images byte-identical).
 - **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
   behind the splash the `ram://` asset source reads every streamed UHD scan
-  (the 42 in `world::uhd_files`: the five trees, the plants, then the sites
+  (the 40 in `world::uhd_files`: the three trees, the plants, then the sites
   nearest the hangar first) into RAM, four files at a time, while 2 GiB of
   RAM stay free (`RAM_HEADROOM`). A file that does not fit stays on disk and
   loads from `assets/` through the same source; the splash waits for the fill.
@@ -439,7 +439,7 @@ the stalker stands still.
   `STALKER_MODEL`, and the checkpoints, `SITE_CHECKPOINT`) are preloaded from
   `assets/` instead. Callers `want` a scan each frame from `UPLOAD_LEAD` (40 m)
   short of where it shows, passing how far the anchor is from where it would
-  show (0 or less: it shows now), the five tree scans are `pin`ned, and
+  show (0 or less: it shows now), the three tree scans are `pin`ned, and
   `scene()` returns the scan only once it is resident; a caller despawns its
   instance when the scan leaves, since the VRAM is freed only once nothing
   holds the scene. `GpuScans::plan` loads pinned scans first, then the
@@ -463,9 +463,9 @@ the stalker stands still.
   least recently shown unwanted one leaves, unpinned before pinned
   (`UHD scan … left the GPU` in the log). Where the driver cannot report
   VRAM, the budget is `--vram` (6 GB without it) less `DESKTOP_GB` (0.6),
-  `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060: peak RSS
+  `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060 (with five tree species): peak RSS
   9.3–11.7 GiB, the fill 3.3 GB in 10–14 s warm or cold, 1.4–2.1 GB of scans
-  on the GPU. All 42 scans would take about 4.4 GiB on the GPU, so every one
+  on the GPU. All 42 scans of then would take about 4.4 GiB on the GPU, so every one
   would stay from a driver budget of about 7.4 GiB (a 10 GB card); that is an
   estimate (14 of the 24 site scans measured, the rest taken at ~107 MiB,
   plus 2.4 GiB for the rest of the game and the 0.5 GiB margin), not run on

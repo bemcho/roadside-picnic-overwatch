@@ -85,20 +85,12 @@ pub(super) fn landmark_grove(at: Vec2) -> f32 {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Species {
     Small,
-    Broadleaf,
-    Tall,
     Birch,
     Dead,
 }
 
 impl Species {
-    pub(super) const ALL: [Self; 5] = [
-        Self::Small,
-        Self::Broadleaf,
-        Self::Tall,
-        Self::Birch,
-        Self::Dead,
-    ];
+    pub(super) const ALL: [Self; 3] = [Self::Small, Self::Birch, Self::Dead];
 
     fn model(self) -> &'static TreeModel {
         &MODELS[self as usize]
@@ -134,38 +126,6 @@ const MODELS: [TreeModel; Species::ALL.len()] = [
             radius: 0.017,
             bottom: -0.035,
             top: 0.35,
-        }],
-    },
-    TreeModel {
-        path: assets::TREE_BIG,
-        close: assets::TREE_BIG_UHD,
-        scale: (13.5, 19.5),
-        footprint: 0.22,
-        wind_bend: 0.017,
-        draw_distance: 195.0,
-        density: 2.0,
-        trunks: &[Pillar {
-            x: 0.019,
-            z: 0.022,
-            radius: 0.083,
-            bottom: -0.035,
-            top: 0.20,
-        }],
-    },
-    TreeModel {
-        path: assets::TREE_VERY_TALL,
-        close: assets::TREE_VERY_TALL_UHD,
-        scale: (25.5, 33.5),
-        footprint: 0.05,
-        wind_bend: 0.021,
-        draw_distance: 335.0,
-        density: 0.35,
-        trunks: &[Pillar {
-            x: 0.008,
-            z: -0.004,
-            radius: 0.024,
-            bottom: -0.035,
-            top: 0.15,
         }],
     },
     TreeModel {
@@ -218,13 +178,9 @@ impl ForestTree {
             return None;
         }
         let choice = roll(1);
-        let species = if choice < 0.32 {
+        let species = if choice < 0.52 {
             Species::Small
-        } else if choice < 0.52 {
-            Species::Broadleaf
-        } else if choice < 0.70 {
-            Species::Tall
-        } else if choice < 0.88 {
+        } else if choice < 0.81 {
             Species::Birch
         } else {
             Species::Dead
@@ -566,7 +522,7 @@ mod tests {
     use crate::world::terrain::base_tile;
 
     #[test]
-    fn the_stalker_fells_no_tree_and_only_big_ones_stop_a_car() {
+    fn the_stalker_fells_no_tree_and_a_car_fells_every_one() {
         let weight = |species: Species, height: f32| {
             ForestTree {
                 species,
@@ -578,17 +534,15 @@ mod tests {
         for species in Species::ALL {
             let (lowest, tallest) = species.model().scale;
             assert!(weight(species, lowest) > 100.0, "{species:?} too light");
-            let stops_cars = matches!(species, Species::Broadleaf | Species::Tall);
-            assert_eq!(
-                weight(species, tallest) > 12_000.0,
-                stops_cars,
-                "{species:?}"
+            assert!(
+                weight(species, tallest) < 12_000.0,
+                "{species:?} stops a car"
             );
         }
     }
 
     #[test]
-    fn the_five_tree_scans_are_pinned() {
+    fn the_three_tree_scans_are_pinned() {
         let mut app = App::new();
         app.insert_resource(GpuScans::new(1 << 30))
             .add_systems(Startup, pin_tree_scans);
@@ -599,8 +553,6 @@ mod tests {
         pinned.sort_unstable();
         let mut trees = [
             assets::TREE_SMALL_UHD,
-            assets::TREE_BIG_UHD,
-            assets::TREE_VERY_TALL_UHD,
             assets::TREE_BIRCH_UHD,
             assets::TREE_DEAD_UHD,
         ];

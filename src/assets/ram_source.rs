@@ -25,7 +25,7 @@ use super::UhdFiles;
 
 pub use reader::{RamDir, register_ram_source};
 
-/// The source's name, as in `ram://models/trees/uhd/tree_big.glb`.
+/// The source's name, as in `ram://models/trees/uhd/tree_birch.glb`.
 pub const RAM_SOURCE: &str = "ram";
 
 /// Files read at once: each open file holds an 8 MiB read pipe.
@@ -428,9 +428,9 @@ mod tests {
 
     #[test]
     fn uhd_paths_use_the_ram_source_on_native() {
-        let path = crate::assets::uhd("models/trees/uhd/tree_big.glb");
+        let path = crate::assets::uhd("models/trees/uhd/tree_birch.glb");
         assert_eq!(path.source(), &AssetSourceId::from(RAM_SOURCE));
-        assert_eq!(path.path(), Path::new("models/trees/uhd/tree_big.glb"));
+        assert_eq!(path.path(), Path::new("models/trees/uhd/tree_birch.glb"));
     }
 
     #[test]

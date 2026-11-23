@@ -145,7 +145,7 @@ systems:
    render-world system publishes `PipelineCache::waiting_pipelines().count()`
    through a shared atomic, and the world publishes `PlantsGrowing` while any
    streamed tile still has plants to grow or spawn, and `GpuScans::settled`
-   stays false while a UHD scan is loading or a pinned one (the five trees,
+   stays false while a UHD scan is loading or a pinned one (the three trees,
    pinned by `canopy::pin_tree_scans`) is not yet on the GPU; the curtain
    lifts after all stay idle for 0.4 s (12 s cap) and logs `Entered the
    Zone`, hiding shader compilation, first-frame spawn hitches, the trees'

@@ -467,11 +467,9 @@ mod tests {
         let unique: std::collections::HashSet<_> = files.iter().collect();
         assert_eq!(unique.len(), files.len(), "a UHD file is listed twice");
         assert_eq!(
-            files[..5],
+            files[..3],
             [
                 crate::assets::TREE_SMALL_UHD,
-                crate::assets::TREE_BIG_UHD,
-                crate::assets::TREE_VERY_TALL_UHD,
                 crate::assets::TREE_BIRCH_UHD,
                 crate::assets::TREE_DEAD_UHD,
             ]
