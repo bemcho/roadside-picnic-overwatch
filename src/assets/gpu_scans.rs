@@ -1,32 +1,23 @@
 //! Which UHD scans hold a copy on the GPU: the budget, admission and eviction.
 //!
 //! Callers `want` and `pin` scans each frame and show a scan's `scene` once it
-//! is on the GPU. `GpuScans::plan` says what to load and what to drop;
-//! `GpuScansPlugin` loads the admitted scans render-only from `ram://`,
-//! measures them, learns from the render world when they are resident, and
-//! keeps the budget on the driver's live VRAM reading (`vram`).
+//! is on the GPU. This module keeps the books: `GpuScans::plan` says what to
+//! load and what to drop. `streaming` (`GpuScansPlugin`) loads the admitted
+//! scans render-only from `ram://`, measures them and learns from the render
+//! world (`residency`) when they are resident; `vram` keeps the budget on the
+//! driver's live VRAM reading.
 
 mod residency;
+mod streaming;
 mod vram;
 
 use std::collections::{BTreeMap, HashSet};
 
-use bevy::asset::{LoadState, RecursiveDependencyLoadState, RenderAssetUsages};
-use bevy::ecs::system::SystemParam;
-use bevy::gltf::{Gltf, GltfLoaderSettings, GltfMesh};
 use bevy::log::warn;
 use bevy::prelude::*;
-use bevy::render::render_asset::RenderAssetBytesPerFrame;
-use bevy::render::{Render, RenderApp, RenderSystems};
 
-#[cfg(not(target_arch = "wasm32"))]
-use crate::assets::ram_source::RamFill;
-use crate::assets::uhd;
-use crate::launch::{DEFAULT_VRAM_GB, LaunchOptions};
-use crate::states::AppState;
-
-use residency::{ScanParts, ScanResidency, publish_scan_residency, scan_bytes};
-use vram::track_vram_budget;
+pub use streaming::GpuScansPlugin;
+use streaming::ScanHandles;
 
 /// Seconds a scan stays on the GPU after it was last wanted, whatever the pressure.
 pub const KEEP_SECONDS: f32 = 120.0;
@@ -43,9 +34,6 @@ pub const DESKTOP_GB: f32 = 0.6;
 pub const GAME_VRAM_GB: f32 = 2.4;
 /// GPU bytes per file byte of a scan (the five trees: about 700 MB from 428 MB).
 pub const GPU_BYTES_PER_FILE_BYTE: f32 = 1.65;
-/// Bytes the render world uploads per frame. A soft limit: an asset larger
-/// than it still goes up whole, then the rest wait for the next frame.
-const UPLOAD_BYTES_PER_FRAME: usize = 32 * 1024 * 1024;
 
 /// The driver's device-local heap budget for this process and this process's
 /// usage of it, in bytes.
@@ -74,10 +62,15 @@ fn gb(bytes: u64) -> f64 {
 
 /// The scan budget from a live driver reading: what the driver (or the
 /// player's `cap`) leaves once everything but the scans is counted, less a
-/// margin. `usage - resident_scans` is everything else the game holds.
+/// margin. `usage - resident_scans` is everything else the game holds; it
+/// never counts for less than `GAME_VRAM_GB`, so a reading taken while the
+/// world's own uploads are still landing does not over-admit.
 pub fn live_scan_budget(reading: VramReading, resident_scans: u64, cap: Option<u64>) -> u64 {
     let ceiling = cap.map_or(reading.budget, |cap| cap.min(reading.budget));
-    let others = reading.usage.saturating_sub(resident_scans);
+    let others = reading
+        .usage
+        .saturating_sub(resident_scans)
+        .max(gib(GAME_VRAM_GB));
     ceiling
         .saturating_sub(others)
         .saturating_sub(gib(MARGIN_GB))
@@ -97,12 +90,6 @@ enum State {
     Loaded,
 }
 
-/// The strong handles that keep a scan's GPU copy alive; dropping them frees it.
-struct ScanHandles {
-    gltf: Handle<Gltf>,
-    scene: Handle<WorldAsset>,
-}
-
 #[derive(Default)]
 struct Scan {
     state: State,
@@ -118,10 +105,9 @@ struct Scan {
     waiting: bool,
     /// Held from admission until eviction.
     handles: Option<ScanHandles>,
-    /// Loaded, and every mesh and image of it is prepared in the render world.
+    /// Loaded, and the render world confirmed every mesh and image of it (a
+    /// failed load is confirmed at once, with nothing on the GPU).
     resident: bool,
-    /// Its last load failed: it counts at its estimate until it leaves.
-    failed: bool,
 }
 
 impl Scan {
@@ -135,7 +121,8 @@ impl Scan {
 ///
 /// A scan is off the GPU, loading (admitted, size not yet measured) or loaded.
 /// Loading and loaded scans both count in `used`. A loaded scan is resident
-/// once the render world has prepared all of it.
+/// once the render world has prepared all of it; only resident scans count in
+/// `resident_bytes`.
 #[derive(Resource, Default)]
 pub struct GpuScans {
     budget: u64,
@@ -164,38 +151,37 @@ impl GpuScans {
         self.budget
     }
 
-    /// Bytes of the scans that are loaded, not those still loading. Past the
-    /// budget, `plan` drops scans: it is what the driver's usage already holds.
+    /// Bytes of the scans the render world confirmed on the GPU: what the
+    /// driver's usage already holds. Past the budget, `plan` drops scans. A
+    /// scan still loading or uploading is not counted, so it never triggers that.
     pub fn resident_bytes(&self) -> u64 {
-        self.bytes_where(|state| state == State::Loaded)
+        self.bytes_where(|scan| scan.state == State::Loaded && scan.resident)
     }
 
     /// Bytes of the scans loading or loaded.
     pub fn used(&self) -> u64 {
-        self.bytes_where(|state| state != State::Off)
+        self.bytes_where(|scan| scan.state != State::Off)
     }
 
     /// The scan's scene, once every mesh and image of it is on the GPU.
     // The tree, plant, site and artifact streams of Tasks 7 and 8 call it.
     #[cfg_attr(not(test), expect(dead_code))]
     pub fn scene(&self, path: &'static str) -> Option<Handle<WorldAsset>> {
-        let scan = self.scans.get(path)?;
-        let handles = scan.handles.as_ref().filter(|_| scan.resident)?;
-        Some(handles.scene.clone())
+        let scan = self.scans.get(path).filter(|scan| scan.resident)?;
+        scan.handles.as_ref()?.scene.clone()
     }
 
     /// No scan loading or waiting for the render world to confirm it, and
-    /// every pinned scan on the GPU. A scan whose load failed never holds it up.
+    /// every pinned scan that fits on the GPU. A pinned scan admission
+    /// declines (it does not fit without dropping others, which pins never
+    /// do) and a failed load (confirmed with nothing on the GPU) hold nothing up.
     // The entry curtain waits for it from Task 6.
     #[cfg_attr(not(test), expect(dead_code))]
     pub fn settled(&self) -> bool {
-        self.scans.values().all(|scan| {
-            scan.failed
-                || match scan.state {
-                    State::Off => !scan.pinned,
-                    State::Loading => false,
-                    State::Loaded => scan.resident,
-                }
+        self.scans.values().all(|scan| match scan.state {
+            State::Off => !scan.pinned || !self.fits(scan.bytes),
+            State::Loading => false,
+            State::Loaded => scan.resident,
         })
     }
 
@@ -289,75 +275,22 @@ impl GpuScans {
         self.scans.entry(path).or_default()
     }
 
-    /// Starts loading an admitted scan render-only, from `ram://` (or
-    /// `assets/` where the fill left it): its meshes and images live on the GPU only.
-    fn load(&mut self, path: &'static str, server: &AssetServer) {
-        // Both loads take the same settings, so the file loads once.
-        let gltf = server
-            .load_builder()
-            .with_settings(render_only)
-            .load(uhd(path));
-        let scene = server
-            .load_builder()
-            .with_settings(render_only)
-            .load(GltfAssetLabel::Scene(0).from_asset(uhd(path)));
-        let scan = self.scan_mut(path);
-        scan.handles = Some(ScanHandles { gltf, scene });
-        scan.resident = false;
-        scan.failed = false;
-    }
-
-    /// Drops an evicted scan's handles; Bevy then frees its GPU copy.
-    fn unload(&mut self, path: &'static str) {
-        let scan = self.scan_mut(path);
-        scan.handles = None;
-        scan.resident = false;
-        scan.failed = false;
-    }
-
-    /// The loading scans and their glTF assets.
-    fn loading(&self) -> Vec<(&'static str, AssetId<Gltf>)> {
-        self.scans
-            .iter()
-            .filter(|(_, scan)| scan.state == State::Loading)
-            .filter_map(|(&path, scan)| Some((path, scan.handles.as_ref()?.gltf.id())))
-            .collect()
-    }
-
-    /// The loading scan whose glTF asset this is.
-    fn loading_path(&self, id: AssetId<Gltf>) -> Option<&'static str> {
-        self.loading()
-            .into_iter()
-            .find_map(|(path, gltf)| (gltf == id).then_some(path))
-    }
-
-    /// The load failed: the scan ends loading at its estimate and shows its
-    /// mid tier; it is not retried until it has left the GPU.
-    fn fail(&mut self, path: &'static str) {
-        self.measured(path, None);
-        let scan = self.scan_mut(path);
-        scan.handles = None;
-        scan.failed = true;
-    }
-
-    /// Marks a loaded scan resident; its bytes the first time, `None` after.
-    fn mark_resident(&mut self, path: &'static str) -> Option<u64> {
-        let scan = self.scans.get_mut(path)?;
-        let newly = scan.state == State::Loaded && scan.handles.is_some() && !scan.resident;
-        scan.resident |= newly;
-        newly.then_some(scan.bytes)
-    }
-
-    fn bytes_where(&self, state: impl Fn(State) -> bool) -> u64 {
+    fn bytes_where(&self, counted: impl Fn(&Scan) -> bool) -> u64 {
         self.scans
             .values()
-            .filter(|scan| state(scan.state))
+            .filter(|scan| counted(scan))
             .map(|scan| scan.bytes)
             .sum()
     }
 
     fn room(&self) -> u64 {
         self.budget.saturating_sub(self.used())
+    }
+
+    /// Whether `bytes` more fit the budget without dropping anything: all a
+    /// pinned scan may ask, as it never evicts others.
+    fn fits(&self, bytes: u64) -> bool {
+        self.deficit(bytes) == 0
     }
 
     /// Bytes that must leave before `bytes` more fit the budget. Unlike
@@ -377,14 +310,16 @@ impl GpuScans {
         }
     }
 
-    /// For when the loaded scans alone (`resident_bytes`) exceed the budget:
-    /// drops the oldest loaded scan not shown this frame, unpinned before
-    /// pinned. Scans still loading are neither counted nor dropped.
+    /// For when the resident scans alone (`resident_bytes`) exceed the budget:
+    /// drops the oldest resident scan not shown this frame, unpinned before
+    /// pinned. Scans still loading or uploading are neither counted nor dropped.
     fn evict_over_budget(&mut self) -> Option<&'static str> {
         let (&path, _) = self
             .scans
             .iter()
-            .filter(|(_, scan)| scan.state == State::Loaded && scan.wanted.is_none())
+            .filter(|(_, scan)| {
+                scan.state == State::Loaded && scan.resident && scan.wanted.is_none()
+            })
             .min_by(|(_, a), (_, b)| {
                 a.pinned
                     .cmp(&b.pinned)
@@ -416,8 +351,8 @@ impl GpuScans {
         };
         let (bytes, pinned) = (scan.bytes, scan.pinned);
         // A pinned scan never evicts others: it loads only into room already free.
-        let fits = self.deficit(bytes) == 0
-            || (!pinned && self.free_idle(bytes, now, &mut admission.evict));
+        let fits =
+            self.fits(bytes) || (!pinned && self.free_idle(bytes, now, &mut admission.evict));
         if fits {
             let scan = self.scan_mut(path);
             scan.state = State::Loading;
@@ -477,161 +412,6 @@ impl GpuScans {
     }
 }
 
-/// Loads the scans `GpuScans` admits, learns when they are on the GPU, and
-/// keeps the budget on the driver's live VRAM reading.
-pub struct GpuScansPlugin;
-
-impl Plugin for GpuScansPlugin {
-    fn build(&self, app: &mut App) {
-        // The budget until the first live reading, and for good where the
-        // driver cannot report VRAM.
-        let vram_gb = app
-            .world()
-            .get_resource::<LaunchOptions>()
-            .and_then(|launch| launch.vram_gb)
-            .unwrap_or(DEFAULT_VRAM_GB);
-        let residency = ScanResidency::default();
-        app.insert_resource(GpuScans::new(scan_budget(vram_gb)))
-            .insert_resource(RenderAssetBytesPerFrame::new(UPLOAD_BYTES_PER_FRAME))
-            .insert_resource(residency.clone())
-            .add_systems(
-                First,
-                (track_vram_budget, note_resident_scans).run_if(in_state(AppState::InGame)),
-            )
-            .add_systems(Update, measure_scans)
-            .add_systems(Last, admit_scans.run_if(in_state(AppState::InGame)));
-        #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(OnEnter(AppState::InGame), estimate_scans);
-        if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
-            render_app.insert_resource(residency).add_systems(
-                Render,
-                publish_scan_residency.in_set(RenderSystems::PrepareResources),
-            );
-        }
-    }
-}
-
-/// Keeps a scan's meshes and images in the render world only.
-fn render_only(settings: &mut GltfLoaderSettings) {
-    settings.load_meshes = RenderAssetUsages::RENDER_WORLD;
-    settings.load_materials = RenderAssetUsages::RENDER_WORLD;
-}
-
-/// Sizes every UHD scan from its file before the first `plan`: a scan never
-/// estimated would count as 0 bytes and fit anywhere. The splash turns ready
-/// only once the fill is full, so every file's length is known by now. The
-/// web build has no fill: there each scan counts 0 bytes until `measured`
-/// sizes it after its first load.
-#[cfg(not(target_arch = "wasm32"))]
-fn estimate_scans(fill: Res<RamFill>, mut scans: ResMut<GpuScans>) {
-    for &(path, len) in fill.file_lens() {
-        scans.estimate(path, len);
-    }
-}
-
-/// Applies this frame's plan: evicted scans drop their handles, which frees
-/// their GPU copy, and admitted ones start loading. It runs only in game, so
-/// no `ram://` load starts before the fill is full.
-fn admit_scans(
-    mut scans: ResMut<GpuScans>,
-    server: Res<AssetServer>,
-    time: Res<Time<Real>>,
-    residency: Res<ScanResidency>,
-) {
-    let admission = scans.plan(time.elapsed_secs());
-    for path in admission.evict {
-        scans.unload(path);
-        residency.lock().forget(path);
-        info!("UHD scan {path} left the GPU");
-    }
-    for path in admission.load {
-        scans.load(path, &server);
-    }
-}
-
-/// The asset stores a finished scan is measured from.
-#[derive(SystemParam)]
-struct ScanAssets<'w> {
-    server: Res<'w, AssetServer>,
-    gltfs: Res<'w, Assets<Gltf>>,
-    gltf_meshes: Res<'w, Assets<GltfMesh>>,
-    meshes: Res<'w, Assets<Mesh>>,
-    images: Res<'w, Assets<Image>>,
-}
-
-impl ScanAssets<'_> {
-    /// The meshes and images of a loaded scan: every primitive's mesh and
-    /// every texture the file embeds.
-    fn parts(&self, path: &'static str, gltf: &Gltf) -> ScanParts {
-        let meshes = gltf
-            .meshes
-            .iter()
-            .filter_map(|mesh| self.gltf_meshes.get(mesh))
-            .flat_map(|mesh| mesh.primitives.iter().map(|primitive| primitive.mesh.id()))
-            .collect();
-        let images = (0..)
-            .map_while(|index| {
-                let texture = GltfAssetLabel::Texture(index).from_asset(uhd(path));
-                self.server.get_path_id(texture)
-            })
-            .filter_map(|id| id.try_typed::<Image>().ok())
-            .collect();
-        ScanParts { meshes, images }
-    }
-}
-
-/// Measures each scan whose load finished this frame, before render extract
-/// takes its data, and hands its parts to the render world to confirm. A
-/// failed load ends at its estimate.
-fn measure_scans(
-    mut loads: MessageReader<AssetEvent<Gltf>>,
-    assets: ScanAssets,
-    mut scans: ResMut<GpuScans>,
-    residency: Res<ScanResidency>,
-) {
-    for event in loads.read() {
-        let &AssetEvent::LoadedWithDependencies { id } = event else {
-            continue;
-        };
-        let (Some(path), Some(gltf)) = (scans.loading_path(id), assets.gltfs.get(id)) else {
-            continue;
-        };
-        let parts = assets.parts(path, gltf);
-        let bytes = scan_bytes(&parts, &assets.meshes, &assets.images);
-        if bytes.is_none() {
-            warn!(
-                "UHD scan {path} left for the GPU before it was measured; it counts at its estimate"
-            );
-        }
-        scans.measured(path, bytes);
-        residency.lock().waiting.insert(path, parts);
-    }
-    for (path, id) in scans.loading() {
-        if let Some(
-            (LoadState::Failed(err), _, _) | (_, _, RecursiveDependencyLoadState::Failed(err)),
-        ) = assets.server.get_load_states(id)
-        {
-            error!("UHD scan {path} failed to load: {err}");
-            scans.fail(path);
-        }
-    }
-}
-
-/// Copies the render world's confirmations into `GpuScans` and logs each
-/// scan's first frame on the GPU.
-fn note_resident_scans(mut scans: ResMut<GpuScans>, residency: Res<ScanResidency>) {
-    let residency = residency.lock();
-    for &path in &residency.ready {
-        if let Some(bytes) = scans.mark_resident(path) {
-            let (used, budget) = (gb(scans.used()), gb(scans.budget()));
-            info!(
-                "UHD scan {path} on the GPU ({} MB); {used:.1} of {budget:.1} GB",
-                bytes >> 20
-            );
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use crate::launch::DEFAULT_VRAM_GB;
@@ -647,18 +427,25 @@ mod tests {
         }
     }
 
-    /// Wants the scan, plans it in with room to spare, and reports its size.
+    /// The render world confirms the loaded scan, as `note_resident_scans` would.
+    fn confirm(scans: &mut GpuScans, path: &'static str) {
+        scans.scan_mut(path).resident = true;
+    }
+
+    /// Wants the scan, plans it in with room to spare, reports its size, and
+    /// confirms it on the GPU.
     fn fake_loaded(scans: &mut GpuScans, path: &'static str, bytes: u64, last_used: f32) {
         scans.want(path, 0.0);
         assert_eq!(scans.plan(last_used).load, [path], "{path} needs room");
         scans.measured(path, Some(bytes));
+        confirm(scans, path);
     }
 
     /// Gives a scan the handles `load` would, without an asset server.
     fn fake_handles(scans: &mut GpuScans, path: &'static str) {
         scans.scan_mut(path).handles = Some(ScanHandles {
             gltf: Handle::default(),
-            scene: Handle::default(),
+            scene: None,
         });
     }
 
@@ -672,7 +459,7 @@ mod tests {
         assert_eq!(scans.scene("a"), None, "loading");
         assert_eq!(scans.mark_resident("a"), None, "not loaded yet");
 
-        scans.measured("a", Some(12 * MB));
+        scans.loaded("a", Handle::default(), Some(12 * MB));
         assert_eq!(scans.scene("a"), None, "loaded, still uploading");
         assert_eq!(scans.mark_resident("a"), Some(12 * MB));
         assert_eq!(scans.scene("a"), Some(Handle::default()));
@@ -687,25 +474,56 @@ mod tests {
         let mut scans = GpuScans::new(100 * MB);
         assert!(scans.settled(), "nothing asked for");
         scans.estimate_exact("tree", 10 * MB);
-        scans.estimate_exact("site", 10 * MB);
         scans.pin("tree");
-        assert!(!scans.settled(), "a pinned scan is off the GPU");
+        assert!(!scans.settled(), "a pinned scan that fits is off the GPU");
 
         assert_eq!(scans.plan(0.0).load, ["tree"]);
         fake_handles(&mut scans, "tree");
         assert!(!scans.settled(), "loading");
-        scans.measured("tree", Some(10 * MB));
+        scans.loaded("tree", Handle::default(), Some(10 * MB));
         assert!(!scans.settled(), "waiting for the render world");
         scans.mark_resident("tree");
         assert!(scans.settled());
+    }
 
+    #[test]
+    fn a_pinned_scan_admission_declines_does_not_hold_settled() {
+        let mut scans = GpuScans::new(300 * MB);
+        fake_loaded(&mut scans, "site", 100 * MB, 0.0);
+        scans.estimate_exact("tree", 250 * MB);
+        scans.pin("tree");
         scans.want("site", 0.0);
-        assert_eq!(scans.plan(1.0).load, ["site"]);
+        assert!(
+            scans.plan(1.0).load.is_empty(),
+            "a pin never evicts the site"
+        );
+        assert!(
+            scans.settled(),
+            "the tree cannot fit, so nothing waits for it"
+        );
+
+        scans.set_budget(400 * MB); // room after all: it loads next plan
+        assert!(!scans.settled());
+        assert_eq!(scans.plan(2.0).load, ["tree"]);
+    }
+
+    #[test]
+    fn a_failed_load_holds_neither_settled_nor_room() {
+        let mut scans = GpuScans::new(100 * MB);
+        scans.estimate_exact("site", 60 * MB);
+        scans.want("site", 0.0);
+        assert_eq!(scans.plan(0.0).load, ["site"]);
         fake_handles(&mut scans, "site");
         assert!(!scans.settled(), "loading");
+
         scans.fail("site");
-        assert!(scans.settled(), "a failed load holds nothing up");
+        assert!(scans.settled());
         assert_eq!(scans.scene("site"), None);
+        assert_eq!((scans.used(), scans.resident_bytes()), (0, 0));
+        scans.estimate_exact("other", 60 * MB);
+        scans.want("site", 0.0);
+        scans.want("other", 1.0);
+        assert_eq!(scans.plan(1.0).load, ["other"], "its room is free");
     }
 
     #[test]
@@ -749,6 +567,16 @@ mod tests {
         assert_eq!(
             live_scan_budget(reading, gib(0.5), Some(gib(3.5))),
             gib(3.5 - 2.5 - MARGIN_GB)
+        );
+        // Early in the run the world's own uploads are still landing: the
+        // 1.8 GiB in use count as the game's settled 2.4 GiB.
+        let early = VramReading {
+            budget: gib(4.9),
+            usage: gib(1.8),
+        };
+        assert_eq!(
+            live_scan_budget(early, 0, None),
+            gib(4.9) - gib(GAME_VRAM_GB) - gib(MARGIN_GB)
         );
         assert_eq!(
             live_scan_budget(
@@ -853,6 +681,7 @@ mod tests {
         let admission = scans.plan(200.0); // b needs all the room: idle a leaves
         assert_eq!((admission.evict, admission.load), (vec!["a"], vec!["b"]));
         scans.measured("b", Some(300 * MB));
+        confirm(&mut scans, "b");
 
         scans.set_budget(0); // another program takes the VRAM: b leaves too
         assert_eq!(scans.plan(400.0).evict, ["b"]);
@@ -951,10 +780,15 @@ mod tests {
         let admission = scans.plan(2.0);
         assert!(admission.evict.is_empty() && admission.load.is_empty());
 
-        // Once b is measured the 300 MB on the GPU really exceed the budget.
+        // Measured, b may still be uploading: it does not count yet either.
         scans.measured("b", Some(200 * MB));
         scans.want("b", 1.0);
-        assert_eq!(scans.plan(3.0).evict, ["a"]);
+        assert!(scans.plan(3.0).evict.is_empty());
+
+        // Once the render world confirms b, 300 MB on the GPU exceed the budget.
+        confirm(&mut scans, "b");
+        scans.want("b", 1.0);
+        assert_eq!(scans.plan(4.0).evict, ["a"]);
     }
 
     #[test]
@@ -996,6 +830,8 @@ mod tests {
         assert_eq!((scans.used(), scans.resident_bytes()), (estimated, 0)); // still loading
 
         scans.measured("a", Some(90 * MB));
+        assert_eq!((scans.used(), scans.resident_bytes()), (90 * MB, 0)); // uploading
+        confirm(&mut scans, "a");
         assert_eq!((scans.used(), scans.resident_bytes()), (90 * MB, 90 * MB));
         scans.estimate("a", 500 * MB); // a later estimate must not undo the measure
         assert_eq!(scans.used(), 90 * MB);
@@ -1008,6 +844,7 @@ mod tests {
         scans.want("a", 1.0);
         scans.plan(0.0);
         scans.measured("a", None);
+        confirm(&mut scans, "a");
         assert_eq!((scans.used(), scans.resident_bytes()), (100 * MB, 100 * MB));
     }
 }

@@ -47,8 +47,10 @@ fn vram_gb(value: Option<&str>) -> Option<f32> {
         .and_then(|value| value.parse::<f32>().ok())
         .filter(|gb| gb.is_finite() && *gb > 0.0);
     if parsed.is_none() {
-        let value = value.unwrap_or("nothing");
-        warn!("--vram needs a positive number of GB, not {value}; ignoring it");
+        match value {
+            Some(value) => warn!("--vram needs a positive number of GB, not {value}; ignoring it"),
+            None => warn!("--vram needs a positive number of GB after it; ignoring it"),
+        }
     }
     parsed
 }

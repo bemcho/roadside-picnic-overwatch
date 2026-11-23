@@ -11,25 +11,36 @@ use super::{GpuScans, VramReading, gb, gib, live_scan_budget};
 /// Seconds between two readings of the driver's budget.
 const READ_EVERY: f32 = 1.0;
 
+/// What `track_vram_budget` has read and said so far.
+#[derive(Default)]
+pub struct VramLog {
+    /// When to read the driver next.
+    next: f32,
+    /// A reading came, and was logged.
+    read: bool,
+    /// A reading came back empty before any came, and was warned about.
+    warned: bool,
+}
+
 /// About once a second, sets the scan budget from the driver's live reading,
 /// capped by `--vram`. Where the driver cannot report one, the fallback
-/// `GpuScansPlugin` set stays.
+/// `GpuScansPlugin` set stays. The first reading is logged whenever it comes;
+/// an empty one is warned about once, and only while none has come.
 pub fn track_vram_budget(
     mut scans: ResMut<GpuScans>,
     device: Res<RenderDevice>,
     launch: Res<LaunchOptions>,
     time: Res<Time<Real>>,
-    // 0 until the first reading.
-    mut next: Local<f32>,
+    mut log: Local<VramLog>,
 ) {
     let now = time.elapsed_secs();
-    if now < *next {
+    if now < log.next {
         return;
     }
-    let first = *next == 0.0;
-    *next = now + READ_EVERY;
+    log.next = now + READ_EVERY;
     let Some(reading) = read_vram(&device) else {
-        if first {
+        if !log.read && !log.warned {
+            log.warned = true;
             let assumed = launch.vram_gb.unwrap_or(DEFAULT_VRAM_GB);
             let s = gb(scans.budget());
             warn!(
@@ -40,7 +51,8 @@ pub fn track_vram_budget(
     };
     let budget = live_scan_budget(reading, scans.resident_bytes(), launch.vram_gb.map(gib));
     scans.set_budget(budget);
-    if first {
+    if !log.read {
+        log.read = true;
         let (b, u, s) = (gb(reading.budget), gb(reading.usage), gb(budget));
         info!("VRAM: driver budget {b:.1} GB, game using {u:.1} GB; UHD scans may use {s:.1} GB");
     }
@@ -63,6 +75,9 @@ pub fn heap_reading(heaps: &[(bool, u64)], budgets: &[u64], usages: &[u64]) -> O
 
 /// The driver's reading for the game's device, where it runs on Vulkan with
 /// `VK_EXT_memory_budget` (wgpu enables it whenever the driver offers it).
+/// It is the query wgpu-hal's own `get_memory_properties` makes
+/// (`vulkan/device.rs`), through the same `VK_KHR_get_physical_device_properties2`
+/// entry point, which wgpu-hal enables on the instance whenever it is offered.
 // The platforms where wgpu builds its Vulkan backend.
 #[cfg(any(
     windows,
@@ -71,30 +86,32 @@ pub fn heap_reading(heaps: &[(bool, u64)], budgets: &[u64], usages: &[u64]) -> O
     target_os = "freebsd"
 ))]
 pub fn read_vram(device: &RenderDevice) -> Option<VramReading> {
+    use ash::khr::get_physical_device_properties2 as properties2;
     use ash::vk;
     use wgpu::hal::api::Vulkan;
 
-    // SAFETY: the hal device is only read from (its instance and physical
-    // device); nothing is created or destroyed through it, and the guard drops
-    // at the end of this function.
+    // SAFETY: `as_hal` asks that the hal device is not destroyed through the
+    // guard and that wgpu-hal's rules hold. Only its instance and physical
+    // device handles are read; nothing is created or destroyed, and the guard
+    // drops at the end of this function.
     let hal = unsafe { device.wgpu_device().as_hal::<Vulkan>() }?;
     let instance = hal.shared_instance();
     let has_budget = hal
         .enabled_device_extensions()
         .contains(&ash::ext::memory_budget::NAME);
-    if !has_budget || instance.instance_api_version() < vk::API_VERSION_1_1 {
+    if !has_budget || !instance.extensions().contains(&properties2::NAME) {
         return None;
     }
+    let loader = properties2::Instance::new(instance.entry(), instance.raw_instance());
     let mut budget = vk::PhysicalDeviceMemoryBudgetPropertiesEXT::default();
     let mut properties = vk::PhysicalDeviceMemoryProperties2::default().push_next(&mut budget);
-    // SAFETY: the physical device belongs to this instance, the instance is
-    // Vulkan 1.1 or later (the query is core there), and the chained budget
-    // struct's extension is enabled on the device. It is the query wgpu-hal
-    // makes in `vulkan/device.rs` `get_memory_properties`.
+    // SAFETY: `vkGetPhysicalDeviceMemoryProperties2KHR` is loaded from this
+    // instance, which enabled `VK_KHR_get_physical_device_properties2`
+    // (checked above); the physical device was enumerated from it; the one
+    // struct chained to `properties` belongs to `VK_EXT_memory_budget`, which
+    // the device enabled (checked above); both structs outlive the call.
     unsafe {
-        instance
-            .raw_instance()
-            .get_physical_device_memory_properties2(hal.raw_physical_device(), &mut properties);
+        loader.get_physical_device_memory_properties2(hal.raw_physical_device(), &mut properties);
     }
     let memory = properties.memory_properties;
     let count = (memory.memory_heap_count as usize).min(vk::MAX_MEMORY_HEAPS);

@@ -13,10 +13,11 @@ edition = "2024"
 # tools/compress_glb_textures.py precompiles to BC7/BC5 with mip chains.
 bevy = { version = "0.20.1", default-features = false, features = ["3d", "ui", "audio", "wav", "jpeg", "ktx2", "zstd_rust"] }
 
-# Native only: the driver's live VRAM budget, read through wgpu's Vulkan
-# backend (`src/assets/gpu_scans/vram.rs`). Both are the versions Bevy already
-# builds, with no new features, so nothing new is compiled.
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# Where wgpu builds its Vulkan backend (the same cfg as `read_vram`): the
+# driver's live VRAM budget, read through that backend
+# (`src/assets/gpu_scans/vram.rs`). Both are the versions Bevy already builds,
+# with no new features, so nothing new is compiled.
+[target.'cfg(any(windows, target_os = "linux", target_os = "android", target_os = "freebsd"))'.dependencies]
 ash = "0.38"
 wgpu = { version = "30", default-features = false, features = ["vulkan"] }
 

@@ -204,7 +204,9 @@ repository.
 ### Graphics quality
 
 The game reads every close-up (UHD) model once at start and keeps it in RAM,
-so the first loading screen takes longer. That uses about 3.3 GB of RAM.
+so the first loading screen takes longer. That uses about 3.3 GB of RAM. It
+always leaves 2 GB of RAM free: on a machine short of RAM, the models that
+do not fit stay on disk and load from there when needed.
 
 It keeps as many close-up models on the GPU as the driver says fit, and frees
 the least recently seen ones when video memory runs short.
