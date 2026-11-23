@@ -770,7 +770,10 @@ Important paths:
     buffer while it copies; at the default 512 MiB cap that spike ran a 6 GB
     card out of memory ("general mesh slab ... is invalid", then OutOfMemory).
     `world::mesh_allocator_settings` caps shared slabs at 128 MiB and gives any
-    mesh over 32 MiB its own buffer. Load dense scans only near the view
+    mesh over 4 MiB its own buffer: every site and landmark scan has 16-50 MiB
+    of vertices and 7-22 MiB of indices, so each is exactly sized, never copied
+    by a growth and freed when it unloads, while the sub-4 MiB town, road and
+    prop meshes stay batched. Load dense scans only near the view
     (`canopy::stream_close_trees`, `plants::stream_full_plants`) rather than
     preloading them; wgpu keeps freed memory pooled for the next scan, so
     `nvidia-smi` stays level after a scan unloads instead of dropping.
