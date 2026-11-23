@@ -124,7 +124,8 @@ impl GpuScans {
         self.budget
     }
 
-    /// Bytes of the scans that are loaded, not those still loading.
+    /// Bytes of the scans that are loaded, not those still loading. Past the
+    /// budget, `plan` drops scans: it is what the driver's usage already holds.
     pub fn resident_bytes(&self) -> u64 {
         self.bytes_where(|state| state == State::Loaded)
     }
@@ -172,10 +173,16 @@ impl GpuScans {
 
     /// Decides what to load and what to drop at `now` seconds, marks loads as
     /// loading and drops as off, and clears this frame's wants.
+    ///
+    /// Admission counts every scan in `used`, so uploads in flight keep their
+    /// room. The over-budget step counts only the loaded scans, which are the
+    /// ones the driver's usage holds (and `live_scan_budget` subtracted from the
+    /// budget): a scan still uploading, in `usage` but not yet `measured`, must
+    /// not make a healthy budget look overcommitted.
     pub fn plan(&mut self, now: f32) -> Admission {
         let mut admission = Admission::default();
         self.begin_plan(now);
-        if self.used() > self.budget {
+        if self.resident_bytes() > self.budget {
             // The budget shrank. Drop one scan per plan: the reading's numbers lag the GPU's frees.
             admission.evict.extend(self.evict_over_budget());
         } else {
@@ -234,7 +241,9 @@ impl GpuScans {
         }
     }
 
-    /// Drops the oldest loaded scan not shown this frame, unpinned before pinned.
+    /// For when the loaded scans alone (`resident_bytes`) exceed the budget:
+    /// drops the oldest loaded scan not shown this frame, unpinned before
+    /// pinned. Scans still loading are neither counted nor dropped.
     fn evict_over_budget(&mut self) -> Option<&'static str> {
         let (&path, _) = self
             .scans
@@ -572,6 +581,27 @@ mod tests {
         scans.want("b", 5.0);
         scans.want("c", 1.0);
         assert_eq!(scans.plan(2.0).load, ["c"]); // 100 MB used, 50 MB free
+    }
+
+    #[test]
+    fn a_scan_still_uploading_does_not_trigger_the_over_budget_step() {
+        let mut scans = GpuScans::new(300 * MB);
+        fake_loaded(&mut scans, "a", 100 * MB, 0.0);
+        scans.estimate_exact("b", 200 * MB);
+        scans.want("b", 1.0);
+        assert_eq!(scans.plan(1.0).load, ["b"]); // planned, not yet measured
+
+        // The driver's usage already holds b, which `live_scan_budget` then
+        // counts as "other": the budget reads 250 MB while 300 MB are in use.
+        scans.set_budget(250 * MB);
+        scans.want("b", 1.0);
+        let admission = scans.plan(2.0);
+        assert!(admission.evict.is_empty() && admission.load.is_empty());
+
+        // Once b is measured the 300 MB on the GPU really exceed the budget.
+        scans.measured("b", Some(200 * MB));
+        scans.want("b", 1.0);
+        assert_eq!(scans.plan(3.0).evict, ["a"]);
     }
 
     #[test]
