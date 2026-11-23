@@ -29,7 +29,7 @@ fn main() {
     let mut app = App::new();
     // Asset sources are built with `AssetPlugin`, so the RAM source comes first.
     #[cfg(not(target_arch = "wasm32"))]
-    register_ram_source(&mut app);
+    register_ram_source(&mut app, "assets");
     app.add_plugins(DefaultPlugins)
         // Parsed once the log is up, so a bad `--vram` value is reported.
         .insert_resource(LaunchOptions::from_env())
