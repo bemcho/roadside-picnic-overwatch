@@ -231,6 +231,13 @@ impl GpuScans {
         self.budget.saturating_sub(self.used())
     }
 
+    /// Bytes that must leave before `bytes` more fit the budget. Unlike
+    /// `room()`, exact when the uploads in flight already put `used()` past the
+    /// budget, where `room()` reads 0 and hides how far.
+    fn deficit(&self, bytes: u64) -> u64 {
+        (self.used() + bytes).saturating_sub(self.budget)
+    }
+
     /// Stamps every scan wanted this frame as used now and forgets who waited.
     fn begin_plan(&mut self, now: f32) {
         for scan in self.scans.values_mut() {
@@ -280,8 +287,8 @@ impl GpuScans {
         };
         let (bytes, pinned) = (scan.bytes, scan.pinned);
         // A pinned scan never evicts others: it loads only into room already free.
-        let fits =
-            bytes <= self.room() || (!pinned && self.free_idle(bytes, now, &mut admission.evict));
+        let fits = self.deficit(bytes) == 0
+            || (!pinned && self.free_idle(bytes, now, &mut admission.evict));
         if fits {
             let scan = self.scan_mut(path);
             scan.state = State::Loading;
@@ -299,11 +306,11 @@ impl GpuScans {
     fn free_idle(&mut self, bytes: u64, now: f32, evicted: &mut Vec<&'static str>) -> bool {
         let idle = self.idle(now);
         let freed: u64 = idle.iter().map(|path| self.scans[path].bytes).sum();
-        if self.room() + freed < bytes {
+        if self.deficit(bytes) > freed {
             return false;
         }
         for path in idle {
-            if self.room() >= bytes {
+            if self.deficit(bytes) == 0 {
                 break;
             }
             self.scan_mut(path).state = State::Off;
@@ -602,6 +609,25 @@ mod tests {
         scans.measured("b", Some(200 * MB));
         scans.want("b", 1.0);
         assert_eq!(scans.plan(3.0).evict, ["a"]);
+    }
+
+    #[test]
+    fn uploads_in_flight_keep_their_room_from_idle_admission() {
+        let mut scans = GpuScans::new(400 * MB);
+        fake_loaded(&mut scans, "a", 100 * MB, 0.0); // idle by t = 200 s
+        fake_loaded(&mut scans, "b", 100 * MB, 190.0);
+        scans.estimate_exact("c", 200 * MB);
+        scans.want("c", 1.0);
+        assert_eq!(scans.plan(191.0).load, ["c"]); // uploading, not yet measured
+
+        // The driver's usage holds c, so the budget reads 250 MB while the
+        // loaded scans are 200 MB: not over it, but 400 MB are in use.
+        scans.set_budget(250 * MB);
+        scans.estimate_exact("d", 100 * MB);
+        scans.want("d", 1.0);
+        // Dropping idle a leaves 300 MB in use, still past 250 MB: d must wait.
+        let admission = scans.plan(200.0);
+        assert!(admission.evict.is_empty() && admission.load.is_empty());
     }
 
     #[test]
