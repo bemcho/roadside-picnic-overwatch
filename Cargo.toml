@@ -30,10 +30,18 @@ meshlet_processor = ["bevy/meshlet_processor"]
 name = "meshletize"
 required-features = ["meshlet_processor"]
 
-# --- Release build: prioritize runtime speed. ---
+# --- Release build: prioritize runtime speed (shipping). ---
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+# --- Playtest build: release-speed game that rebuilds fast (`--profile playtest`). ---
+# Without cross-crate LTO, and with the game split into 16 parallel units, an edit
+# rebuilds in ~36 s instead of ~3.5 min; CPU frame time stays within a few percent.
+[profile.playtest]
+inherits = "release"
+lto = false
+codegen-units = 16
 
 # --- Dev build: small amount of optimization for our code, full for dependencies. ---
 # Makes running the game via `cargo run` actually playable while keeping rebuilds fast.

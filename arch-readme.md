@@ -951,7 +951,10 @@ cargo fmt -- --check
 cargo test
 cargo clippy -- -D warnings
 
-# Real graphics, animation, and framerate validation
+# Real graphics, animation, and framerate validation (rebuilds in ~35 s)
+cargo run --profile playtest
+
+# The shipping build (cross-crate thin LTO, one codegen unit; ~3.5 min)
 cargo run --release
 ```
 
