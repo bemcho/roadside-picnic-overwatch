@@ -475,8 +475,12 @@ the stalker stands still.
 # Development run (fast, unoptimized)
 cargo run
 
-# Release build (playable framerates — Bevy games should use release for real testing)
+# Release build (playable framerates; the shipping build, ~3.5 min to rebuild the game)
 cargo run --release
+
+# Playtest build: release speed within a few percent, rebuilds in ~35 s
+# (no cross-crate LTO, 16 codegen units; the binary lands in target/playtest/)
+cargo run --profile playtest
 
 # Type-check only (faster iteration than full builds)
 cargo check
@@ -511,7 +515,8 @@ Run everything from the repository root so Bevy resolves `assets/`.
 
 > **Always prefer `cargo check` during iterative edits.** It is several times faster than a full build.
 > It cannot prove runtime WESL compilation, GLB loading, HUD layout, audio output or terrain
-> LOD seams: visual, shader, asset, animation and audio changes need a `cargo run --release` check.
+> LOD seams: visual, shader, asset, animation and audio changes need a `cargo run --profile playtest`
+> (or `--release`) check.
 
 ### Hot reloading (development only)
 
