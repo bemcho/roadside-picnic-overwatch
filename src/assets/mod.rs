@@ -7,10 +7,15 @@
 //! the project's forward-looking contract for asset locations. When a module
 //! starts using one, the compiler will demand the attribute be removed.
 
+use bevy::asset::AssetPath;
 use bevy::gltf::{GltfLoaderSettings, GltfMaterial};
 use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor};
 use bevy::prelude::*;
 use bevy::shader::Shader;
+
+pub mod gpu_scans;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod ram_source;
 
 pub const SPLASH_HANGAR: &str = "textures/splash/hangar.png";
 /// The player's stalker: the soldier scan, rigged by `tools/rig_stalker.py`.
@@ -181,6 +186,22 @@ pub const FONTS: &str = "fonts";
 
 #[derive(Resource, Default)]
 pub(crate) struct PreloadedAssets(pub Vec<UntypedHandle>);
+
+/// Every UHD file the game can show, in fill order (nearest the spawn first).
+#[derive(Resource, Default)]
+pub struct UhdFiles(pub Vec<&'static str>);
+
+/// Where a UHD scan loads from: RAM when filled, else `assets/`.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn uhd(path: &'static str) -> AssetPath<'static> {
+    AssetPath::from(path).with_source(ram_source::RAM_SOURCE)
+}
+
+/// Where a UHD scan loads from: the web build has no RAM level, so `assets/`.
+#[cfg(target_arch = "wasm32")]
+pub fn uhd(path: &'static str) -> AssetPath<'static> {
+    AssetPath::from(path)
+}
 
 pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<PreloadedAssets>) {
     let scenes = [

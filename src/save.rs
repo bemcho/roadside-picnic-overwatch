@@ -8,6 +8,7 @@ use std::io;
 
 use bevy::prelude::*;
 
+use crate::launch::LaunchOptions;
 use crate::player::Player;
 use crate::player::vehicle::{Driving, Vehicle};
 use crate::states::AppState;
@@ -110,8 +111,8 @@ fn numbers<const N: usize>(text: &str) -> Option<[f32; N]> {
 #[derive(Resource)]
 struct SavedProgress(Progress);
 
-fn read_progress(mut commands: Commands) {
-    if std::env::args().any(|arg| arg == "--new") {
+fn read_progress(mut commands: Commands, launch: Res<LaunchOptions>) {
+    if launch.new {
         return;
     }
     match read() {

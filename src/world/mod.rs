@@ -62,6 +62,7 @@ use bevy::render::slab_allocator::SlabAllocatorSettings;
 use bevy::transform::TransformSystems;
 use bevy::world_serialization::WorldInstanceReady;
 
+use crate::assets::UhdFiles;
 use crate::states::{AppState, InGamePhase};
 
 use canopy::CanopyModels;
@@ -115,6 +116,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<Terrain>()
         .init_resource::<crush::Trampled>()
         .init_resource::<PlantsGrowing>()
+        .insert_resource(UhdFiles(uhd_files()))
         .add_message::<tree_fall::TreeBreak>()
         .add_systems(
             Startup,
@@ -122,6 +124,7 @@ impl Plugin for WorldPlugin {
                 prepare_landscape,
                 load_landscape_materials,
                 canopy::preload_canopies,
+                canopy::pin_tree_scans,
                 wildlife::preload_wildlife,
                 cordon::preload_cordon,
                 sites::preload_sites,
@@ -282,16 +285,39 @@ fn anchor_distance(tile: IVec2, anchors: &[IVec2]) -> i32 {
         .unwrap_or(i32::MAX)
 }
 
-/// Bevy grows a shared vertex slab 1.5x at a time up to 512 MiB, holding the
-/// old and the new buffer while it copies, and puts meshes up to 256 MiB in
-/// those slabs. On a 6 GB card that spike ran out of memory, so the UHD scans
-/// get buffers of their own (freed whole when they unload) and shared slabs
-/// stay small.
+/// Every UHD file the game can show, each once, in RAM fill order: the trees,
+/// the plants, then the sites nearest the hangar first. The hangar's artifacts
+/// keep their preloaded handles until their 4K scans arrive.
+pub(crate) fn uhd_files() -> Vec<&'static str> {
+    let mut files = Vec::new();
+    let all = canopy::uhd_files()
+        .chain(plants::uhd_files())
+        .chain(sites::uhd_files());
+    for path in all {
+        if !files.contains(&path) {
+            files.push(path);
+        }
+    }
+    files
+}
+
+/// Bevy decides per allocation: a mesh's vertex data, and separately its index
+/// data, gets a buffer of its own when it is 4 MiB or more (`>=` the
+/// threshold), and smaller ones share slabs of at most 128 MiB. Every site and
+/// landmark UHD scan is one primitive with 16-50 MiB of vertex data and 7-22
+/// MiB of index data, most near 20 and 9 MiB, so both are their own buffers:
+/// exact size, no growth copies, freed when the scan unloads. So are the
+/// single-primitive tree and plant scans (45-52 MiB vertex, 21-23 MiB index)
+/// and the largest parts of the multipart burdock, elder, juniper and thistle
+/// scans (4.7-6.9 MiB). Their other parts and the town buildings, roads,
+/// railway and props stay batched in slabs. With the old 32 MiB threshold most
+/// scans shared slabs that grew 1.5x by copy, and a 4 GB T1200 ran out of
+/// memory while streaming sites.
 fn mesh_allocator_settings() -> MeshAllocatorSettings {
     MeshAllocatorSettings {
         slab_allocator_settings: SlabAllocatorSettings {
             max_slab_size: 128 * MIB,
-            large_threshold: 32 * MIB,
+            large_threshold: 4 * MIB,
             ..default()
         },
         ..default()
@@ -434,6 +460,46 @@ mod tests {
     use bevy::mesh::MeshPlugin;
 
     use super::*;
+
+    #[test]
+    fn uhd_files_list_each_scan_once_trees_first() {
+        let files = uhd_files();
+        let unique: std::collections::HashSet<_> = files.iter().collect();
+        assert_eq!(unique.len(), files.len(), "a UHD file is listed twice");
+        assert_eq!(
+            files[..5],
+            [
+                crate::assets::TREE_SMALL_UHD,
+                crate::assets::TREE_BIG_UHD,
+                crate::assets::TREE_VERY_TALL_UHD,
+                crate::assets::TREE_BIRCH_UHD,
+                crate::assets::TREE_DEAD_UHD,
+            ]
+        );
+        // Artifacts keep their preloaded handles until their 4K scans arrive.
+        assert!(
+            !files
+                .iter()
+                .any(|path| path.starts_with("models/artifacts/"))
+        );
+    }
+
+    #[test]
+    fn uhd_files_end_with_the_sites_nearest_the_hangar_first() {
+        let files = uhd_files();
+        let first_site = files
+            .iter()
+            .position(|path| sites::distance_from_base(path).is_some())
+            .expect("the sites' scans are listed");
+        let distances: Vec<f32> = files[first_site..]
+            .iter()
+            .map(|path| sites::distance_from_base(path).expect("only sites follow the first"))
+            .collect();
+        assert!(
+            distances.is_sorted(),
+            "sites out of order by distance: {distances:?}"
+        );
+    }
 
     #[test]
     fn anchor_distance_counts_tiles_to_the_nearest_anchor() {

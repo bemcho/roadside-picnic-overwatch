@@ -113,9 +113,11 @@ the stalker stands still.
   ~500-triangle primitive each: simplified textured wood and, for living
   trees, cutout crown faces baked from the supplied models. Within 8 m of the
   camera a tree swaps to its full scan (`trees/uhd/`, ~1.9M triangles), a
-  child entity that crossfades by `VisibilityRange` and sways with it. The
-  scans are not preloaded: `stream_close_trees` loads a tree's scan as the
-  camera nears (16 m from the tree's middle) and drops it 5 m further out.
+  child entity that crossfades by `VisibilityRange` and sways with it.
+  `stream_close_trees` wants a tree's scan from `GpuScans` as the camera nears
+  (16 m from the tree's middle) and shows it once it is on the GPU (the five
+  are pinned there behind the entry curtain). It drops the instance 5 m
+  further out, or if the scan leaves the GPU.
   `src/world/canopy.rs` fits the roots and trunks, limits
   shadows to nearby trees, and sways some living trees without moving their
   colliders. Individual trees can randomly snap and fall while in view
@@ -142,7 +144,10 @@ the stalker stands still.
   with the near model's material out to 66 m (plus the camera's reach), the
   textured `medium/` model within 30 m of the camera, and the full `uhd/` scan
   for the plant nearest the stalker within 8 m (henbane and ragweed have no
-  textured scan). The multipart UHD scans differ in shape from their medium
+  textured scan). `stream_full_plants` asks `GpuScans` for the scans of plants
+  within 40 m (`UPLOAD_LEAD`) and shows one only once it is on the GPU; the
+  plant's own model stays until then, and shows again if the scan leaves the
+  GPU. The multipart UHD scans differ in shape from their medium
   models, so their swap shows. Plants sharing a model draw as one GPU
   instance batch. Each dry-weed seed grows a patch of up to 5 plants, other
   weeds and bushes up to 15 (a third of that in the belts, full patches in
@@ -215,8 +220,11 @@ the stalker stands still.
   the middle of their road-facing edge on the land at the entrance. Measure a
   scan's collision and relief with `tools/sample_landmark_ground.py` (see its
   docstring). All scans at once outgrow a 6 GB GPU, so each site shows a light
-  stand-in from `low/` and streams its full UHD scene in within 150 m of its
-  footprint around any `StreamAnchor`. The Institute's Tripo scan came without
+  stand-in from `low/` and shows its full UHD scene within 150 m of its
+  footprint around any `StreamAnchor`: `stream_full_sites` wants the scan from
+  `GpuScans` 40 m before that (`UPLOAD_LEAD`) and shows it once it is on the
+  GPU, then drops it 60 m past the range, or if the scan leaves the GPU, and
+  the stand-in shows again. The Institute's Tripo scan came without
   UVs or textures: `tools/prepare_institute_asset.py` (headless Blender) paints
   it with one atlas from its concept image in the workspace (window bays on the
   front and back, precast panels on the sides and roof), then builds its
@@ -410,13 +418,55 @@ the stalker stands still.
   data maps), loaded through Bevy's `ktx2` + `zstd_rust` features. Finish every
   new or re-exported runtime GLB with
   `python3 tools/compress_glb_textures.py <glb>...` (needs `cargo install ctt-cli`).
-  Run it last: Blender and glTF Transform cannot read the converted textures, so
-  re-run earlier pipeline steps from the git/source GLB. Runtime CPU mipmaps
+  Run it last: Blender and glTF Transform cannot decode or edit the converted
+  textures' pixels, so re-run earlier pipeline steps from the git/source GLB
+  (the tangent bake below is the one step allowed after compression). Runtime CPU mipmaps
   (`terrain_material::mipmap_filtered_textures`) only cover procedural images
-  and the small tiling terrain PNGs.
+  and the small tiling terrain PNGs. Normal-mapped runtime GLBs also carry baked
+  MikkTSpace tangents, so Bevy does not generate them at load (5–6 s for a
+  1M-vertex scan): after a re-export, bake them with
+  `python3 ~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py <glb>...`
+  (it works on the compressed file and keeps its KTX2 images byte-identical).
+- **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
+  behind the splash the `ram://` asset source reads every streamed UHD scan
+  (the 42 in `world::uhd_files`: the five trees, the plants, then the sites
+  nearest the hangar first) into RAM, four files at a time, while 2 GiB of
+  RAM stay free (`RAM_HEADROOM`). A file that does not fit stays on disk and
+  loads from `assets/` through the same source; the splash waits for the fill.
+  Every streamed UHD scan loads through `assets::uhd(path)` (`ram://`
+  natively, `assets/` on the web) and only through `GpuScans`, never straight
+  from the `AssetServer`; the always-shown UHD models (the stalker,
+  `STALKER_MODEL`, and the checkpoints, `SITE_CHECKPOINT`) are preloaded from
+  `assets/` instead. Callers `want` a scan each frame from `UPLOAD_LEAD` (40 m)
+  short of where it shows, the five tree scans are `pin`ned, and `scene()`
+  returns the scan only once it is resident; a caller despawns its instance
+  when the scan leaves, since the VRAM is freed only once nothing holds the
+  scene. `GpuScans::plan` loads pinned scans first, then the nearest wants,
+  then prefills spare room in fill order while `PREFILL_HEADROOM_GB` (0.5)
+  stays free. Scans load render-only (`RenderAssetUsages::RENDER_WORLD`), are
+  measured in the frame their load finishes, and the render world reports
+  over `ScanResidency` once every mesh and image of a scan is on the GPU. The
+  budget follows the driver's live reading (`VK_EXT_memory_budget`, each
+  second, `gpu_scans/vram.rs`): the game's driver budget, capped by `--vram`,
+  less everything but the resident scans (never under `GAME_VRAM_GB`, 2.4)
+  and `MARGIN_GB` (0.5). A scan stays two minutes after it was last wanted
+  (`KEEP_SECONDS`); a wanted scan short of room drops scans idle longer than
+  that, least recently used first, and when the resident scans outgrow a
+  shrunken budget the oldest unwanted one leaves, unpinned before pinned
+  (`UHD scan … left the GPU` in the log). Where the driver cannot report
+  VRAM, the budget is `--vram` (6 GB without it) less `DESKTOP_GB` (0.6),
+  `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060: peak RSS
+  9.5–11.7 GiB, the fill 3.3 GB in 10–14 s warm or cold, 1.4–1.9 GB of scans
+  on the GPU. All 42 scans would take about 4.4 GiB on the GPU, so every one
+  would stay from a driver budget of about 7.4 GiB (a 10 GB card); that is an
+  estimate (14 of the 24 site scans measured, the rest taken at ~107 MiB,
+  plus 2.4 GiB for the rest of the game and the 0.5 GiB margin), not run on
+  a larger card.
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
-  empty and every streamed plant has spawned (`world::PlantsGrowing`) for a
-  moment (at most 12 s), so shaders compile and spawn hitches happen behind
-  it instead of as pop-in. NVIDIA's driver caches compiled pipelines on
+  empty, every streamed plant has spawned (`world::PlantsGrowing`) and the
+  UHD scans have settled on the GPU (`GpuScans::settled`: every pinned tree
+  scan that fits resident, nothing loading or uploading) for a moment (at most
+  12 s), so shaders compile and spawn and upload hitches happen behind it
+  instead of as pop-in. NVIDIA's driver caches compiled pipelines on
   disk; Bevy 0.20 itself has no persistent pipeline cache.

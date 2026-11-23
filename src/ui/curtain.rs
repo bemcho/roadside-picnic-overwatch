@@ -1,6 +1,7 @@
 //! Entry curtain: keeps a loading screen over the freshly spawned Zone until the
-//! renderer has compiled its shader pipelines and the plants around the stalker
-//! have spawned, so the world appears complete instead of popping in.
+//! renderer has compiled its shader pipelines, the plants around the stalker
+//! have spawned and the UHD scans are on the GPU (the pinned trees, and any
+//! prefill in flight), so the world appears complete instead of popping in.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -9,6 +10,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::PipelineCache;
 use bevy::render::{Render, RenderApp};
 
+use crate::assets::gpu_scans::GpuScans;
 use crate::states::AppState;
 use crate::world::PlantsGrowing;
 
@@ -93,6 +95,7 @@ fn lift_curtain(
     time: Res<Time<Real>>,
     backlog: Res<PipelineBacklog>,
     plants: Res<PlantsGrowing>,
+    scans: Res<GpuScans>,
     curtain: Option<Single<(Entity, &mut EntryCurtain)>>,
 ) {
     let Some(curtain) = curtain else {
@@ -101,10 +104,15 @@ fn lift_curtain(
     let (entity, mut curtain) = curtain.into_inner();
     let dt = time.delta_secs();
     curtain.shown += dt;
-    let busy = backlog.0.load(Ordering::Relaxed) > 0 || plants.0;
+    // `settled` is false while any scan loads or uploads, a pinned tree's or a
+    // prefill's, and while a pinned one is not yet on the GPU: the curtain
+    // holds until prefill has no more room to fill, but `MAX_SECONDS` caps the
+    // wait, and a tree shows its crown until its scan is resident.
+    let busy = backlog.0.load(Ordering::Relaxed) > 0 || plants.0 || !scans.settled();
     curtain.settled = if busy { 0.0 } else { curtain.settled + dt };
     if curtain.settled >= SETTLE_SECONDS || curtain.shown >= MAX_SECONDS {
         commands.entity(entity).despawn();
+        info!("Entered the Zone");
     }
 }
 
@@ -125,6 +133,7 @@ mod tests {
                 100,
             )))
             .init_resource::<PlantsGrowing>()
+            .init_resource::<GpuScans>()
             .init_state::<AppState>();
         app.world_mut()
             .resource_mut::<NextState<AppState>>()
@@ -180,5 +189,42 @@ mod tests {
             0,
             "the curtain lifts once plants settle"
         );
+    }
+
+    #[test]
+    fn curtain_waits_for_pinned_scans_then_lifts() {
+        const TREE: &str = "models/trees/uhd/tree.glb";
+        let (mut app, _) = entered_app();
+        app.world_mut().resource_mut::<GpuScans>().pin(TREE);
+
+        for _ in 0..10 {
+            app.update();
+        }
+        assert_eq!(curtains(&mut app), 1, "a pinned scan is not on the GPU");
+
+        app.world_mut()
+            .resource_mut::<GpuScans>()
+            .insert_resident(TREE, Handle::default());
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(
+            curtains(&mut app),
+            0,
+            "the curtain lifts once the scan is resident"
+        );
+    }
+
+    #[test]
+    fn curtain_lifts_after_the_cap_though_a_pinned_scan_is_still_loading() {
+        let (mut app, _) = entered_app();
+        app.world_mut()
+            .resource_mut::<GpuScans>()
+            .pin("models/trees/uhd/tree.glb");
+
+        for _ in 0..(MAX_SECONDS * 10.0) as usize + 2 {
+            app.update();
+        }
+        assert_eq!(curtains(&mut app), 0, "the cap lifts it");
     }
 }

@@ -4,6 +4,7 @@
 
 mod assets;
 mod audio;
+mod launch;
 mod player;
 mod save;
 mod states;
@@ -13,7 +14,11 @@ mod zone;
 
 use bevy::prelude::*;
 
+use assets::gpu_scans::GpuScansPlugin;
+#[cfg(not(target_arch = "wasm32"))]
+use assets::ram_source::{RamSourcePlugin, register_ram_source};
 use assets::{PreloadedAssets, preload_game_assets};
+use launch::LaunchOptions;
 use player::PlayerPlugin;
 use save::SavePlugin;
 use states::{AppState, InGamePhase, SplashPhase, toggle_pause};
@@ -22,8 +27,15 @@ use world::WorldPlugin;
 use zone::ZonePlugin;
 
 fn main() {
-    App::new()
-        .add_plugins(DefaultPlugins)
+    let mut app = App::new();
+    // Asset sources are built with `AssetPlugin`, so the RAM source comes first.
+    #[cfg(not(target_arch = "wasm32"))]
+    register_ram_source(&mut app, "assets");
+    app.add_plugins(DefaultPlugins)
+        // Parsed once the log is up, so a bad `--vram` value is reported.
+        .insert_resource(LaunchOptions::from_env())
+        // After the options: its fallback budget follows `--vram`.
+        .add_plugins(GpuScansPlugin)
         .init_state::<AppState>()
         .add_sub_state::<SplashPhase>()
         .add_sub_state::<InGamePhase>()
@@ -38,8 +50,10 @@ fn main() {
             SavePlugin,
         ))
         .add_systems(Update, toggle_pause.run_if(in_state(AppState::InGame)))
-        .add_systems(Update, quit_on_q.run_if(in_state(AppState::InGame)))
-        .run();
+        .add_systems(Update, quit_on_q.run_if(in_state(AppState::InGame)));
+    #[cfg(not(target_arch = "wasm32"))]
+    app.add_plugins(RamSourcePlugin);
+    app.run();
 }
 
 /// Quits the app when Q is pressed.

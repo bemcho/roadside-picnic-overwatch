@@ -37,6 +37,9 @@ flowchart LR
     MAIN["main.rs\ncomposition root"]
 
     MAIN --> ASSETS["assets\npaths + preload handles"]
+    ASSETS --> RAM["ram:// source\nUHD files read into RAM"]
+    ASSETS --> SCANS["GpuScans\nwant / pin / prefill\nlive VRAM budget"]
+    RAM --> SCANS
     MAIN --> STATES["states\nLoading -> InGame\nRunning / Paused"]
     MAIN --> SPLASH["ui/splash\nloading gate"]
     MAIN --> WORLD["WorldPlugin"]
@@ -46,6 +49,7 @@ flowchart LR
     MAIN --> UI["UiPlugin"]
 
     ASSETS --> SPLASH
+    RAM -->|"fill done"| SPLASH
     STATES --> SPLASH
     SPLASH -->|"all handles loaded + key"| WORLD
     SPLASH -->|"state transition"| PLAYER
@@ -71,6 +75,10 @@ flowchart LR
     SITES --> COLLISION
     BASE --> COLLISION
 
+    SCENERY -->|"want / pin UHD scans"| SCANS
+    SITES -->|"want UHD scans"| SCANS
+    SCANS -->|"settled"| UI
+
     PLAYER --> UI
     PLAYER --> AUDIO
     WILDLIFE --> AUDIO
@@ -85,6 +93,7 @@ flowchart LR
 | Saved progress | `src/save.rs` | `SavePlugin`: the progress file, F5/autosave/quit saves, restore on entry |
 | States | `src/states.rs` | `AppState::Loading/InGame`, `InGamePhase::Running/Paused` |
 | Asset paths | `src/assets/` | Canonical paths, preload handles, shared GLB loader helpers |
+| RAM and GPU | `src/assets/ram_source.rs`, `assets/gpu_scans.rs`, `gpu_scans/{streaming,residency,vram}.rs` | `ram://` fill behind the splash, `assets::uhd`, `GpuScans` budget, admission, prefill and eviction, render-world residency, live `VK_EXT_memory_budget` reading |
 | Player | `src/player/` | Stalker, camera, input, gravity, crawling, vehicle interaction |
 | Vehicle | `src/player/vehicle.rs`, `vehicle/contact.rs` | Throttle/steer, traction, four-tire terrain fit, wheels, spotlight |
 | World | `src/world/mod.rs` | World plugin, terrain/material setup, sky, fog, spawn and teardown |
@@ -118,22 +127,35 @@ Startup work is split between `preload_game_assets` and `WorldPlugin`'s startup
 systems:
 
 1. `src/assets/mod.rs` puts the critical file and scene handles into
-   `PreloadedAssets`.
+   `PreloadedAssets`, and `assets/ram_source.rs` starts reading every file of
+   `UhdFiles` (the trees, the plants, then the sites nearest the hangar) into
+   the `ram://` source, four at a time, while 2 GiB of RAM stay free; a file
+   left out loads from `assets/` through the same source.
 2. `world/landscape.rs` starts an asynchronous CPU task that builds the distant
    terrain, water, scenery layout, and streamed site data.
 3. The world preloads canopies, wildlife primitives, cordon assets, sites, the
    town, railway, old-road and marsh kits, plants, and materials.
 4. `ui/splash.rs` displays the hangar backdrop and repeatedly checks both the
-   direct load state and recursive dependency state of every preload handle.
+   direct load state and recursive dependency state of every preload handle,
+   and waits for the RAM fill (`Read N UHD files (X GB) into RAM in S s`).
 5. `SplashPhase` becomes `Ready` only after the preload list is complete and
    non-empty. An asset failure moves it to `Failed`.
 6. A new key press transitions `AppState::Loading` to `AppState::InGame`.
 7. `ui/curtain.rs` covers the new world with an "Entering the Zone" screen. A
    render-world system publishes `PipelineCache::waiting_pipelines().count()`
    through a shared atomic, and the world publishes `PlantsGrowing` while any
-   streamed tile still has plants to grow or spawn; the curtain lifts after
-   both stay idle for 0.4 s (12 s cap), hiding shader compilation, first-frame
-   spawn hitches and the plants filling in around the stalker.
+   streamed tile still has plants to grow or spawn, and `GpuScans::settled`
+   stays false while a UHD scan is loading or a pinned one (the five trees,
+   pinned by `canopy::pin_tree_scans`) is not yet on the GPU; the curtain
+   lifts after all stay idle for 0.4 s (12 s cap) and logs `Entered the
+   Zone`, hiding shader compilation, first-frame spawn hitches, the trees'
+   scan uploads and the plants filling in around the stalker. `prefill_scans`
+   (`assets/gpu_scans/streaming.rs`, `Last`, after `admit_scans`) then fills
+   the scan budget from `UhdFiles` in order, one scan at a time, stopping
+   `PREFILL_HEADROOM_GB` (0.5) short of it so a dip in the live budget does
+   not evict what was prefilled. A prefill (`GpuScans::prefill`) queues
+   after every ask, never evicts anything and is not stamped as shown, so a
+   real want or a shrinking budget drops a prefilled scan before a shown one.
 
 The preload list is also a contract. If a model is needed during `OnEnter` and
 is not preloaded, the splash can report ready before that asset is available.
@@ -254,9 +276,12 @@ most `PLANTS_PER_FRAME` of them per frame, nearest an anchor first.
 Every weed and bush is an imported model (`assets::PlantModel`): an entity with
 the textured `medium/` mesh within 30 m of the camera and a child with the
 texture-free `low/` mesh (same material) out to the scenery range, so plants
-sharing a model draw as one GPU instance batch. `stream_full_plants` puts the
-full `uhd/` scan in place of the one plant nearest the stalker within 8 m and
-hides that plant once the scan is ready; only that scan's textures are loaded.
+sharing a model draw as one GPU instance batch. `stream_full_plants` wants the
+full `uhd/` scans of plants within `UPLOAD_LEAD` (40 m) of the stalker from
+`GpuScans`, and once the scan of the one plant nearest the stalker within 8 m
+is on the GPU, puts it in place of that plant and hides the plant. If the scan
+leaves the GPU the instance goes (that is when the GPU frees it) and the plant
+shows again.
 Dry-weed seeds grow patches of up to 5 plants, other weeds and bushes up to 15;
 every placement passes the road, water, yard, and site-clearance filters.
 
@@ -379,10 +404,13 @@ footprint, and outside it blends to the landform over a margin whose target is
 the edge blurred more the farther out, so clefts don't streak across the land.
 
 The scans together outgrow a 6 GB GPU (about 160 MB each). Every site preloads
-and shows its `low/` stand-in; `stream_full_sites` spawns the full scan's scene
-within `FULL_SCAN_RANGE` of the footprint around any `StreamAnchor`, swaps the
-stand-in out once it is ready, and despawns it again past `FULL_SCAN_KEEP`, which
-frees its mesh and textures.
+and shows its `low/` stand-in; `stream_full_sites` wants the full scan from
+`GpuScans` once any `StreamAnchor` is within `FULL_SCAN_RANGE` plus
+`UPLOAD_LEAD` (40 m) of the footprint, and spawns its scene within
+`FULL_SCAN_RANGE` once the scan is on the GPU. It swaps the stand-in out once
+the instance is ready, and despawns the instance again past `FULL_SCAN_KEEP`,
+or if the scan leaves the GPU (that is when the GPU frees it), and the
+stand-in shows again.
 
 Changing a placement can affect several subsystems at once:
 
@@ -736,7 +764,10 @@ Important paths:
     (`tools/compress_glb_textures.py`, last pipeline step). A PNG/JPEG GLB still
     loads, but it decodes on the loader, gets CPU mips on the main thread, and
     takes four times the VRAM. BC formats need desktop-class GPUs (WebGPU with
-    `texture-compression-bc`).
+    `texture-compression-bc`). Normal-mapped GLBs also ship with baked tangents,
+    or Bevy generates them at every load (5–6 s per 1M-vertex scan): run
+    `~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py <glb>...`
+    after a re-export (it works on the compressed file, KTX2 images untouched).
 
 21. **Keep heavy per-tile work off the main thread, and cap it per frame.**
     Build streamed meshes in an async task (see `plants::PendingPlants`) and
@@ -766,11 +797,23 @@ Important paths:
     Bevy grows a shared vertex slab 1.5x at a time, holding the old and the new
     buffer while it copies; at the default 512 MiB cap that spike ran a 6 GB
     card out of memory ("general mesh slab ... is invalid", then OutOfMemory).
-    `world::mesh_allocator_settings` caps shared slabs at 128 MiB and gives any
-    mesh over 32 MiB its own buffer. Load dense scans only near the view
-    (`canopy::stream_close_trees`, `plants::stream_full_plants`) rather than
-    preloading them; wgpu keeps freed memory pooled for the next scan, so
-    `nvidia-smi` stays level after a scan unloads instead of dropping.
+    `world::mesh_allocator_settings` caps shared slabs at 128 MiB and gives a
+    mesh's vertex data, and separately its index data, its own buffer when that
+    allocation is 4 MiB or more. Every site and landmark scan has 16-50 MiB of
+    vertices and 7-22 MiB of indices, and the single-primitive tree and plant
+    scans 45-52 and 21-23 MiB, so each is exactly sized, never copied by a
+    growth and freed when it unloads; the sub-4 MiB town, road and prop meshes
+    (and most parts of the multipart plant scans) stay batched. Load dense
+    scans only through `GpuScans` (want, pin, prefill within the live budget)
+    rather than outright. A freed buffer goes back to wgpu's allocator, which
+    holds video memory in 256 MiB blocks and returns a block to the driver only
+    once it is empty: `nvidia-smi` drops by a whole block now and then (on the
+    6 GB RTX 2060 it once fell from 2809 to 2553 MiB in a replay roaming the
+    sites) but mostly stays level (in a drive away from the hangar, eight
+    scans, about 1 GB, left and it went from 5439 to 5427 MiB). The
+    driver's usage, which `live_scan_budget` reads, behaves the same, so the
+    budget counts that pooled memory as the game's own and shrinks by each
+    scan that leaves.
 
 25. **Mind the shroud when adding meshes or materials.**
     `shroud::cull_shrouded` drops any entity with an `Aabb` that stands wholly
@@ -779,6 +822,21 @@ Important paths:
     unsurveyed ground through their depth and draws the smoke over it, so no
     material needs shroud code of its own. A new ground-like material belongs
     in those exemptions; `NoFrustumCulling` entities are never culled.
+
+26. **Read a render-only mesh before it reaches the GPU.**
+    UHD scans load with `RenderAssetUsages::RENDER_WORLD`, so render extract
+    moves their vertex data out of the main world instead of cloning it. After
+    that, `Mesh::attributes()` (and `RenderMesh::byte_len`, which calls it)
+    panics on the emptied mesh. Read or measure vertices in the frame the load
+    finishes, before extract (`gpu_scans::streaming::measure_scans`), and check
+    `Mesh::try_attributes()` first (`residency::scan_bytes`).
+
+27. **A scan's images are its materials' five core PBR maps.**
+    `streaming::material_images` tracks base color, emissive,
+    metallic-roughness, normal and occlusion, all this build reads. Enabling a
+    `bevy/pbr_*_textures` feature (specular, clearcoat, anisotropy,
+    transmission...) would bind images it does not track: they would go
+    unmeasured, and the residency check would not wait for them.
 
 ## How to add a static site model
 
@@ -808,6 +866,13 @@ placed on the Harmont map.
 5. Add a `model!` row to `MODELS` (UHD/low file, scale, `Ground`, half extents,
    top, front axis, collider slice) and a `Landmark` with its road junction to
    `LANDMARKS`, plus its hover copy at the same index in `ui::text::SITE_COPY`.
+   That is all the UHD scan needs: `sites::uhd_files` lists every landmark's
+   model, so the RAM fill reads it, and `stream_full_sites` wants it from
+   `GpuScans`, which loads it through `assets::uhd`. Never load a streamed UHD
+   scan with the `AssetServer` directly (only the always-shown ones, such as
+   the stalker and the checkpoints, are preloaded); a streamed UHD file owned
+   by another module goes in that module's `uhd_files()`, which
+   `world::uhd_files` collects.
 6. Run the site, road, scenery and wildlife tests. Inspect the placement in a
    release build from multiple angles, near (full scan) and far (stand-in).
 

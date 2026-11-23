@@ -52,6 +52,11 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **F5** — save progress (it also saves every minute and on quitting)
 - **Q** — quit
 - Start with `cargo run --release -- --new` to ignore the save and begin afresh
+- `cargo run --release -- --vram <GB>` caps the video memory the game uses:
+  normally it caps the driver's live budget (by default the game takes what
+  the driver's budget allows); where the driver can't report VRAM, it is the
+  card size the fallback budget assumes (6 GB without it). See **RAM and
+  GPU** in `doc/world-reference.md`.
 
 ## World reference
 
@@ -80,7 +85,8 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Collision, crushing, climbing | `world/{collision,crush}.rs` |
 | Audio | `audio/` |
 | Stalker model (rig, clips) | `player/animation.rs`, `tools/rig_stalker.py` |
-| Precompiled textures (KTX2) | `tools/compress_glb_textures.py` |
+| Precompiled textures (KTX2, baked tangents) | `tools/compress_glb_textures.py` |
+| RAM and GPU (UHD scans from RAM, GPU scan budget, `--vram`) | `assets/{ram_source,gpu_scans}.rs`, `gpu_scans/` |
 | Entering the Zone (curtain) | `ui/curtain.rs` |
 
 Rules that hold everywhere:
@@ -99,7 +105,9 @@ Rules that hold everywhere:
   and regenerate; never hand-edit a generated GLB.
 - **Stand-ins** (`low/` site models): never ground or recenter them.
 - **VRAM:** all scans at once outgrow a 6 GB GPU; dense scans stream in near a
-  `StreamAnchor` and show light stand-ins elsewhere.
+  `StreamAnchor` and show light stand-ins elsewhere. Load streamed UHD scans
+  only through `GpuScans` (`assets::uhd(path)`), never straight from the
+  `AssetServer`.
 - **Hangar:** never save the `parts/` kit over `medium/hangar.glb`; remeasure
   walls and pendant mounts in `base.rs` if its geometry changes; the walkway
   lines are shader constants, move them with the exhibit rows. Do not replace
@@ -206,6 +214,9 @@ This project follows idiomatic Bevy ECS. Read these before adding code:
 - **Assets:** runtime paths are constants in `src/assets/mod.rs`, loaded via `AssetServer`;
   startup handles are held in `PreloadedAssets`. `load_single_primitive` takes exactly mesh 0,
   primitive 0, material 0; use a `#Scene0` scene for multipart models.
+- **Precalculate once.** Anything derivable from the assets or the fixed seeds is computed once — baked into the
+  runtime files by the asset pipeline, or computed once and cached — never at every load, re-admission or frame
+  (e.g. tangents are baked into normal-mapped GLBs). Where something must stay at runtime, say why in a comment.
 - **Two kinds of artifact:** the hangar showcase (`world/base/artifacts.rs`) is decorative;
   the gameplay `Artifact` collectibles live in `src/zone/` as placeholders. Don't conflate them.
 - **Physics/collision:** if a physics plugin is added, declare it in Cargo.toml and keep its systems
