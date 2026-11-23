@@ -266,8 +266,9 @@ WASM builds.
 
 - [`arch-readme.md`](./arch-readme.md) gives the bird's-eye ECS/plugin graph,
   runtime schedules, terrain/streaming/collision flow, and troubleshooting map.
-- [`CLAUDE.md`](./CLAUDE.md) documents model measurements, content pipelines,
-  rendering constraints, and contributor conventions.
+- [`CLAUDE.md`](./CLAUDE.md) holds the contributor conventions and project-wide
+  rules, and indexes [`doc/world-reference.md`](./doc/world-reference.md): each
+  system's behaviour, model measurements and content pipelines.
 - [`.github/copilot-instructions.md`](./.github/copilot-instructions.md)
   contains the concise guidance used by Copilot coding sessions.
 
