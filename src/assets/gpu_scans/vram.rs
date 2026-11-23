@@ -50,7 +50,7 @@ pub fn track_vram_budget(
         }
         return;
     };
-    if !scans.apply_reading(reading, launch.vram_gb.map(gib)) {
+    if !scans.apply_reading(reading, launch.vram_gb.map(gib), now) {
         return;
     }
     if !log.read {

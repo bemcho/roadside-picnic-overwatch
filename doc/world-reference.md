@@ -106,16 +106,16 @@ the stalker stands still.
   over far low ground (shorter in humid air); the terrain shader masks it to low
   ground, and birds disable classic fog.
 - **Scenery** (`src/world/scenery.rs`): textured rock outcrops and reeds are drawn
-  in chunk batches. Every tree is an imported model: saplings, broadleaves, tall
-  conifers, birches, and dead trees (`assets/models/trees/medium/`) grow around
-  the hangar, in the named landmark groves and in three dense woods
+  in chunk batches. Every tree is an imported model: saplings, birches and dead
+  trees (`assets/models/trees/medium/`) grow around the hangar, in the named
+  landmark groves and in three dense woods
   (`canopy::WOODS`); open country has no trees. Their GLBs use one
   ~500-triangle primitive each: simplified textured wood and, for living
   trees, cutout crown faces baked from the supplied models. Within 8 m of the
   camera a tree swaps to its full scan (`trees/uhd/`, ~1.9M triangles), a
   child entity that crossfades by `VisibilityRange` and sways with it.
   `stream_close_trees` wants a tree's scan from `GpuScans` as the camera nears
-  (16 m from the tree's middle) and shows it once it is on the GPU (the five
+  (16 m from the tree's middle) and shows it once it is on the GPU (the three
   are pinned there behind the entry curtain). It drops the instance 5 m
   further out, or if the scan leaves the GPU.
   `src/world/canopy.rs` fits the roots and trunks, limits
@@ -429,35 +429,46 @@ the stalker stands still.
   (it works on the compressed file and keeps its KTX2 images byte-identical).
 - **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
   behind the splash the `ram://` asset source reads every streamed UHD scan
-  (the 42 in `world::uhd_files`: the five trees, the plants, then the sites
-  nearest the hangar first) into RAM, four files at a time, while 2 GiB of
-  RAM stay free (`RAM_HEADROOM`). A file that does not fit stays on disk and
+  (the 40 in `world::uhd_files`: the three trees, the plants, then the sites
+  nearest the hangar first) into RAM, four files at a time, while 4 GiB of
+  RAM stay free (`RAM_HEADROOM`: the game grows up to 3.2 GiB after the fill). A file that does not fit stays on disk and
   loads from `assets/` through the same source; the splash waits for the fill.
   Every streamed UHD scan loads through `assets::uhd(path)` (`ram://`
   natively, `assets/` on the web) and only through `GpuScans`, never straight
   from the `AssetServer`; the always-shown UHD models (the stalker,
   `STALKER_MODEL`, and the checkpoints, `SITE_CHECKPOINT`) are preloaded from
   `assets/` instead. Callers `want` a scan each frame from `UPLOAD_LEAD` (40 m)
-  short of where it shows, the five tree scans are `pin`ned, and `scene()`
-  returns the scan only once it is resident; a caller despawns its instance
-  when the scan leaves, since the VRAM is freed only once nothing holds the
-  scene. `GpuScans::plan` loads pinned scans first, then the nearest wants,
-  then prefills spare room in fill order while `PREFILL_HEADROOM_GB` (0.5)
-  stays free. Scans load render-only (`RenderAssetUsages::RENDER_WORLD`), are
-  measured in the frame their load finishes, and the render world reports
-  over `ScanResidency` once every mesh and image of a scan is on the GPU. The
+  short of where it shows, passing how far the anchor is from where it would
+  show (0 or less: it shows now), the three tree scans are `pin`ned, and
+  `scene()` returns the scan only once it is resident; a caller despawns its
+  instance when the scan leaves, since the VRAM is freed only once nothing
+  holds the scene. `GpuScans::plan` loads pinned scans first, then the
+  nearest wants, then prefills spare room in fill order while
+  `PREFILL_HEADROOM_GB` (0.5) stays free; behind the entry curtain, while the
+  world's own uploads still land, every admission leaves that headroom.
+  Scans load render-only (`RenderAssetUsages::RENDER_WORLD`), are measured in
+  the frame their load finishes, and the render world reports over
+  `ScanResidency` once every mesh and image of a scan is on the GPU. The
   budget follows the driver's live reading (`VK_EXT_memory_budget`, each
   second, `gpu_scans/vram.rs`): the game's driver budget, capped by `--vram`,
-  less everything but the resident scans (never under `GAME_VRAM_GB`, 2.4)
-  and `MARGIN_GB` (0.5). A scan stays two minutes after it was last wanted
-  (`KEEP_SECONDS`); a wanted scan short of room drops scans idle longer than
-  that, least recently used first, and when the resident scans outgrow a
-  shrunken budget the oldest unwanted one leaves, unpinned before pinned
+  less `MARGIN_GB` (0.5) and the most the rest of the game (all but the
+  scans) has used this run. A dropped scan's bytes count as scan memory, not
+  the rest of the game, until a reading shows them freed or reused (wgpu
+  keeps freed memory in 256 MiB blocks); after `FREE_WAIT_SECONDS` (30) they
+  stop holding room for new scans, but a wanted scan that finds no other room
+  may still load into them, one at a time within the live budget: the reading
+  after it lands frees them if it reused them, or else no scan tries again
+  for 30 s (its overrun is one scan, inside the margin). A scan stays two minutes after it last
+  showed (`KEEP_SECONDS`); a wanted scan short of room drops scans not shown
+  for that long: those nobody wants, least recently shown first, then those
+  wanted further from showing than it, furthest first (never one showing
+  now, nor a pin). When the resident scans outgrow a shrunken budget the
+  least recently shown unwanted one leaves, unpinned before pinned
   (`UHD scan … left the GPU` in the log). Where the driver cannot report
   VRAM, the budget is `--vram` (6 GB without it) less `DESKTOP_GB` (0.6),
-  `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060: peak RSS
-  9.5–11.7 GiB, the fill 3.3 GB in 10–14 s warm or cold, 1.4–1.9 GB of scans
-  on the GPU. All 42 scans would take about 4.4 GiB on the GPU, so every one
+  `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060 (with five tree species): peak RSS
+  9.3–11.7 GiB, the fill 3.3 GB in 10–14 s warm or cold, 1.4–2.1 GB of scans
+  on the GPU. All 42 scans of then would take about 4.4 GiB on the GPU, so every one
   would stay from a driver budget of about 7.4 GiB (a 10 GB card); that is an
   estimate (14 of the 24 site scans measured, the rest taken at ~107 MiB,
   plus 2.4 GiB for the rest of the game and the 0.5 GiB margin), not run on

@@ -129,7 +129,7 @@ systems:
 1. `src/assets/mod.rs` puts the critical file and scene handles into
    `PreloadedAssets`, and `assets/ram_source.rs` starts reading every file of
    `UhdFiles` (the trees, the plants, then the sites nearest the hangar) into
-   the `ram://` source, four at a time, while 2 GiB of RAM stay free; a file
+   the `ram://` source, four at a time, while 4 GiB of RAM stay free; a file
    left out loads from `assets/` through the same source.
 2. `world/landscape.rs` starts an asynchronous CPU task that builds the distant
    terrain, water, scenery layout, and streamed site data.
@@ -145,11 +145,14 @@ systems:
    render-world system publishes `PipelineCache::waiting_pipelines().count()`
    through a shared atomic, and the world publishes `PlantsGrowing` while any
    streamed tile still has plants to grow or spawn, and `GpuScans::settled`
-   stays false while a UHD scan is loading or a pinned one (the five trees,
+   stays false while a UHD scan is loading or a pinned one (the three trees,
    pinned by `canopy::pin_tree_scans`) is not yet on the GPU; the curtain
    lifts after all stay idle for 0.4 s (12 s cap) and logs `Entered the
    Zone`, hiding shader compilation, first-frame spawn hitches, the trees'
-   scan uploads and the plants filling in around the stalker. `prefill_scans`
+   scan uploads and the plants filling in around the stalker. Until it lifts
+   (`GpuScans::entered`), every scan admission leaves `PREFILL_HEADROOM_GB`
+   free, as the world's own uploads still raise the rest of the game's VRAM
+   and the live budget shrinks with them. `prefill_scans`
    (`assets/gpu_scans/streaming.rs`, `Last`, after `admit_scans`) then fills
    the scan budget from `UhdFiles` in order, one scan at a time, stopping
    `PREFILL_HEADROOM_GB` (0.5) short of it so a dip in the live budget does
@@ -811,9 +814,18 @@ Important paths:
     6 GB RTX 2060 it once fell from 2809 to 2553 MiB in a replay roaming the
     sites) but mostly stays level (in a drive away from the hangar, eight
     scans, about 1 GB, left and it went from 5439 to 5427 MiB). The
-    driver's usage, which `live_scan_budget` reads, behaves the same, so the
-    budget counts that pooled memory as the game's own and shrinks by each
-    scan that leaves.
+    driver's usage behaves the same. So `GpuScans::apply_reading` counts a
+    dropped scan's bytes as scan memory, not the rest of the game's, until a
+    reading shows them freed or reused by a later load, and sizes the budget
+    by the most the rest of the game has used this run: a scan that leaves
+    never shrinks the budget (it did, which emptied the GPU of scans one per
+    second). Bytes still held after `FREE_WAIT_SECONDS` stop holding room for
+    new scans, but never make another scan leave, which would free nothing
+    either. Only a reading after a new scan lands can show it reused them, so
+    a wanted scan short of other room may try that room, one at a time
+    (`try_stuck_room`); a try that does not reuse it pauses the next for
+    `FREE_WAIT_SECONDS`. Without it, one burst of evictions lost that room,
+    and the UHD close-ups with it, for the rest of the run.
 
 25. **Mind the shroud when adding meshes or materials.**
     `shroud::cull_shrouded` drops any entity with an `Aabb` that stands wholly
