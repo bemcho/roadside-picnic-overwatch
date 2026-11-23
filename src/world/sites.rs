@@ -1165,9 +1165,9 @@ mod tests {
         LANDMARKS[0].model().path
     }
 
-    /// An app streaming the first site's scan on a GPU holding `scans`, with
-    /// the site's stand-in and a stream anchor far from the site.
-    fn streaming_site(scans: GpuScans) -> (App, Entity, Entity) {
+    /// An app streaming the scans of the sites at `indices` on a GPU holding
+    /// `scans`, with each site's stand-in and a stream anchor far from them.
+    fn streaming_sites(scans: GpuScans, indices: &[usize]) -> (App, Entity, Vec<Entity>) {
         let mut app = App::new();
         app.insert_resource(scans)
             .add_systems(Update, stream_full_sites);
@@ -1175,19 +1175,56 @@ mod tests {
             .world_mut()
             .spawn((StreamAnchor, Transform::from_xyz(1e6, 0.0, 1e6)))
             .id();
-        let site = app.world_mut().spawn(SiteDisplay { index: 0 }).id();
-        let far = app
-            .world_mut()
-            .spawn((FarSite, Visibility::Inherited, ChildOf(site)))
-            .id();
-        (app, anchor, far)
+        let fars = indices
+            .iter()
+            .map(|&index| {
+                let site = app.world_mut().spawn(SiteDisplay { index }).id();
+                app.world_mut()
+                    .spawn((FarSite, Visibility::Inherited, ChildOf(site)))
+                    .id()
+            })
+            .collect();
+        (app, anchor, fars)
     }
 
-    /// Stands the anchor `beyond` metres past the reach of the first site's scan.
-    fn stand_beyond_reach(app: &mut App, anchor: Entity, beyond: f32) {
+    /// An app streaming the first site's scan, with the site's stand-in.
+    fn streaming_site(scans: GpuScans) -> (App, Entity, Entity) {
+        let (app, anchor, fars) = streaming_sites(scans, &[0]);
+        (app, anchor, fars[0])
+    }
+
+    /// The two evacuated houses by the Plague Quarter, which show one scan.
+    fn house_pair() -> [usize; 2] {
+        let mut houses = LANDMARKS
+            .iter()
+            .enumerate()
+            .filter(|(_, site)| site.kind == SuburbanHouse)
+            .map(|(index, _)| index);
+        let mut next = || houses.next().expect("the Plague Quarter has two houses");
+        let pair = [next(), next()];
+        assert_eq!(
+            LANDMARKS[pair[0]].model().path,
+            LANDMARKS[pair[1]].model().path
+        );
+        pair
+    }
+
+    /// Stands the anchor `metres` from the first house of `pair`, on the line
+    /// from the second house through it: both houses are within reach.
+    fn stand_by_houses(app: &mut App, anchor: Entity, pair: [usize; 2], metres: f32) {
+        let [near, far] = pair.map(|index| LANDMARKS[index].center);
+        let at = near + (near - far).normalize() * metres;
+        app.world_mut()
+            .entity_mut(anchor)
+            .insert(Transform::from_xyz(at.x, 0.0, at.y));
+    }
+
+    /// Stands the anchor `offset` metres from the reach of the first site's
+    /// scan: outside it when positive, inside it when negative.
+    fn stand_from_reach(app: &mut App, anchor: Entity, offset: f32) {
         let landmark = LANDMARKS[0];
         let reach = landmark.model().radius() + FULL_SCAN_RANGE;
-        let at = landmark.center + Vec2::X * (reach + beyond);
+        let at = landmark.center + Vec2::X * (reach + offset);
         app.world_mut()
             .entity_mut(anchor)
             .insert(Transform::from_xyz(at.x, 0.0, at.y));
@@ -1207,7 +1244,7 @@ mod tests {
     #[test]
     fn a_site_asks_for_its_scan_40_m_before_it_shows() {
         let (mut app, anchor, _) = streaming_site(GpuScans::new(1 << 30));
-        stand_beyond_reach(&mut app, anchor, 30.0);
+        stand_from_reach(&mut app, anchor, 30.0);
         app.update();
         assert!(full_sites(&mut app).is_empty(), "out of reach");
         let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
@@ -1217,7 +1254,7 @@ mod tests {
     #[test]
     fn a_site_does_not_ask_for_its_scan_50_m_before_it_shows() {
         let (mut app, anchor, _) = streaming_site(GpuScans::new(1 << 30));
-        stand_beyond_reach(&mut app, anchor, 50.0);
+        stand_from_reach(&mut app, anchor, 50.0);
         app.update();
         let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
         assert!(plan.load.is_empty(), "{:?}", plan.load);
@@ -1228,11 +1265,11 @@ mod tests {
         let mut scans = GpuScans::new(1 << 30);
         scans.insert_resident(first_scan(), Handle::default());
         let (mut app, anchor, far) = streaming_site(scans);
-        stand_beyond_reach(&mut app, anchor, 30.0);
+        stand_from_reach(&mut app, anchor, 30.0);
         app.update();
         assert!(full_sites(&mut app).is_empty(), "out of reach");
         assert!(stand_in_shows(&app, far));
-        stand_beyond_reach(&mut app, anchor, -10.0);
+        stand_from_reach(&mut app, anchor, -10.0);
         app.update();
         assert_eq!(full_sites(&mut app).len(), 1);
     }
@@ -1240,7 +1277,7 @@ mod tests {
     #[test]
     fn a_site_shows_its_scan_once_on_the_gpu_and_keeps_wanting_it() {
         let (mut app, anchor, far) = streaming_site(GpuScans::new(1 << 30));
-        stand_beyond_reach(&mut app, anchor, -10.0);
+        stand_from_reach(&mut app, anchor, -10.0);
         app.update();
         assert!(
             full_sites(&mut app).is_empty(),
@@ -1255,14 +1292,19 @@ mod tests {
         // The scan has loaded and stands in for the site.
         app.world_mut().entity_mut(far).insert(Visibility::Hidden);
 
-        stand_beyond_reach(&mut app, anchor, 55.0);
+        // A plan forgets the asks so far, so the next stamp shows whether the
+        // site asks again past its reach, where the margin keeps its instance.
+        let mut scans = app.world_mut().resource_mut::<GpuScans>();
+        scans.plan(5.0);
+        assert_eq!(scans.last_used(first_scan()), Some(5.0));
+        stand_from_reach(&mut app, anchor, 55.0);
         app.update();
         assert_eq!(full_sites(&mut app).len(), 1, "kept inside the margin");
         let mut scans = app.world_mut().resource_mut::<GpuScans>();
         assert!(scans.plan(10.0).load.is_empty(), "it is loaded already");
-        assert_eq!(scans.last_used(first_scan()), Some(10.0));
+        assert_eq!(scans.last_used(first_scan()), Some(10.0), "still wanted");
 
-        stand_beyond_reach(&mut app, anchor, 61.0);
+        stand_from_reach(&mut app, anchor, 61.0);
         app.update();
         assert!(full_sites(&mut app).is_empty(), "dropped past the margin");
         assert!(stand_in_shows(&app, far));
@@ -1273,7 +1315,7 @@ mod tests {
         let mut scans = GpuScans::new(1 << 30);
         scans.insert_resident(first_scan(), Handle::default());
         let (mut app, anchor, far) = streaming_site(scans);
-        stand_beyond_reach(&mut app, anchor, -10.0);
+        stand_from_reach(&mut app, anchor, -10.0);
         app.update();
         assert_eq!(full_sites(&mut app).len(), 1);
         // The scan has loaded and stands in for the site.
@@ -1287,5 +1329,49 @@ mod tests {
         assert!(stand_in_shows(&app, far));
         let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
         assert_eq!(plan.load, [first_scan()], "the scan is wanted back");
+    }
+
+    #[test]
+    fn sites_sharing_a_scan_ask_for_it_at_the_nearest_ones_distance() {
+        let pair @ [near, far] = house_pair();
+        let shared = LANDMARKS[near].model().path;
+        // The card holds one of the two scans: the nearer ask loads.
+        let mut scans = GpuScans::new(250 << 20);
+        scans.estimate(shared, 100 << 20);
+        scans.estimate("rival", 100 << 20);
+        let (mut app, anchor, _) = streaming_sites(scans, &pair);
+        stand_by_houses(&mut app, anchor, pair, 50.0);
+        // The rival asks from between the two houses' distances to their reach.
+        let reach = |index: usize| LANDMARKS[index].model().radius() + FULL_SCAN_RANGE;
+        let gap = LANDMARKS[near].center.distance(LANDMARKS[far].center);
+        assert!(50.0 + gap < reach(far), "both houses are within reach");
+        let rival = 50.0 + gap / 2.0 - reach(near);
+        let mut scans = app.world_mut().resource_mut::<GpuScans>();
+        scans.want("rival", rival);
+        app.update();
+        let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
+        assert_eq!(plan.load, [shared], "the nearest house's ask stands");
+    }
+
+    #[test]
+    fn a_scan_that_leaves_the_gpu_takes_the_instances_of_all_sites_sharing_it() {
+        let pair = house_pair();
+        let mut scans = GpuScans::new(1 << 30);
+        scans.insert_resident(LANDMARKS[pair[0]].model().path, Handle::default());
+        let (mut app, anchor, fars) = streaming_sites(scans, &pair);
+        stand_by_houses(&mut app, anchor, pair, 50.0);
+        app.update();
+        assert_eq!(full_sites(&mut app).len(), 2, "both houses show it");
+        // The scan has loaded and stands in for both.
+        for &far in &fars {
+            app.world_mut().entity_mut(far).insert(Visibility::Hidden);
+        }
+
+        // Eviction: nothing is on the GPU any more.
+        app.insert_resource(GpuScans::new(1 << 30));
+        app.update();
+
+        assert!(full_sites(&mut app).is_empty(), "frees its VRAM");
+        assert!(fars.iter().all(|&far| stand_in_shows(&app, far)));
     }
 }
