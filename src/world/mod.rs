@@ -301,13 +301,18 @@ pub(crate) fn uhd_files() -> Vec<&'static str> {
     files
 }
 
-/// Every site and landmark UHD scan is one primitive with 16-50 MiB of vertex
-/// data and 7-22 MiB of index data, most near 20 and 9 MiB. At a 4 MiB
-/// threshold each of those buffers is its own: exact size, no growth copies,
-/// freed when the scan unloads. Smaller meshes (town buildings, roads,
-/// railway, props, plant parts) stay batched in shared slabs of at most 128
-/// MiB. With the old 32 MiB threshold most scans shared slabs that grew 1.5x
-/// by copy, and a 4 GB T1200 ran out of memory while streaming sites.
+/// Bevy decides per allocation: a mesh's vertex data, and separately its index
+/// data, gets a buffer of its own when it is 4 MiB or more (`>=` the
+/// threshold), and smaller ones share slabs of at most 128 MiB. Every site and
+/// landmark UHD scan is one primitive with 16-50 MiB of vertex data and 7-22
+/// MiB of index data, most near 20 and 9 MiB, so both are their own buffers:
+/// exact size, no growth copies, freed when the scan unloads. So are the
+/// single-primitive tree and plant scans (45-52 MiB vertex, 21-23 MiB index)
+/// and the largest parts of the multipart burdock, elder, juniper and thistle
+/// scans (4.7-6.9 MiB). Their other parts and the town buildings, roads,
+/// railway and props stay batched in slabs. With the old 32 MiB threshold most
+/// scans shared slabs that grew 1.5x by copy, and a 4 GB T1200 ran out of
+/// memory while streaming sites.
 fn mesh_allocator_settings() -> MeshAllocatorSettings {
     MeshAllocatorSettings {
         slab_allocator_settings: SlabAllocatorSettings {

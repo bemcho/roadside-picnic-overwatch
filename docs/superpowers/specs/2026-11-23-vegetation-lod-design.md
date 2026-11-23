@@ -190,8 +190,10 @@ than needed. Once zoomed out, the ranges still run out and things vanish.
   around the anchors: inside the one-tile-per-frame spawn and through
   `unload_stale_tiles`. Sway, falling and crushing must act on the streamed
   tiers too. *(Assistant's call.)*
-- GPU buffers. `mesh_allocator_settings` (`world/mod.rs`) gives meshes over
-  32 MiB their own buffers and keeps shared slabs at 128 MiB or less, because
+- GPU buffers. `mesh_allocator_settings` (`world/mod.rs`) gives a mesh's
+  vertex data, and separately its index data, its own buffer from 4 MiB up
+  (32 MiB when this spec was written; lowered in phase 1, Task 4b) and keeps
+  shared slabs at 128 MiB or less, because
   slab growth once ran the 6 GB card out of memory. Close-up scans must stay
   in their own buffers: never split them into pieces that land in the shared
   slabs.
@@ -382,19 +384,27 @@ move forth and back", "minimal disk io"). Native builds only: `wasm32` has a
   been shown for at least two minutes and is not near any anchor. The least
   recently shown one goes first. If nothing may leave, the new scan waits and
   its mid tier stays. A copy that leaves is only dropped from the GPU: the RAM
-  copy stays and nothing is read from disk. From about 12 GB of VRAM every
-  scan fits, so nothing ever leaves (estimate; the README says so after
-  measuring). *(Assistant's call: two minutes is a starting point.)*
+  copy stays and nothing is read from disk. Every scan fits once the driver
+  offers the game about 7.4 GiB, which takes a 10 GB card, so nothing ever
+  leaves there (measured in phase 1, Task 9: the 42 scans take about 4.4 GiB
+  on the GPU; this first said 12 GB, an estimate). *(Assistant's call: two minutes is a starting point.)*
 - **Upload early.** Start a scan's upload once an anchor comes within about
   40 m of an object that may show it (the car covers that in under 2 s at
   24 m/s). Show it only once it is on the GPU; until then the mid or near tier
   stays. Never wait, and never pop in late at close range.
-- **Spread uploads.** Insert Bevy's `RenderAssetBytesPerFrame` (unused today)
-  at about 32 MB per frame. It is a soft limit that counts whole assets, so it
-  spreads multipart scans across frames, while a single-primitive scan still
-  uploads in one frame. Do not split scans to get around that (see GPU buffers
-  under Constraints). Only if a trace shows an upload spike from one, split it
-  into pieces above the 32 MiB own-buffer threshold.
+- **Spread uploads.** *(Amended in phase 1: Ruling 30 dropped the limit this
+  bullet asked for.)* It asked for Bevy's `RenderAssetBytesPerFrame` at about
+  32 MB per frame. That limit also spread the fog-of-war mask and the
+  stalker's ring over several frames, so they flashed and blinked, which is
+  worse than a one-frame hitch; Bevy's default, no limit, stays. Task 9's
+  traces measured the cost: each scan upload after the curtain holds one
+  frame for 103-147 ms (`allocate_and_free_meshes` 65-105 ms, plus up to
+  45 ms of `prepare_assets<GpuImage>`). The walk had five (plant scans of
+  76-135 MB), the drive one (the Institute, 65 MB), and the wood run, with
+  every tree and plant scan on the GPU before the curtain, none. Do not split
+  scans to get around that (see GPU buffers under Constraints); whether a
+  limit returns, with the ring and the shroud made not to re-upload each
+  change, is for phase 2.
 - Sites and landmarks keep their own rule for when to show a scan
   (`sites.rs`: within 150 m of a `StreamAnchor`), under the same budget. In
   the trace the garage took ~1.1 s to load from disk; from RAM it arrives in
@@ -449,7 +459,7 @@ section to `README.md`, next to the run commands, along these lines:
 >   machine has free (the loading screen takes longer the first time). On the
 >   GPU it keeps as many close-up (UHD) models as the driver says fit, and
 >   frees the least recently seen ones when memory runs short. From about
->   12 GB up, all of them stay. Use the flag to leave video memory for other
+>   10 GB up, all of them stay. Use the flag to leave video memory for other
 >   programs, or where the driver cannot report it (then the game assumes
 >   6 GB).
 > - `--detail <x>` (default 1.0): how far the higher-detail versions of trees,

@@ -52,8 +52,11 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **F5** — save progress (it also saves every minute and on quitting)
 - **Q** — quit
 - Start with `cargo run --release -- --new` to ignore the save and begin afresh
-- `cargo run --release -- --vram <GB>` caps the video memory the game uses
-  (by default, what the driver reports free)
+- `cargo run --release -- --vram <GB>` caps the video memory the game uses:
+  normally it caps the driver's live budget (by default the game takes what
+  the driver's budget allows); where the driver can't report VRAM, it is the
+  card size the fallback budget assumes (6 GB without it). See **RAM and
+  GPU** under Procedural content.
 
 ## Tactical view
 
@@ -468,19 +471,52 @@ the stalker stands still.
   data maps), loaded through Bevy's `ktx2` + `zstd_rust` features. Finish every
   new or re-exported runtime GLB with
   `python3 tools/compress_glb_textures.py <glb>...` (needs `cargo install ctt-cli`).
-  Run it last: Blender and glTF Transform cannot read the converted textures, so
-  re-run earlier pipeline steps from the git/source GLB. Runtime CPU mipmaps
+  Run it last: Blender and glTF Transform cannot decode or edit the converted
+  textures' pixels, so re-run earlier pipeline steps from the git/source GLB
+  (the tangent bake below is the one step allowed after compression). Runtime CPU mipmaps
   (`terrain_material::mipmap_filtered_textures`) only cover procedural images
   and the small tiling terrain PNGs. Normal-mapped runtime GLBs also carry baked
   MikkTSpace tangents, so Bevy does not generate them at load (5–6 s for a
   1M-vertex scan): after a re-export, bake them with
   `python3 ~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py <glb>...`
   (it works on the compressed file and keeps its KTX2 images byte-identical).
+- **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
+  behind the splash the `ram://` asset source reads every UHD scan the game
+  can show (`world::uhd_files`: the five trees, the plants, then the sites
+  nearest the hangar first) into RAM, four files at a time, while 2 GiB of
+  RAM stay free (`RAM_HEADROOM`). A file that does not fit stays on disk and
+  loads from `assets/` through the same source; the splash waits for the fill.
+  Every UHD load goes through `assets::uhd(path)` (`ram://` natively,
+  `assets/` on the web) and only through `GpuScans`, never straight from the
+  `AssetServer`. Callers `want` a scan each frame from `UPLOAD_LEAD` (40 m)
+  short of where it shows, the five tree scans are `pin`ned, and `scene()`
+  returns the scan only once it is resident; a caller despawns its instance
+  when the scan leaves, since the VRAM is freed only once nothing holds the
+  scene. `GpuScans::plan` loads pinned scans first, then the nearest wants,
+  then prefills spare room in fill order while `PREFILL_HEADROOM_GB` (0.5)
+  stays free. Scans load render-only (`RenderAssetUsages::RENDER_WORLD`), are
+  measured in the frame their load finishes, and the render world reports
+  over `ScanResidency` once every mesh and image of a scan is on the GPU. The
+  budget follows the driver's live reading (`VK_EXT_memory_budget`, each
+  second, `gpu_scans/vram.rs`): the game's driver budget, capped by `--vram`,
+  less everything but the resident scans (never under `GAME_VRAM_GB`, 2.4)
+  and `MARGIN_GB` (0.5). A scan stays two minutes after it was last wanted
+  (`KEEP_SECONDS`); a wanted scan short of room drops scans idle longer than
+  that, least recently used first, and when the resident scans outgrow a
+  shrunken budget the oldest unwanted one leaves, unpinned before pinned
+  (`UHD scan … left the GPU` in the log). Where the driver cannot report
+  VRAM, the budget is `--vram` (6 GB without it) less `DESKTOP_GB` (0.6),
+  `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060: peak RSS
+  9.5–11.7 GiB, the fill 3.3 GB in 10–12 s warm or cold, 1.4–2.0 GB of scans
+  on the GPU; all 42 scans take about 4.4 GiB on the GPU, so every one stays
+  from a driver budget of about 7.4 GiB (a 10 GB card).
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
-  empty and every streamed plant has spawned (`world::PlantsGrowing`) for a
-  moment (at most 12 s), so shaders compile and spawn hitches happen behind
-  it instead of as pop-in. NVIDIA's driver caches compiled pipelines on
+  empty, every streamed plant has spawned (`world::PlantsGrowing`) and the
+  UHD scans have settled on the GPU (`GpuScans::settled`: every pinned tree
+  scan that fits resident, nothing loading or uploading) for a moment (at most
+  12 s), so shaders compile and spawn and upload hitches happen behind it
+  instead of as pop-in. NVIDIA's driver caches compiled pipelines on
   disk; Bevy 0.20 itself has no persistent pipeline cache.
 
 ## Build & Run Commands

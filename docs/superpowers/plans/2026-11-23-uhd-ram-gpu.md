@@ -6,7 +6,7 @@
 
 **Architecture:** `main.rs` registers an in-memory asset source (`ram://`) before `DefaultPlugins`; at startup every listed UHD file is read through Bevy's own reader on the IO pool into its shared `Dir`, and the splash waits for that. A `GpuScans` resource is the only owner of UHD GPU copies: callers `want` a scan when an anchor comes within 40 m, `GpuScans` loads it from `ram://` with render-only usages under a byte budget (`--vram` − the game's own VRAM − 0.5 GB), evicts the least recently used scan only after two idle minutes, and hands out the scene only once a render-world system has seen all its meshes and images prepared.
 
-**Tech Stack:** Rust 2024, Bevy 0.20.1 (`bevy::asset::io::memory::{Dir, MemoryAssetReader}`, `AssetSourceBuilder`, `GltfLoaderSettings`, `RenderAssetUsages::RENDER_WORLD`, `RenderAssets<RenderMesh>`, `RenderAssets<GpuImage>`, `RenderAssetBytesPerFrame`, `IoTaskPool`, `bevy::tasks::futures::check_ready`).
+**Tech Stack:** Rust 2024, Bevy 0.20.1 (`bevy::asset::io::memory::{Dir, MemoryAssetReader}`, `AssetSourceBuilder`, `GltfLoaderSettings`, `RenderAssetUsages::RENDER_WORLD`, `RenderAssets<RenderMesh>`, `RenderAssets<GpuImage>`, `IoTaskPool`, `bevy::tasks::futures::check_ready`).
 
 **Spec:** `docs/superpowers/specs/2026-11-23-vegetation-lod-design.md` (sections "RAM and GPU", "Measuring", "README", "Order of work" step 1). Phases 2 (vegetation and rock tiers, `--detail`) and 3 (UHD for the other kinds) get their own plans once this phase is measured: their budgets depend on the numbers Task 9 records.
 
@@ -391,7 +391,7 @@ Expected: PASS.
   - `residency::scan_bytes(parts: &ScanParts, meshes: &Assets<Mesh>, images: &Assets<Image>) -> Option<u64>`: `RenderMesh::byte_len` plus `GpuImage::byte_len` (both from `bevy::render::render_asset::RenderAsset`). It returns `None` if any mesh fails `try_attributes()` or any image has `data == None`.
   - `#[derive(Resource, Clone, Default)] residency::ScanResidency(pub Arc<Mutex<Residency>>)`, where `Residency { pub waiting: HashMap<&'static str, ScanParts>, pub ready: HashSet<&'static str> }`. It is inserted into the main and render apps, like the curtain's `PipelineBacklog`.
   - `residency::settle(residency: &mut Residency, mesh_ready: impl Fn(AssetId<Mesh>) -> bool, image_ready: impl Fn(AssetId<Image>) -> bool)`: moves each waiting scan whose parts are all ready into `ready`.
-  - `GpuScansPlugin`: inserts `GpuScans::new(scan_budget(launch.vram_gb.unwrap_or(DEFAULT_VRAM_GB)))` (the fallback until the first live reading) and `RenderAssetBytesPerFrame::new(32 * 1024 * 1024)`, and adds the systems below.
+  - `GpuScansPlugin`: inserts `GpuScans::new(scan_budget(launch.vram_gb.unwrap_or(DEFAULT_VRAM_GB)))` (the fallback until the first live reading) and adds the systems below. *(Amended in Task 9: Ruling 30 dropped the `RenderAssetBytesPerFrame::new(32 * 1024 * 1024)` insert this step first had, so Bevy's default, no limit, stays. The limit spread the fog-of-war mask and the stalker's ring over several frames too, so they flashed and blinked. Task 9's traces measured what it would have smoothed: each scan upload after the curtain holds one frame for 103-147 ms, five in the walk and one in the drive, none in the wood run.)*
   - `LaunchOptions::vram_gb: Option<f32>`: `None` without the flag; a malformed value warns and gives `None`. Update Task 2's tests to match.
   - `vram::heap_reading(heaps: &[(bool, u64)], budgets: &[u64], usages: &[u64]) -> Option<VramReading>`: pure. `heaps` holds each heap's (device-local, size). It reads the largest device-local heap's budget and usage. It returns `None` when there is no such heap or its budget is 0 (the extension is off).
   - `vram::read_vram(device: &RenderDevice) -> Option<VramReading>` (native only; `None` on wasm32 and on every backend but Vulkan):
@@ -683,7 +683,7 @@ Expected:
 
     Repeat once without the hog, to show the 2060 then keeps more scans.
 
-  If a frame is over 33 ms, find its span with `summarize.py --match`. If it is a single upload, note its size: the spec allows splitting only above the 32 MiB own-buffer threshold, so record it for phase 2 and do not widen this phase.
+  If a frame is over 33 ms, find its span with `summarize.py --match`. If it is a single upload, note its size: the spec allows splitting only above the 4 MiB own-buffer threshold (32 MiB when this plan was written; Task 4b lowered it), so record it for phase 2 and do not widen this phase.
 
 - [ ] **Step 3: Tune the fallback budget.** `GAME_VRAM_GB` now only feeds the fallback for hosts whose driver cannot report VRAM. Find the overview run's `on the GPU … {used} of {budget} GB` line at the VRAM peak. Set `GAME_VRAM_GB` to the peak VRAM minus `used`, rounded up to 0.1 GB, if it differs from Task 1's value by more than 0.2 GB. No re-run is needed: the live budget does not use it.
 

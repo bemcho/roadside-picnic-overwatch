@@ -204,12 +204,17 @@ repository.
 ### Graphics quality
 
 The game reads every close-up (UHD) model once at start and keeps it in RAM,
-so the first loading screen takes longer. That uses about 3.3 GB of RAM. It
-always leaves 2 GB of RAM free: on a machine short of RAM, the models that
-do not fit stay on disk and load from there when needed.
+so the loading screen takes a few seconds longer. That copy takes about
+3.3 GB, and the game as a whole peaked at 9.5–11.7 GB of RAM in our tests
+(about 7 GB before). It always leaves 2 GB of RAM free: on a machine short
+of RAM, the models that do not fit stay on disk and load from there when
+needed.
 
 It keeps as many close-up models on the GPU as the driver says fit, and frees
-the least recently seen ones when video memory runs short.
+the least recently seen ones when video memory runs short. All of them take
+about 4.4 GB of video memory, so every one stays on the GPU once the driver
+offers the game about 7.4 GB, which takes a 10 GB card; a 6 GB card keeps
+about 1.9 GB of them at a time.
 
 - `--vram <GB>` caps the video memory the game uses. Use it to leave room for
   other programs, or where the driver cannot report VRAM (the game then
