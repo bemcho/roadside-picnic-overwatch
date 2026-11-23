@@ -391,10 +391,13 @@ footprint, and outside it blends to the landform over a margin whose target is
 the edge blurred more the farther out, so clefts don't streak across the land.
 
 The scans together outgrow a 6 GB GPU (about 160 MB each). Every site preloads
-and shows its `low/` stand-in; `stream_full_sites` spawns the full scan's scene
-within `FULL_SCAN_RANGE` of the footprint around any `StreamAnchor`, swaps the
-stand-in out once it is ready, and despawns it again past `FULL_SCAN_KEEP`, which
-frees its mesh and textures.
+and shows its `low/` stand-in; `stream_full_sites` wants the full scan from
+`GpuScans` once any `StreamAnchor` is within `FULL_SCAN_RANGE` plus
+`UPLOAD_LEAD` (40 m) of the footprint, and spawns its scene within
+`FULL_SCAN_RANGE` once the scan is on the GPU. It swaps the stand-in out once
+the instance is ready, and despawns the instance again past `FULL_SCAN_KEEP`,
+or if the scan leaves the GPU (that is when the GPU frees it), and the
+stand-in shows again.
 
 Changing a placement can affect several subsystems at once:
 

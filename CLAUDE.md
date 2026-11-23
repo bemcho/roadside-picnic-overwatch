@@ -270,8 +270,11 @@ the stalker stands still.
   the middle of their road-facing edge on the land at the entrance. Measure a
   scan's collision and relief with `tools/sample_landmark_ground.py` (see its
   docstring). All scans at once outgrow a 6 GB GPU, so each site shows a light
-  stand-in from `low/` and streams its full UHD scene in within 150 m of its
-  footprint around any `StreamAnchor`. The Institute's Tripo scan came without
+  stand-in from `low/` and shows its full UHD scene within 150 m of its
+  footprint around any `StreamAnchor`: `stream_full_sites` wants the scan from
+  `GpuScans` 40 m before that (`UPLOAD_LEAD`) and shows it once it is on the
+  GPU, then drops it 60 m past the range, or if the scan leaves the GPU, and
+  the stand-in shows again. The Institute's Tripo scan came without
   UVs or textures: `tools/prepare_institute_asset.py` (headless Blender) paints
   it with one atlas from its concept image in the workspace (window bays on the
   front and back, precast panels on the sides and roof), then builds its
