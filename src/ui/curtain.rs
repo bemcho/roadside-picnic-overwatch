@@ -1,7 +1,7 @@
 //! Entry curtain: keeps a loading screen over the freshly spawned Zone until the
 //! renderer has compiled its shader pipelines, the plants around the stalker
-//! have spawned and the pinned UHD scans are on the GPU, so the world appears
-//! complete instead of popping in.
+//! have spawned and the UHD scans are on the GPU (the pinned trees, and any
+//! prefill in flight), so the world appears complete instead of popping in.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -104,7 +104,9 @@ fn lift_curtain(
     let (entity, mut curtain) = curtain.into_inner();
     let dt = time.delta_secs();
     curtain.shown += dt;
-    // Pinned scans still loading hold the curtain; `MAX_SECONDS` caps the
+    // `settled` is false while any scan loads or uploads, a pinned tree's or a
+    // prefill's, and while a pinned one is not yet on the GPU: the curtain
+    // holds until prefill has no more room to fill, but `MAX_SECONDS` caps the
     // wait, and a tree shows its crown until its scan is resident.
     let busy = backlog.0.load(Ordering::Relaxed) > 0 || plants.0 || !scans.settled();
     curtain.settled = if busy { 0.0 } else { curtain.settled + dt };

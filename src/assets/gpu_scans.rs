@@ -105,10 +105,13 @@ struct Scan {
     bytes: u64,
     is_measured: bool,
     pinned: bool,
-    /// Seconds on the caller's clock when it was last wanted.
-    last_used: f32,
+    /// Seconds on the caller's clock when it was last wanted; `None` for a
+    /// scan nobody has wanted, such as a prefilled one.
+    last_used: Option<f32>,
     /// The nearest ask this frame, cleared by `plan`.
     wanted: Option<f32>,
+    /// Proposed by `prefill` this frame, cleared by `plan`.
+    speculative: bool,
     /// The last `plan` found no room for it, though it is wanted.
     waiting: bool,
     /// Held from admission until eviction.
@@ -122,6 +125,11 @@ impl Scan {
     /// Where it queues among scans waiting to load: the nearest ask first.
     fn distance(&self) -> f32 {
         self.wanted.unwrap_or(f32::INFINITY)
+    }
+
+    /// When it was last wanted, for ranking: a scan nobody wanted is the oldest.
+    fn used_at(&self) -> f32 {
+        self.last_used.unwrap_or(f32::NEG_INFINITY)
     }
 }
 
@@ -214,12 +222,23 @@ impl GpuScans {
     }
 
     /// Asks for the scan this frame; the smallest distance of several asks stands.
+    // The plant, site and artifact streams of Tasks 7 and 8 call it.
+    #[cfg_attr(not(test), expect(dead_code))]
     pub fn want(&mut self, path: &'static str, distance: f32) {
         let scan = self.scan_mut(path);
         scan.wanted = Some(
             scan.wanted
                 .map_or(distance, |nearest| nearest.min(distance)),
         );
+    }
+
+    /// Proposes the scan to the next `plan` as a speculative load. It queues
+    /// after every ask, loads only into room that stays `PREFILL_HEADROOM_GB`
+    /// short of the budget, never makes another scan leave, and is not
+    /// stamped as used: until someone wants it, it counts as never shown and
+    /// is the first to leave.
+    pub fn prefill(&mut self, path: &'static str) {
+        self.scan_mut(path).speculative = true;
     }
 
     /// Sizes the scan from its file until it is measured.
@@ -244,7 +263,7 @@ impl GpuScans {
     }
 
     /// Decides what to load and what to drop at `now` seconds, marks loads as
-    /// loading and drops as off, and clears this frame's wants.
+    /// loading and drops as off, and clears this frame's wants and prefills.
     ///
     /// Admission counts every scan in `used`, so uploads in flight keep their
     /// room. The over-budget step counts only the loaded scans, which are the
@@ -264,14 +283,16 @@ impl GpuScans {
         }
         for scan in self.scans.values_mut() {
             scan.wanted = None;
+            scan.speculative = false;
         }
         admission
     }
 
-    /// The first file of `order` that is off and fits the free room less
-    /// `PREFILL_HEADROOM_GB`, while no scan is loading and no wanted scan
-    /// waits (as of the last `plan`). A pinned scan too big for the card is
-    /// not wanted and never holds it back.
+    /// The first file of `order` that is off and that `plan` would admit as a
+    /// prefill (`fits_prefill`), while no scan is loading and no wanted scan
+    /// waits (as of the last `plan`). A scan whose load failed (measured at 0
+    /// bytes) is skipped, or prefill would load it again each time it leaves.
+    /// A pinned scan too big for the card is not wanted and never holds it back.
     pub fn next_prefill(&self, order: &[&'static str]) -> Option<&'static str> {
         if self
             .scans
@@ -280,11 +301,11 @@ impl GpuScans {
         {
             return None;
         }
-        let room = self.room().saturating_sub(gib(PREFILL_HEADROOM_GB));
         order.iter().copied().find(|path| {
-            self.scans
-                .get(path)
-                .is_some_and(|scan| scan.state == State::Off && scan.bytes <= room)
+            self.scans.get(path).is_some_and(|scan| {
+                let failed = scan.is_measured && scan.bytes == 0;
+                scan.state == State::Off && !failed && self.fits_prefill(scan.bytes)
+            })
         })
     }
 
@@ -310,6 +331,13 @@ impl GpuScans {
         self.deficit(bytes) == 0
     }
 
+    /// Whether `bytes` more fit while `PREFILL_HEADROOM_GB` stays free: the
+    /// one rule for what a prefill may take, kept by both the choice of file
+    /// and its admission.
+    fn fits_prefill(&self, bytes: u64) -> bool {
+        self.fits(bytes + gib(PREFILL_HEADROOM_GB))
+    }
+
     /// Bytes that must leave before `bytes` more fit the budget. Unlike
     /// `room()`, exact when the uploads in flight already put `used()` past the
     /// budget, where `room()` reads 0 and hides how far.
@@ -321,14 +349,15 @@ impl GpuScans {
     fn begin_plan(&mut self, now: f32) {
         for scan in self.scans.values_mut() {
             if scan.wanted.is_some() {
-                scan.last_used = now;
+                scan.last_used = Some(now);
             }
             scan.waiting = false;
         }
     }
 
     /// For when the resident scans alone (`resident_bytes`) exceed the budget:
-    /// drops the oldest resident scan not shown this frame, unpinned before
+    /// drops the oldest resident scan not shown this frame (one nobody ever
+    /// wanted, such as a prefilled one, is the oldest), unpinned before
     /// pinned. Scans still loading or uploading are neither counted nor dropped.
     fn evict_over_budget(&mut self) -> Option<&'static str> {
         let (&path, _) = self
@@ -340,18 +369,21 @@ impl GpuScans {
             .min_by(|(_, a), (_, b)| {
                 a.pinned
                     .cmp(&b.pinned)
-                    .then(a.last_used.total_cmp(&b.last_used))
+                    .then(a.used_at().total_cmp(&b.used_at()))
             })?;
         self.scan_mut(path).state = State::Off;
         Some(path)
     }
 
-    /// Scans to load, pinned first, then the nearest.
+    /// Scans to load, pinned first, then the nearest ask, then the prefills.
     fn pending(&self) -> Vec<&'static str> {
         let mut pending: Vec<_> = self
             .scans
             .iter()
-            .filter(|(_, scan)| scan.state == State::Off && (scan.pinned || scan.wanted.is_some()))
+            .filter(|(_, scan)| {
+                scan.state == State::Off
+                    && (scan.pinned || scan.wanted.is_some() || scan.speculative)
+            })
             .collect();
         pending.sort_by(|(_, a), (_, b)| {
             b.pinned
@@ -367,13 +399,22 @@ impl GpuScans {
             return;
         };
         let (bytes, pinned) = (scan.bytes, scan.pinned);
+        if !pinned && scan.wanted.is_none() {
+            // Only prefilled: no eviction, no stamp, and no waiting, which a
+            // real ask does.
+            if self.fits_prefill(bytes) {
+                self.scan_mut(path).state = State::Loading;
+                admission.load.push(path);
+            }
+            return;
+        }
         // A pinned scan never evicts others: it loads only into room already free.
         let fits =
             self.fits(bytes) || (!pinned && self.free_idle(bytes, now, &mut admission.evict));
         if fits {
             let scan = self.scan_mut(path);
             scan.state = State::Loading;
-            scan.last_used = now;
+            scan.last_used = Some(now);
             admission.load.push(path);
         } else if pinned {
             self.warn_pinned_waits(path, bytes);
@@ -400,16 +441,17 @@ impl GpuScans {
         true
     }
 
-    /// Loaded, unpinned scans unused for `KEEP_SECONDS`, oldest first.
+    /// Loaded, unpinned scans unused for `KEEP_SECONDS` (a scan nobody wanted
+    /// is idle at once), oldest first.
     fn idle(&self, now: f32) -> Vec<&'static str> {
         let mut idle: Vec<_> = self
             .scans
             .iter()
             .filter(|(_, scan)| {
-                scan.state == State::Loaded && !scan.pinned && now - scan.last_used >= KEEP_SECONDS
+                scan.state == State::Loaded && !scan.pinned && now - scan.used_at() >= KEEP_SECONDS
             })
             .collect();
-        idle.sort_by(|(_, a), (_, b)| a.last_used.total_cmp(&b.last_used));
+        idle.sort_by(|(_, a), (_, b)| a.used_at().total_cmp(&b.used_at()));
         idle.into_iter().map(|(&path, _)| path).collect()
     }
 
@@ -767,7 +809,7 @@ mod tests {
         scans.plan(2.0); // nobody wants it any more
         assert_eq!(scans.next_prefill(&order), Some("small"));
 
-        scans.want("small", 1.0); // planned in but not yet measured
+        scans.prefill("small"); // planned in but not yet measured
         assert_eq!(scans.plan(3.0).load, ["small"]);
         assert_eq!(scans.next_prefill(&order), None);
         scans.measured("small", Some(50 * MB));
@@ -784,20 +826,78 @@ mod tests {
         }
         // What prefill_scans and admit_scans do, one scan per round.
         while let Some(path) = scans.next_prefill(&files) {
-            scans.want(path, f32::MAX);
+            scans.prefill(path);
             assert_eq!(scans.plan(0.0).load, [path]);
             scans.measured(path, Some(100 * MB));
             confirm(&mut scans, path);
         }
         assert_eq!(scans.used(), 200 * MB, "c would sit in the headroom");
 
-        // The 0.4 GB dip the driver's reading showed: less than the headroom.
+        // A dip in the budget just under the headroom (the 2060's was 0.4 GB).
         scans.set_budget(scans.budget() - (headroom - MB));
         let admission = scans.plan(1.0);
         assert!(admission.evict.is_empty() && admission.load.is_empty());
 
         scans.set_budget(scans.budget() - 2 * MB); // a dip past the headroom
         assert_eq!(scans.plan(2.0).evict.len(), 1);
+    }
+
+    #[test]
+    fn a_real_want_evicts_a_prefilled_scan_that_was_never_shown() {
+        let headroom = gib(PREFILL_HEADROOM_GB);
+        let mut scans = GpuScans::new(headroom + 250 * MB);
+        scans.estimate_exact("prefilled", 200 * MB);
+        scans.prefill("prefilled");
+        assert_eq!(scans.plan(1.0).load, ["prefilled"]);
+        scans.measured("prefilled", Some(200 * MB));
+        confirm(&mut scans, "prefilled");
+
+        // Well inside KEEP_SECONDS, and it needs more than the free room.
+        scans.estimate_exact("shown", headroom + 100 * MB);
+        scans.want("shown", 1.0);
+        let admission = scans.plan(10.0);
+        assert_eq!(
+            (admission.evict, admission.load),
+            (vec!["prefilled"], vec!["shown"])
+        );
+    }
+
+    #[test]
+    fn over_budget_a_never_shown_prefilled_scan_leaves_before_one_shown_60_seconds_ago() {
+        let mut scans = GpuScans::new(gib(PREFILL_HEADROOM_GB) + 300 * MB);
+        fake_loaded(&mut scans, "shown", 100 * MB, 40.0);
+        scans.estimate_exact("prefilled", 100 * MB);
+        scans.prefill("prefilled");
+        assert_eq!(scans.plan(50.0).load, ["prefilled"]);
+        scans.measured("prefilled", Some(100 * MB));
+        confirm(&mut scans, "prefilled");
+
+        scans.set_budget(150 * MB); // another program took VRAM at t = 100 s
+        assert_eq!(scans.plan(100.0).evict, ["prefilled"]);
+    }
+
+    #[test]
+    fn a_prefill_that_would_sit_in_the_headroom_at_admission_is_not_admitted() {
+        let headroom = gib(PREFILL_HEADROOM_GB);
+        let mut scans = GpuScans::new(headroom + 200 * MB);
+        scans.estimate_exact("a", 100 * MB);
+        assert_eq!(scans.next_prefill(&["a"]), Some("a"));
+        scans.prefill("a");
+
+        scans.set_budget(headroom + 50 * MB); // the budget fell before the plan
+        assert!(scans.plan(1.0).load.is_empty());
+        assert_eq!(scans.used(), 0);
+        assert_eq!(scans.next_prefill(&["a"]), None);
+    }
+
+    #[test]
+    fn a_scan_measured_at_zero_bytes_is_not_prefilled_again() {
+        // What a failed load leaves once the over-budget step has evicted it.
+        let mut scans = GpuScans::new(gib(PREFILL_HEADROOM_GB) + 300 * MB);
+        scans.measured("failed", Some(0));
+        scans.estimate_exact("ok", 10 * MB);
+        assert_eq!(scans.next_prefill(&["failed", "ok"]), Some("ok"));
+        assert_eq!(scans.next_prefill(&["failed"]), None);
     }
 
     #[test]

@@ -177,21 +177,16 @@ fn admit_scans(
     }
 }
 
-/// How far off a prefilled scan counts as wanted: past any real ask, so the
-/// scans callers want come first.
-#[cfg(not(target_arch = "wasm32"))]
-const PREFILL_DISTANCE: f32 = f32::MAX;
-
 /// Fills the budget's spare room less `PREFILL_HEADROOM_GB`, before anything
-/// asks for the scans: wants the next file of `UhdFiles` that fits, which the
-/// next `admit_scans` loads.
-/// One at a time, as `next_prefill` waits for the last to be measured. The
-/// web build has no file lengths to size a scan by, so it cannot tell what
-/// fits and prefills nothing.
+/// asks for the scans: proposes the next file of `UhdFiles` that fits, which
+/// the next `admit_scans` loads if it still does. One at a time, as
+/// `next_prefill` waits for the last to be measured. The web build has no
+/// file lengths to size a scan by, so it cannot tell what fits and prefills
+/// nothing.
 #[cfg(not(target_arch = "wasm32"))]
 fn prefill_scans(mut scans: ResMut<GpuScans>, files: Res<UhdFiles>) {
     if let Some(path) = scans.next_prefill(&files.0) {
-        scans.want(path, PREFILL_DISTANCE);
+        scans.prefill(path);
     }
 }
 
@@ -313,7 +308,7 @@ mod tests {
     const MB: u64 = 1 << 20;
 
     #[test]
-    fn prefill_loads_one_scan_at_a_time_until_the_budget_is_used() {
+    fn prefill_loads_one_scan_at_a_time_and_stops_short_of_the_budget() {
         let files = ["a", "b", "c"];
         let mut scans = GpuScans::new(gib(PREFILL_HEADROOM_GB) + 400 * MB);
         for path in files {
@@ -337,6 +332,9 @@ mod tests {
         app.world_mut()
             .resource_mut::<GpuScans>()
             .measured("b", Some(165 * MB));
-        assert!(frame(&mut app).is_empty(), "c does not fit the 70 MB left");
+        assert!(
+            frame(&mut app).is_empty(),
+            "c does not fit the 70 MB left beyond the headroom"
+        );
     }
 }

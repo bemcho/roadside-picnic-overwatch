@@ -140,7 +140,9 @@ systems:
    (`assets/gpu_scans/streaming.rs`, `Last`, after `admit_scans`) then fills
    the scan budget from `UhdFiles` in order, one scan at a time, stopping
    `PREFILL_HEADROOM_GB` (0.5) short of it so a dip in the live budget does
-   not evict what was prefilled.
+   not evict what was prefilled. A prefill (`GpuScans::prefill`) queues
+   after every ask, never evicts anything and is not stamped as shown, so a
+   real want or a shrinking budget drops a prefilled scan before a shown one.
 
 The preload list is also a contract. If a model is needed during `OnEnter` and
 is not preloaded, the splash can report ready before that asset is available.
