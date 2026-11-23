@@ -430,8 +430,8 @@ the stalker stands still.
 - **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
   behind the splash the `ram://` asset source reads every streamed UHD scan
   (the 40 in `world::uhd_files`: the three trees, the plants, then the sites
-  nearest the hangar first) into RAM, four files at a time, while 2 GiB of
-  RAM stay free (`RAM_HEADROOM`). A file that does not fit stays on disk and
+  nearest the hangar first) into RAM, four files at a time, while 4 GiB of
+  RAM stay free (`RAM_HEADROOM`: the game grows up to 3.2 GiB after the fill). A file that does not fit stays on disk and
   loads from `assets/` through the same source; the splash waits for the fill.
   Every streamed UHD scan loads through `assets::uhd(path)` (`ram://`
   natively, `assets/` on the web) and only through `GpuScans`, never straight
@@ -455,7 +455,10 @@ the stalker stands still.
   scans) has used this run. A dropped scan's bytes count as scan memory, not
   the rest of the game, until a reading shows them freed or reused (wgpu
   keeps freed memory in 256 MiB blocks); after `FREE_WAIT_SECONDS` (30) they
-  stop holding room for new scans. A scan stays two minutes after it last
+  stop holding room for new scans, but a wanted scan that finds no other room
+  may still load into them, one at a time within the live budget: the reading
+  after it lands frees them if it reused them, or else no scan tries again
+  for 30 s (its overrun is one scan, inside the margin). A scan stays two minutes after it last
   showed (`KEEP_SECONDS`); a wanted scan short of room drops scans not shown
   for that long: those nobody wants, least recently shown first, then those
   wanted further from showing than it, furthest first (never one showing

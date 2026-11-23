@@ -171,6 +171,12 @@ pub struct GpuScans {
     frees: Vec<Free>,
     /// Bytes of `frees` that the reading had held for `FREE_WAIT_SECONDS`.
     stuck: u64,
+    /// A wanted scan loaded into the room of stuck frees (`try_stuck_room`),
+    /// and the stuck bytes then: the first reading once it lands says
+    /// whether it reused them.
+    trying: Option<(&'static str, u64)>,
+    /// No scan tries stuck room before this time: the last one did not reuse it.
+    next_try: f32,
     /// The world still uploads behind the entry curtain: every admission
     /// leaves `PREFILL_HEADROOM_GB` free.
     entering: bool,
@@ -236,6 +242,7 @@ impl GpuScans {
         let peak = peak.max(rest.saturating_sub(self.freeing()));
         self.rest_peak = Some(peak);
         self.note_stuck_frees(now);
+        self.judge_try(now);
         self.set_budget(live_scan_budget(reading, peak, cap));
         debug!(
             "VRAM: usage {} MB, scans {} MB, rest of the game {} MB at most, freeing {} MB ({} MB stuck); budget {} MB",
@@ -252,7 +259,8 @@ impl GpuScans {
     /// What scans may fill: the live budget less the bytes of dropped scans
     /// the driver has held for `FREE_WAIT_SECONDS`, which may never come free.
     /// Those still count as scan memory for the resident scans, though, as
-    /// dropping another scan for them would free nothing either.
+    /// dropping another scan for them would free nothing either, and a wanted
+    /// scan may still try that room (`try_stuck_room`).
     pub fn budget(&self) -> u64 {
         self.budget.saturating_sub(self.stuck)
     }
@@ -559,8 +567,10 @@ impl GpuScans {
             return;
         }
         let fits = self.fits(bytes)
-            || wanted
-                .is_some_and(|distance| self.make_room(bytes, distance, now, &mut admission.evict));
+            || wanted.is_some_and(|distance| {
+                self.make_room(bytes, distance, now, &mut admission.evict)
+                    || self.try_stuck_room(path, bytes, now)
+            });
         if fits {
             self.scan_mut(path).state = State::Loading;
             admission.load.push(path);
@@ -617,6 +627,39 @@ impl GpuScans {
             a.0.cmp(&b.0).then(a.1.total_cmp(&b.1))
         });
         ways.into_iter().map(|(&path, _)| path).collect()
+    }
+
+    /// Whether the wanted scan may load into the room of stuck frees, and
+    /// notes it if so. wgpu usually places a new scan in the blocks a dropped
+    /// one left, which only a reading after the new scan lands can show, so
+    /// without a try that room would stay lost for the run. One scan tries at
+    /// a time, within the live budget; if it went to a new block instead, the
+    /// driver's usage rises by at most that scan, inside `MARGIN_GB`.
+    fn try_stuck_room(&mut self, path: &'static str, bytes: u64, now: f32) -> bool {
+        let fits_live = self.used() + bytes + self.reserve() <= self.budget;
+        let may = self.trying.is_none() && now >= self.next_try && bytes <= self.stuck;
+        if may && fits_live {
+            self.trying = Some((path, self.stuck));
+        }
+        may && fits_live
+    }
+
+    /// Once the scan trying stuck room has landed (or failed to load): if the
+    /// stuck bytes did not fall, it took a new block, and the next try waits
+    /// `FREE_WAIT_SECONDS`. Frees turning stuck meanwhile read as a miss too,
+    /// which only delays the next try.
+    fn judge_try(&mut self, now: f32) {
+        let Some((path, stuck_before)) = self.trying else {
+            return;
+        };
+        let scan = &self.scans[path];
+        if scan.state != State::Off && !scan.resident {
+            return;
+        }
+        self.trying = None;
+        if self.stuck >= stuck_before {
+            self.next_try = now + FREE_WAIT_SECONDS;
+        }
     }
 
     fn warn_pinned_waits(&mut self, path: &'static str, bytes: u64) {
@@ -907,6 +950,66 @@ mod tests {
             scans.plan(waited).evict.is_empty(),
             "nor does b leave for it: that would free nothing either"
         );
+    }
+
+    /// `two_scans_at_the_budget` after another program took 50 MB: "a" left
+    /// at 21 s and the driver still holds its 100 MB `FREE_WAIT_SECONDS`
+    /// later, so they are stuck. Returns the books, that reading and the time.
+    fn a_stuck_free() -> (GpuScans, VramReading, f32) {
+        let (mut scans, full) = two_scans_at_the_budget();
+        let tighter = VramReading {
+            budget: full.budget - 50 * MB,
+            ..full
+        };
+        assert!(scans.apply_reading(tighter, None, 21.0));
+        assert_eq!(scans.plan(21.0).evict, ["a"]);
+        let waited = 21.0 + FREE_WAIT_SECONDS;
+        assert!(scans.apply_reading(tighter, None, waited));
+        assert_eq!(scans.budget(), 50 * MB, "b fills it");
+        (scans, tighter, waited)
+    }
+
+    #[test]
+    fn a_wanted_scan_loads_into_stuck_room_and_frees_it_when_it_reuses_it() {
+        let (mut scans, tighter, now) = a_stuck_free();
+        scans.estimate_exact("c", 30 * MB);
+        scans.want("c", 0.0);
+        assert_eq!(scans.plan(now).load, ["c"], "the live budget has room");
+        // Before it lands, a reading tells nothing.
+        assert!(scans.apply_reading(tighter, None, now + 0.5));
+        scans.measured("c", Some(30 * MB));
+        confirm(&mut scans, "c");
+
+        // The driver's usage did not rise: "c" took over 30 MB of a's bytes.
+        assert!(scans.apply_reading(tighter, None, now + 1.0));
+        assert_eq!(scans.budget(), 80 * MB, "70 MB still stuck");
+        scans.estimate_exact("d", 20 * MB);
+        scans.want("d", 0.0);
+        assert_eq!(scans.plan(now + 1.0).load, ["d"], "the next may try too");
+    }
+
+    #[test]
+    fn a_scan_that_does_not_reuse_stuck_room_stops_the_next_trying_for_a_while() {
+        let (mut scans, tighter, now) = a_stuck_free();
+        scans.estimate_exact("c", 30 * MB);
+        scans.want("c", 0.0);
+        assert_eq!(scans.plan(now).load, ["c"]);
+        scans.measured("c", Some(30 * MB));
+        confirm(&mut scans, "c");
+
+        // The driver's usage rose by all of it: it went to a new block.
+        let fresh = VramReading {
+            usage: tighter.usage + 30 * MB,
+            ..tighter
+        };
+        assert!(scans.apply_reading(fresh, None, now + 1.0));
+        scans.estimate_exact("d", 10 * MB);
+        scans.want("d", 0.0);
+        assert!(scans.plan(now + 1.0).load.is_empty(), "d waits");
+        let later = now + 1.0 + FREE_WAIT_SECONDS;
+        assert!(scans.apply_reading(fresh, None, later));
+        scans.want("d", 0.0);
+        assert_eq!(scans.plan(later).load, ["d"]);
     }
 
     #[test]

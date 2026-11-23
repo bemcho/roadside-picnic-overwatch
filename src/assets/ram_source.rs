@@ -31,10 +31,12 @@ pub const RAM_SOURCE: &str = "ram";
 /// Files read at once: each open file holds an 8 MiB read pipe.
 const READS_IN_FLIGHT: usize = 4;
 
-/// RAM the fill leaves free for the rest of the game and the machine: 2 GiB.
-/// The game's RAM grows about 1.7 GiB after the fill while scans stream, so
-/// less would push a tight host into swap.
-const RAM_HEADROOM: u64 = 2 << 30;
+/// RAM the fill leaves free for the rest of the game and the machine: 4 GiB.
+/// The game's RAM grows up to 3.2 GiB after the fill while scans stream and
+/// the world loads around the stalker (peak RSS 11.7 GiB after a fill that
+/// ended near 8.5 GiB), so less would push a tight host into swap or the
+/// OOM killer. Files that do not fit load from disk instead.
+const RAM_HEADROOM: u64 = 4 << 30;
 
 /// Bytes per GB in the log; GB here are GiB, as in the VRAM budget.
 const GIB: f64 = (1u64 << 30) as f64;
@@ -490,6 +492,14 @@ mod tests {
         );
         assert!(fits_in_ram(RAM_HEADROOM + 150, 50, 100));
         assert!(!fits_in_ram(10, 20, 30), "less free than the reads");
+    }
+
+    #[test]
+    fn the_fill_leaves_room_for_what_the_game_grows_after_it() {
+        // Peak RSS reached 11.7 GiB after a fill that ended near 8.5 GiB.
+        let file = 100 << 20;
+        let grows_after_the_fill = (32 << 30) / 10;
+        assert!(!fits_in_ram(grows_after_the_fill + file, 0, file));
     }
 
     #[test]
