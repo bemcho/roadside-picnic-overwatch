@@ -191,7 +191,7 @@ pub(crate) struct PreloadedAssets(pub Vec<UntypedHandle>);
 #[derive(Resource, Default)]
 pub struct UhdFiles(pub Vec<&'static str>);
 
-/// Where a UHD scan loads from: RAM on native builds, filled behind the splash.
+/// Where a UHD scan loads from: RAM when filled, else `assets/`.
 #[cfg(not(target_arch = "wasm32"))]
 #[cfg_attr(
     not(test),

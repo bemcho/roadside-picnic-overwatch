@@ -4,16 +4,15 @@
 //! left out loads from `assets/` through the same source. Native only; the web
 //! build loads from `assets/`.
 
+mod reader;
+
 use std::collections::VecDeque;
 use std::error::Error;
 use std::io::SeekFrom;
 use std::path::Path;
 
-use bevy::asset::io::memory::{Dir, MemoryAssetReader};
-use bevy::asset::io::{
-    AssetReader, AssetReaderError, AssetSource, AssetSourceBuilder, AssetSourceId,
-    ErasedAssetReader, PathStream, Reader,
-};
+use bevy::asset::io::AssetSourceId;
+use bevy::asset::io::memory::Dir;
 use bevy::asset::{AsyncReadExt, AsyncSeekExt};
 use bevy::platform::time::Instant;
 use bevy::prelude::*;
@@ -24,92 +23,26 @@ use crate::states::AppState;
 
 use super::UhdFiles;
 
+pub use reader::{RamDir, register_ram_source};
+
 /// The source's name, as in `ram://models/trees/uhd/tree_big.glb`.
 pub const RAM_SOURCE: &str = "ram";
 
 /// Files read at once: each open file holds an 8 MiB read pipe.
 const READS_IN_FLIGHT: usize = 4;
 
-/// RAM the fill leaves free for the rest of the game and the machine: 2 GiB.
-const RAM_HEADROOM: u64 = 2 << 30;
+/// RAM the fill leaves free for the rest of the game and the machine: 500 MiB.
+/// The user chose to keep this little free so more scans fill RAM.
+const RAM_HEADROOM: u64 = 500 << 20;
 
 /// Bytes per GB in the log; GB here are GiB, as in the VRAM budget.
 const GIB: f64 = (1u64 << 30) as f64;
-
-/// The in-memory folder behind the source, shared with its reader.
-#[derive(Resource, Clone)]
-pub struct RamDir(pub Dir);
 
 /// A file that could not be opened or read: its path and why.
 type FileError = (&'static str, String);
 
 /// Every listed file's length in list order, or the first that would not open.
 type Measured = Result<Vec<(&'static str, u64)>, FileError>;
-
-/// Registers the `ram://` source over `root`, the folder Bevy's default source
-/// reads (`assets`). Asset sources are built with `AssetPlugin`, so this runs
-/// before `DefaultPlugins`.
-pub fn register_ram_source(app: &mut App, root: &str) {
-    let dir = Dir::default();
-    let ram = dir.clone();
-    let root = root.to_owned();
-    app.register_asset_source(
-        RAM_SOURCE,
-        AssetSourceBuilder::new(move || Box::new(RamOrDisk::new(ram.clone(), &root))),
-    )
-    .insert_resource(RamDir(dir));
-}
-
-/// The `ram` source's reader: a file the fill read comes from RAM, any other
-/// path from `root` on disk, so a `ram://` path loads whether or not its file
-/// was filled.
-struct RamOrDisk {
-    ram: MemoryAssetReader,
-    disk: Box<dyn ErasedAssetReader>,
-}
-
-impl RamOrDisk {
-    fn new(ram: Dir, root: &str) -> Self {
-        Self {
-            ram: MemoryAssetReader { root: ram },
-            // The reader Bevy builds for its default source over `root`.
-            disk: AssetSource::get_default_reader(root.to_owned())(),
-        }
-    }
-
-    /// RAM for a file in it, the disk for any other path. A file in RAM takes
-    /// its (absent) meta from RAM too, so loading it during play never probes
-    /// `assets/` for a `.meta` file. Folders come from the disk, which holds
-    /// every file RAM does.
-    fn reader_for(&self, path: &Path) -> &dyn ErasedAssetReader {
-        if self.ram.root.get_asset(path).is_some() {
-            &self.ram
-        } else {
-            &*self.disk
-        }
-    }
-}
-
-impl AssetReader for RamOrDisk {
-    async fn read<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        self.reader_for(path).read(path).await
-    }
-
-    async fn read_meta<'a>(&'a self, path: &'a Path) -> Result<impl Reader + 'a, AssetReaderError> {
-        self.reader_for(path).read_meta(path).await
-    }
-
-    async fn read_directory<'a>(
-        &'a self,
-        path: &'a Path,
-    ) -> Result<Box<PathStream>, AssetReaderError> {
-        self.reader_for(path).read_directory(path).await
-    }
-
-    async fn is_directory<'a>(&'a self, path: &'a Path) -> Result<bool, AssetReaderError> {
-        self.reader_for(path).is_directory(path).await
-    }
-}
 
 /// Reads the UHD files into RAM behind the splash, as many as fit.
 pub struct RamSourcePlugin;
@@ -195,7 +128,7 @@ impl RamFill {
     /// a failure. The first file that does not fit ends the fill.
     fn start_reads(&mut self, server: &AssetServer, ram: &Dir, available: Option<u64>) {
         let pool = IoTaskPool::get();
-        while self.reads.len() < READS_IN_FLIGHT && self.failed.is_none() {
+        while self.can_start() {
             let Some(&(path, len)) = self.waiting.front() else {
                 break;
             };
@@ -211,6 +144,11 @@ impl RamFill {
             let read = pool.spawn(async move { read_into_ram(&server, &ram, path).await });
             self.reads.push((len, read));
         }
+    }
+
+    /// A file waits and a read slot is free, and nothing has failed.
+    fn can_start(&self) -> bool {
+        !self.waiting.is_empty() && self.reads.len() < READS_IN_FLIGHT && self.failed.is_none()
     }
 
     /// Bytes of the reads running: a read's buffer is not committed until it
@@ -296,7 +234,10 @@ fn collect_ram_files(mut fill: ResMut<RamFill>, server: Res<AssetServer>, ram: R
         return;
     }
     fill.collect();
-    fill.start_reads(&server, &ram.0, available_ram());
+    // `/proc/meminfo` is read only when a file can start.
+    if fill.can_start() {
+        fill.start_reads(&server, &ram.0, available_ram());
+    }
     if fill.is_full() {
         let (n, bytes) = fill.in_ram();
         let gb = bytes as f64 / GIB;
@@ -400,7 +341,7 @@ mod tests {
     use std::time::Duration;
 
     use bevy::asset::AssetPlugin;
-    use bevy::asset::io::AssetSourceId;
+    use bevy::asset::io::{AssetSourceId, Reader};
     use bevy::state::app::StatesPlugin;
     use bevy::tasks::block_on;
 
@@ -423,7 +364,7 @@ mod tests {
 
     /// An app with the asset server and the `ram` source over a fresh
     /// `assets/` that holds `on_disk`, and no fill.
-    fn asset_app(on_disk: &[(&str, &[u8])]) -> (App, RamDir) {
+    pub(super) fn asset_app(on_disk: &[(&str, &[u8])]) -> (App, RamDir) {
         let root = fresh_dir();
         for (path, bytes) in on_disk {
             let file = root.join(path);
@@ -467,7 +408,7 @@ mod tests {
     }
 
     /// Reads a file back through the asset server's `ram://` source.
-    async fn read_ram(app: &App, path: &str) -> Vec<u8> {
+    pub(super) async fn read_ram(app: &App, path: &str) -> Vec<u8> {
         let server = app.world().resource::<AssetServer>();
         let source = server
             .get_source(RAM_SOURCE)
@@ -592,18 +533,8 @@ mod tests {
                 ("models/c/uhd/three.glb", 30),
             ]
         );
-    }
-
-    #[test]
-    fn a_ram_path_missing_from_memory_loads_from_disk() {
-        let bytes: Vec<u8> = (0..=255).collect();
-        let (app, ram) = asset_app(&[("models/d/uhd/disk.glb", &bytes)]);
-        assert!(
-            ram.0
-                .get_asset(Path::new("models/d/uhd/disk.glb"))
-                .is_none()
-        );
-        assert_eq!(block_on(read_ram(&app, "models/d/uhd/disk.glb")), bytes);
+        // The skipped file still loads through the `ram` source, from disk.
+        assert_eq!(block_on(read_ram(&app, "models/c/uhd/three.glb")), [3; 30]);
     }
 
     #[cfg(target_os = "linux")]
