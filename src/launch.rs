@@ -5,7 +5,7 @@
 
 use bevy::prelude::*;
 
-const DEFAULT_VRAM_GB: f32 = 6.0;
+pub const DEFAULT_VRAM_GB: f32 = 6.0;
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct LaunchOptions {

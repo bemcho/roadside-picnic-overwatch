@@ -13,6 +13,7 @@ use bevy::image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamp
 use bevy::prelude::*;
 use bevy::shader::Shader;
 
+pub mod gpu_scans;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ram_source;
 
