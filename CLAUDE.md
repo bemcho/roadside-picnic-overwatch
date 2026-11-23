@@ -461,7 +461,11 @@ the stalker stands still.
   Run it last: Blender and glTF Transform cannot read the converted textures, so
   re-run earlier pipeline steps from the git/source GLB. Runtime CPU mipmaps
   (`terrain_material::mipmap_filtered_textures`) only cover procedural images
-  and the small tiling terrain PNGs.
+  and the small tiling terrain PNGs. Normal-mapped runtime GLBs also carry baked
+  MikkTSpace tangents, so Bevy does not generate them at load (5–6 s for a
+  1M-vertex scan): after a re-export, bake them with
+  `python3 ~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py <glb>...`
+  (it works on the compressed file and keeps its KTX2 images byte-identical).
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
   empty and every streamed plant has spawned (`world::PlantsGrowing`) for a
@@ -556,6 +560,9 @@ This project follows idiomatic Bevy ECS. Read these before adding code:
 - **Assets:** runtime paths are constants in `src/assets/mod.rs`, loaded via `AssetServer`;
   startup handles are held in `PreloadedAssets`. `load_single_primitive` takes exactly mesh 0,
   primitive 0, material 0; use a `#Scene0` scene for multipart models.
+- **Precalculate once.** Anything derivable from the assets or the fixed seeds is computed once — baked into the
+  runtime files by the asset pipeline, or computed once and cached — never at every load, re-admission or frame
+  (e.g. tangents are baked into normal-mapped GLBs). Where something must stay at runtime, say why in a comment.
 - **Two kinds of artifact:** the hangar showcase (`world/base/artifacts.rs`) is decorative;
   the gameplay `Artifact` collectibles live in `src/zone/` as placeholders. Don't conflate them.
 - **Physics/collision:** if a physics plugin is added, declare it in Cargo.toml and keep its systems

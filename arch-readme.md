@@ -736,7 +736,10 @@ Important paths:
     (`tools/compress_glb_textures.py`, last pipeline step). A PNG/JPEG GLB still
     loads, but it decodes on the loader, gets CPU mips on the main thread, and
     takes four times the VRAM. BC formats need desktop-class GPUs (WebGPU with
-    `texture-compression-bc`).
+    `texture-compression-bc`). Normal-mapped GLBs also ship with baked tangents,
+    or Bevy generates them at every load (5–6 s per 1M-vertex scan): run
+    `~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py <glb>...`
+    after a re-export (it works on the compressed file, KTX2 images untouched).
 
 21. **Keep heavy per-tile work off the main thread, and cap it per frame.**
     Build streamed meshes in an async task (see `plants::PendingPlants`) and
