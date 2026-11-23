@@ -1,7 +1,8 @@
 # Roadside-Picnic repository instructions
 
-Read `CLAUDE.md` for project-specific asset recipes and contributor rules, and
-`arch-readme.md` for the cross-module runtime graph. This repository uses Rust
+Read `CLAUDE.md` for contributor rules, `doc/world-reference.md` for each
+system's details and asset recipes, and `arch-readme.md` for the cross-module
+runtime graph. This repository uses Rust
 2024, Bevy 0.20.1, and Bevy's WESL material shaders.
 
 The repository's relevant agent skills are pinned in `agent-skills.json`.

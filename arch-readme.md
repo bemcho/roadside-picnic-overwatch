@@ -2,8 +2,8 @@
 
 This document is the bird's-eye map of the codebase: what owns what, which
 systems run when, how data reaches the player, and where to make a safe change.
-For detailed asset recipes and contributor rules, read
-[`CLAUDE.md`](./CLAUDE.md) as well.
+For contributor rules, read [`CLAUDE.md`](./CLAUDE.md) as well; for each
+system's details and asset recipes, [`doc/world-reference.md`](./doc/world-reference.md).
 
 ## Project shape
 
