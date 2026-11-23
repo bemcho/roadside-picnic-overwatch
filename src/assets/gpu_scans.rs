@@ -35,6 +35,13 @@ pub const DESKTOP_GB: f32 = 0.6;
 pub const GAME_VRAM_GB: f32 = 2.4;
 /// GPU bytes per file byte of a scan (the five trees: about 700 MB from 428 MB).
 pub const GPU_BYTES_PER_FILE_BYTE: f32 = 1.65;
+/// GiB of the budget that prefill leaves free. The game's VRAM grows in 256 MiB
+/// allocator steps, and one such step in everything else lowers the budget by
+/// as much (0.4 GB measured on the 2060, just after the entry curtain). A
+/// scan nobody wants yet must not sit at the budget's edge, where that dip
+/// evicts it and prefill loads it back. Wanted and pinned scans keep the full
+/// budget.
+pub const PREFILL_HEADROOM_GB: f32 = 0.5;
 
 /// The driver's device-local heap budget for this process and this process's
 /// usage of it, in bytes.
@@ -261,9 +268,10 @@ impl GpuScans {
         admission
     }
 
-    /// The first file of `order` that is off and fits the free room, while no
-    /// scan is loading and no wanted scan waits (as of the last `plan`). A
-    /// pinned scan too big for the card is not wanted and never holds it back.
+    /// The first file of `order` that is off and fits the free room less
+    /// `PREFILL_HEADROOM_GB`, while no scan is loading and no wanted scan
+    /// waits (as of the last `plan`). A pinned scan too big for the card is
+    /// not wanted and never holds it back.
     pub fn next_prefill(&self, order: &[&'static str]) -> Option<&'static str> {
         if self
             .scans
@@ -272,7 +280,7 @@ impl GpuScans {
         {
             return None;
         }
-        let room = self.room();
+        let room = self.room().saturating_sub(gib(PREFILL_HEADROOM_GB));
         order.iter().copied().find(|path| {
             self.scans
                 .get(path)
@@ -743,9 +751,10 @@ mod tests {
 
     #[test]
     fn prefill_takes_the_next_file_that_fits_only_while_nothing_waits() {
-        let mut scans = GpuScans::new(300 * MB);
-        fake_loaded(&mut scans, "held", 100 * MB, 0.0); // 200 MB are free
-        scans.estimate_exact("big", 250 * MB);
+        let headroom = gib(PREFILL_HEADROOM_GB);
+        let mut scans = GpuScans::new(headroom + 300 * MB);
+        fake_loaded(&mut scans, "held", 100 * MB, 0.0); // 200 MB are free beyond the headroom
+        scans.estimate_exact("big", headroom + 250 * MB);
         scans.estimate_exact("small", 50 * MB);
         scans.estimate_exact("tiny", 10 * MB);
         let order = ["held", "big", "small", "tiny"];
@@ -766,9 +775,36 @@ mod tests {
     }
 
     #[test]
+    fn prefill_stops_short_of_the_budget_so_a_dip_in_it_evicts_nothing() {
+        let headroom = gib(PREFILL_HEADROOM_GB);
+        let files = ["a", "b", "c"];
+        let mut scans = GpuScans::new(headroom + 200 * MB);
+        for path in files {
+            scans.estimate_exact(path, 100 * MB);
+        }
+        // What prefill_scans and admit_scans do, one scan per round.
+        while let Some(path) = scans.next_prefill(&files) {
+            scans.want(path, f32::MAX);
+            assert_eq!(scans.plan(0.0).load, [path]);
+            scans.measured(path, Some(100 * MB));
+            confirm(&mut scans, path);
+        }
+        assert_eq!(scans.used(), 200 * MB, "c would sit in the headroom");
+
+        // The 0.4 GB dip the driver's reading showed: less than the headroom.
+        scans.set_budget(scans.budget() - (headroom - MB));
+        let admission = scans.plan(1.0);
+        assert!(admission.evict.is_empty() && admission.load.is_empty());
+
+        scans.set_budget(scans.budget() - 2 * MB); // a dip past the headroom
+        assert_eq!(scans.plan(2.0).evict.len(), 1);
+    }
+
+    #[test]
     fn a_pinned_scan_that_does_not_fit_never_stops_the_prefill() {
-        let mut scans = GpuScans::new(300 * MB);
-        scans.estimate_exact("tree", 700 * MB);
+        let headroom = gib(PREFILL_HEADROOM_GB);
+        let mut scans = GpuScans::new(headroom + 300 * MB);
+        scans.estimate_exact("tree", 2 * headroom);
         scans.estimate_exact("site", 100 * MB);
         scans.pin("tree");
         scans.want("tree", 1.0); // pinned, wanted and too big

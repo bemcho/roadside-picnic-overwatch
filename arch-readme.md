@@ -138,7 +138,9 @@ systems:
    Zone`, hiding shader compilation, first-frame spawn hitches, the trees'
    scan uploads and the plants filling in around the stalker. `prefill_scans`
    (`assets/gpu_scans/streaming.rs`, `Last`, after `admit_scans`) then fills
-   the rest of the scan budget from `UhdFiles` in order, one scan at a time.
+   the scan budget from `UhdFiles` in order, one scan at a time, stopping
+   `PREFILL_HEADROOM_GB` (0.5) short of it so a dip in the live budget does
+   not evict what was prefilled.
 
 The preload list is also a contract. If a model is needed during `OnEnter` and
 is not preloaded, the splash can report ready before that asset is available.

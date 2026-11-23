@@ -182,8 +182,9 @@ fn admit_scans(
 #[cfg(not(target_arch = "wasm32"))]
 const PREFILL_DISTANCE: f32 = f32::MAX;
 
-/// Fills the budget's spare room, before anything asks for the scans: wants
-/// the next file of `UhdFiles` that fits, which the next `admit_scans` loads.
+/// Fills the budget's spare room less `PREFILL_HEADROOM_GB`, before anything
+/// asks for the scans: wants the next file of `UhdFiles` that fits, which the
+/// next `admit_scans` loads.
 /// One at a time, as `next_prefill` waits for the last to be measured. The
 /// web build has no file lengths to size a scan by, so it cannot tell what
 /// fits and prefills nothing.
@@ -306,6 +307,7 @@ fn note_resident_scans(mut scans: ResMut<GpuScans>, residency: Res<ScanResidency
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
+    use super::super::{PREFILL_HEADROOM_GB, gib};
     use super::*;
 
     const MB: u64 = 1 << 20;
@@ -313,7 +315,7 @@ mod tests {
     #[test]
     fn prefill_loads_one_scan_at_a_time_until_the_budget_is_used() {
         let files = ["a", "b", "c"];
-        let mut scans = GpuScans::new(400 * MB);
+        let mut scans = GpuScans::new(gib(PREFILL_HEADROOM_GB) + 400 * MB);
         for path in files {
             scans.estimate(path, 100 * MB); // 165 MB on the GPU each
         }
