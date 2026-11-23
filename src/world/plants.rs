@@ -657,7 +657,8 @@ struct NearPlant<'a> {
     entity: Entity,
     full: &'static str,
     pose: &'a Transform,
-    tile: &'a ChildOf,
+    /// The tile the plant stands on.
+    tile: Entity,
 }
 
 /// Swaps the plant nearest the stalker for its full scan, and back. The
@@ -703,7 +704,7 @@ pub(super) fn stream_full_plants(
                 phase: (at.x * 0.37 + at.z * 0.23) % TAU,
             },
             *near.pose,
-            ChildOf(near.tile.parent()),
+            ChildOf(near.tile),
             WorldAssetRoot(scene),
             detail_range(12.0, 2.0),
             Visibility::Hidden,
@@ -735,7 +736,7 @@ fn want_plant_scans<'a>(
                 entity,
                 full,
                 pose,
-                tile,
+                tile: tile.parent(),
             };
             nearest = Some((distance, near));
         }

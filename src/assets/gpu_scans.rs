@@ -201,8 +201,9 @@ impl GpuScans {
 
     /// No scan loading or waiting for the render world to confirm it, and
     /// every pinned scan that fits on the GPU. A pinned scan admission
-    /// declines (it does not fit without dropping others, which pins never
-    /// do) and a failed load (confirmed with nothing on the GPU) hold nothing up.
+    /// declines (it does not fit without dropping others, which a pin
+    /// nobody wants never does) and a failed load (confirmed with nothing on
+    /// the GPU) hold nothing up.
     pub fn settled(&self) -> bool {
         self.scans.values().all(|scan| match scan.state {
             State::Off => !scan.pinned || !self.fits(scan.bytes),
@@ -212,7 +213,8 @@ impl GpuScans {
     }
 
     /// Loads before every unpinned scan and never leaves for one, but only
-    /// within the budget.
+    /// within the budget. It does not evict others to load unless it is
+    /// wanted (a tree near the camera): then it may drop idle unpinned scans.
     pub fn pin(&mut self, path: &'static str) {
         self.scan_mut(path).pinned = true;
     }
@@ -320,7 +322,7 @@ impl GpuScans {
     }
 
     /// Whether `bytes` more fit the budget without dropping anything: all a
-    /// pinned scan may ask, as it never evicts others.
+    /// pinned scan nobody wants may ask, as it never evicts others.
     fn fits(&self, bytes: u64) -> bool {
         self.deficit(bytes) == 0
     }
@@ -387,13 +389,16 @@ impl GpuScans {
         pending.into_iter().map(|(&path, _)| path).collect()
     }
 
-    /// Loads the scan if it fits, after dropping idle scans when it must.
+    /// Loads the scan if it fits, after dropping idle scans when it must. A
+    /// scan asked for this frame may drop them, pinned or not; a pinned scan
+    /// nobody asks for (the startup admission) loads only into room already
+    /// free. Pinned scans are never idle, so none drops another.
     fn admit(&mut self, path: &'static str, now: f32, admission: &mut Admission) {
         let Some(scan) = self.scans.get(path) else {
             return;
         };
-        let (bytes, pinned) = (scan.bytes, scan.pinned);
-        if !pinned && scan.wanted.is_none() {
+        let (bytes, pinned, wanted) = (scan.bytes, scan.pinned, scan.wanted.is_some());
+        if !pinned && !wanted {
             // Only prefilled: no eviction, no stamp, and no waiting, which a
             // real ask does.
             if self.fits_prefill(bytes) {
@@ -402,9 +407,7 @@ impl GpuScans {
             }
             return;
         }
-        // A pinned scan never evicts others: it loads only into room already free.
-        let fits =
-            self.fits(bytes) || (!pinned && self.free_idle(bytes, now, &mut admission.evict));
+        let fits = self.fits(bytes) || (wanted && self.free_idle(bytes, now, &mut admission.evict));
         if fits {
             let scan = self.scan_mut(path);
             scan.state = State::Loading;
@@ -859,6 +862,44 @@ mod tests {
             (admission.evict, admission.load),
             (vec!["prefilled"], vec!["shown"])
         );
+    }
+
+    #[test]
+    fn a_wanted_pin_drops_idle_scans_for_room_but_an_unwanted_one_waits() {
+        let headroom = gib(PREFILL_HEADROOM_GB);
+        let mut scans = GpuScans::new(headroom + 250 * MB);
+        scans.estimate_exact("prefilled", 200 * MB);
+        scans.prefill("prefilled");
+        assert_eq!(scans.plan(1.0).load, ["prefilled"]);
+        scans.measured("prefilled", Some(200 * MB));
+        confirm(&mut scans, "prefilled");
+        // It does not fit beside the never-shown prefill.
+        scans.estimate_exact("tree", headroom + 100 * MB);
+        scans.pin("tree");
+
+        // Startup admission: nobody is near, and a pin loads only into free room.
+        let admission = scans.plan(10.0);
+        assert!(admission.evict.is_empty() && admission.load.is_empty());
+
+        scans.want("tree", 3.0);
+        let admission = scans.plan(11.0);
+        assert_eq!(
+            (admission.evict, admission.load),
+            (vec!["prefilled"], vec!["tree"])
+        );
+    }
+
+    #[test]
+    fn a_wanted_pin_never_drops_another_pin() {
+        let mut scans = GpuScans::new(300 * MB);
+        fake_loaded(&mut scans, "other", 200 * MB, 0.0);
+        scans.pin("other");
+        scans.estimate_exact("tree", 200 * MB);
+        scans.pin("tree");
+        scans.want("tree", 1.0);
+        // "other" has been idle far longer than KEEP_SECONDS, but it is pinned.
+        let admission = scans.plan(1_000.0);
+        assert!(admission.evict.is_empty() && admission.load.is_empty());
     }
 
     #[test]

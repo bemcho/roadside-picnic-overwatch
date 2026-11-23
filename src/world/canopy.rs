@@ -1,7 +1,8 @@
 //! The map's trees: imported, textured models growing in the landmark groves,
 //! three dense woods and around the hangar. There are no procedural trees.
 //! Each shows its light crown-card model, and the full UHD scan when the
-//! camera stands right by it. The scans stream in only near the camera.
+//! camera stands right by it. The scans wait on the GPU (they are pinned);
+//! only their instances show near the camera.
 
 use std::f32::consts::TAU;
 
@@ -459,13 +460,13 @@ type StreamedTree<'a> = (
 );
 
 /// Shows a tree's full scan as the camera comes near, once the scan is on the
-/// GPU, and drops it once the camera moves away or the scan leaves the GPU,
-/// so only the scans in view hold GPU memory. The scan is a child, so it
-/// sways and falls with the tree.
+/// GPU, and drops the instance once the camera moves away or the scan leaves
+/// the GPU. The scan is a child, so it sways and falls with the tree.
 ///
-/// The trees' scans are pinned, so they wait on the GPU already. The want
-/// keeps the nearest tree's scan fresh, and brings it back should a card too
-/// tight for the pins have left it out.
+/// The trees' scans are pinned, so they wait on the GPU already and only the
+/// instances stream. The want keeps the nearest tree's scan fresh, and brings
+/// it in, by dropping idle unpinned scans, should a card too tight for the
+/// pins have left it out.
 pub(super) fn stream_close_trees(
     mut commands: Commands,
     mut scans: ResMut<GpuScans>,
@@ -634,9 +635,10 @@ mod tests {
         (app, camera, tree)
     }
 
-    /// The books of a GPU with the tree's scan resident.
+    /// The books of a GPU with the tree's scan resident and pinned, as in the game.
     fn resident_scans() -> GpuScans {
         let mut scans = GpuScans::new(1 << 30);
+        scans.pin(assets::TREE_SMALL_UHD);
         scans.insert_resident(assets::TREE_SMALL_UHD, Handle::default());
         scans
     }
@@ -716,19 +718,35 @@ mod tests {
         assert_eq!(start_margin(&app, tree), 0.0..0.0, "the crown shows");
     }
 
+    /// The books of a card too tight for the tree's pinned scan beside an idle
+    /// scan nobody ever showed (a prefill): the tree's scan needs that room.
+    fn tight_scans() -> GpuScans {
+        let mut scans = GpuScans::new(250 << 20);
+        scans.estimate("idle", 100 << 20);
+        scans.insert_resident("idle", Handle::default());
+        scans.estimate(assets::TREE_SMALL_UHD, 100 << 20);
+        scans.pin(assets::TREE_SMALL_UHD);
+        scans
+    }
+
     #[test]
-    fn a_tree_near_the_camera_asks_for_its_scan_and_one_far_away_does_not() {
-        let near = Transform::from_xyz(3.0, 0.0, 0.0).with_scale(Vec3::splat(12.0));
-        let (mut app, camera, _) = streaming_with(near, GpuScans::new(1 << 30));
+    fn a_tree_near_the_camera_asks_for_its_scan_and_makes_room_for_it() {
+        let pose = Transform::from_xyz(3.0, 0.0, 0.0).with_scale(Vec3::splat(12.0));
+        let (mut app, _, _) = streaming_with(pose, tight_scans());
         app.update();
         let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
+        assert_eq!(plan.evict, ["idle"]);
         assert_eq!(plan.load, [assets::TREE_SMALL_UHD]);
+    }
 
-        app.world_mut()
-            .entity_mut(camera)
-            .insert(Transform::from_xyz(-100.0, 0.0, 0.0));
+    #[test]
+    fn a_tree_past_the_load_range_does_not_ask_for_its_scan() {
+        let pose = Transform::from_xyz(30.0, 0.0, 0.0).with_scale(Vec3::splat(12.0));
+        let (mut app, _, _) = streaming_with(pose, tight_scans());
         app.update();
-        let plan = app.world_mut().resource_mut::<GpuScans>().plan(1.0);
+        // The pin alone does not displace an idle scan.
+        let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
+        assert!(plan.evict.is_empty(), "{:?}", plan.evict);
         assert!(plan.load.is_empty(), "{:?}", plan.load);
     }
 
