@@ -377,6 +377,11 @@ pub(super) struct CanopyModels([(Handle<Mesh>, Handle<StandardMaterial>); MODELS
 #[derive(Component)]
 pub(super) struct CloseScan(Entity);
 
+/// The trees' full scans, for the RAM fill.
+pub(super) fn uhd_files() -> impl Iterator<Item = &'static str> {
+    MODELS.iter().map(|model| model.close)
+}
+
 /// Preloads the crown-card models; the full scans stream in near the camera.
 pub(super) fn preload_canopies(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
     for spec in &MODELS {

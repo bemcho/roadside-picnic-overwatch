@@ -20,7 +20,7 @@ use super::cordon;
 use super::map::map;
 use super::places::Place;
 use super::roads;
-use super::terrain::{TILE_SIZE, landform_height, lerp, smoothstep};
+use super::terrain::{BASE, TILE_SIZE, landform_height, lerp, smoothstep};
 use super::town;
 use super::{StreamAnchor, WorldRoot, detail_range};
 
@@ -794,6 +794,18 @@ pub(super) fn grove(at: Vec2) -> f32 {
             distance,
         ))
     })
+}
+
+/// The sites' full scans, for the RAM fill: nearest the hangar first, so a
+/// scan several sites share comes up at its nearest.
+pub(super) fn uhd_files() -> impl Iterator<Item = &'static str> {
+    let hangar = Vec2::from(BASE);
+    let mut sites = LANDMARKS;
+    sites.sort_by(|a, b| {
+        let near = |site: &Landmark| site.center.distance_squared(hangar);
+        near(a).total_cmp(&near(b))
+    });
+    sites.into_iter().map(|site| site.model().path)
 }
 
 /// Preloads the sites' far stand-ins; their full scans stream in later.

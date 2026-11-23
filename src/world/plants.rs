@@ -163,6 +163,14 @@ impl PlantLooks {
     }
 }
 
+/// Every plant's full scan, for the RAM fill.
+pub(super) fn uhd_files() -> impl Iterator<Item = &'static str> {
+    Kind::ALL
+        .into_iter()
+        .flat_map(Kind::models)
+        .filter_map(|model| model.full)
+}
+
 pub(super) fn preload_plants(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
     for kind in Kind::ALL {
         for model in kind.models() {

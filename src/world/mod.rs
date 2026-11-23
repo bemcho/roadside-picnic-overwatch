@@ -62,6 +62,7 @@ use bevy::render::slab_allocator::SlabAllocatorSettings;
 use bevy::transform::TransformSystems;
 use bevy::world_serialization::WorldInstanceReady;
 
+use crate::assets::UhdFiles;
 use crate::states::{AppState, InGamePhase};
 
 use canopy::CanopyModels;
@@ -115,6 +116,7 @@ impl Plugin for WorldPlugin {
         .init_resource::<Terrain>()
         .init_resource::<crush::Trampled>()
         .init_resource::<PlantsGrowing>()
+        .insert_resource(UhdFiles(uhd_files()))
         .add_message::<tree_fall::TreeBreak>()
         .add_systems(
             Startup,
@@ -282,6 +284,22 @@ fn anchor_distance(tile: IVec2, anchors: &[IVec2]) -> i32 {
         .unwrap_or(i32::MAX)
 }
 
+/// Every UHD file the game can show, each once, in RAM fill order: the trees,
+/// the hangar's artifacts, the plants, then the sites nearest the hangar first.
+pub(crate) fn uhd_files() -> Vec<&'static str> {
+    let mut files = Vec::new();
+    let all = canopy::uhd_files()
+        .chain(base::uhd_files())
+        .chain(plants::uhd_files())
+        .chain(sites::uhd_files());
+    for path in all {
+        if !files.contains(&path) {
+            files.push(path);
+        }
+    }
+    files
+}
+
 /// Bevy grows a shared vertex slab 1.5x at a time up to 512 MiB, holding the
 /// old and the new buffer while it copies, and puts meshes up to 256 MiB in
 /// those slabs. On a 6 GB card that spike ran out of memory, so the UHD scans
@@ -434,6 +452,23 @@ mod tests {
     use bevy::mesh::MeshPlugin;
 
     use super::*;
+
+    #[test]
+    fn uhd_files_list_each_scan_once_trees_first() {
+        let files = uhd_files();
+        let unique: std::collections::HashSet<_> = files.iter().collect();
+        assert_eq!(unique.len(), files.len(), "a UHD file is listed twice");
+        assert_eq!(
+            files[..5],
+            [
+                crate::assets::TREE_SMALL_UHD,
+                crate::assets::TREE_BIG_UHD,
+                crate::assets::TREE_VERY_TALL_UHD,
+                crate::assets::TREE_BIRCH_UHD,
+                crate::assets::TREE_DEAD_UHD,
+            ]
+        );
+    }
 
     #[test]
     fn anchor_distance_counts_tiles_to_the_nearest_anchor() {

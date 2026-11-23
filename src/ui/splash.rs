@@ -10,6 +10,8 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use bevy::window::PrimaryWindow;
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::assets::ram_source::RamFill;
 use crate::assets::{PreloadedAssets, SPLASH_HANGAR};
 use crate::states::{AppState, SplashPhase};
 
@@ -210,12 +212,24 @@ fn spawn_titles(mut commands: Commands) {
         });
 }
 
+/// Turns the splash ready once every preload has loaded and every UHD file is
+/// in RAM, or failed when either goes wrong. The web build has no RAM fill.
 fn finish_loading(
     server: Res<AssetServer>,
     preloaded: Res<PreloadedAssets>,
+    #[cfg(not(target_arch = "wasm32"))] fill: Option<Res<RamFill>>,
     mut phase: ResMut<NextState<SplashPhase>>,
 ) {
     let mut pending = false;
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Some(fill) = fill {
+        if let Some(path) = fill.failed() {
+            error!("Could not read {path} into RAM");
+            phase.set(SplashPhase::Failed);
+            return;
+        }
+        pending = !fill.is_full();
+    }
     for handle in &preloaded.0 {
         match server.get_load_states(handle.id()) {
             Some((LoadState::Failed(err), _, _))
@@ -259,8 +273,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn ready_waits_until_the_asset_server_finishes_loading() {
+    fn loading_app() -> App {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), StatesPlugin))
             .init_asset::<Image>()
@@ -272,12 +285,26 @@ mod tests {
                 finish_loading.run_if(in_state(SplashPhase::Loading)),
             );
         app.update();
+        app
+    }
 
+    /// Preloads an image that is loaded the moment it is added.
+    fn preload_loaded_image(app: &mut App) {
         let image = app.world().resource::<AssetServer>().add(Image::default());
         app.world_mut()
             .resource_mut::<PreloadedAssets>()
             .0
             .push(image.untyped());
+    }
+
+    fn splash_phase(app: &App) -> SplashPhase {
+        app.world().resource::<State<SplashPhase>>().get().clone()
+    }
+
+    #[test]
+    fn ready_waits_until_the_asset_server_finishes_loading() {
+        let mut app = loading_app();
+        preload_loaded_image(&mut app);
         app.world_mut().run_schedule(Update);
         assert!(matches!(
             app.world().resource::<NextState<SplashPhase>>(),
@@ -286,10 +313,30 @@ mod tests {
 
         app.update();
         app.update();
-        assert_eq!(
-            *app.world().resource::<State<SplashPhase>>().get(),
-            SplashPhase::Ready
-        );
+        assert_eq!(splash_phase(&app), SplashPhase::Ready);
+    }
+
+    #[test]
+    fn ready_waits_for_the_ram_fill() {
+        let mut app = loading_app();
+        preload_loaded_image(&mut app);
+        app.insert_resource(RamFill::test_pending());
+        for _ in 0..3 {
+            app.update();
+        }
+        assert_eq!(splash_phase(&app), SplashPhase::Loading);
+        // The preload was ready all along: the fill alone held the splash.
+        app.insert_resource(RamFill::test_done(None));
+        app.update();
+        app.update();
+        assert_eq!(splash_phase(&app), SplashPhase::Ready);
+
+        let mut app = loading_app();
+        preload_loaded_image(&mut app);
+        app.insert_resource(RamFill::test_done(Some("models/x/uhd/missing.glb")));
+        app.update();
+        app.update();
+        assert_eq!(splash_phase(&app), SplashPhase::Failed);
     }
 
     #[test]
