@@ -12,13 +12,13 @@ use bevy::mesh::PrimitiveTopology;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
-use super::{StreamAnchor, anchor_tiles, near_anchor, neighborhoods};
+use super::{StreamAnchor, anchor_distance, anchor_tiles, near_anchor, neighborhoods};
 
 use super::canopy::{self, ForestTree};
 use super::collision::{Collider, Pillar, Unclimbable};
 use super::cordon::{reserve_scenery, shelterbelt};
 use super::hydrology::Wetlands;
-use super::plants::PendingPlants;
+use super::plants::{GrownPlants, PendingPlants};
 use super::sites;
 use super::terrain::{TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep, value_noise};
 use super::trees::{self, TreeSite};
@@ -203,6 +203,17 @@ pub(super) fn build_tile(terrain: &Terrain, tile: IVec2) -> (Sites, Option<Mesh>
     (sites, reeds.finish(true), stone.finish(false))
 }
 
+/// Children despawned per frame from tiles that left range.
+const UNLOADS_PER_FRAME: usize = 300;
+
+/// A scenery tile that left range, despawned a few children per frame.
+#[derive(Component)]
+pub(super) struct Unloading;
+
+/// Keeps the scenery tiles around every anchor. Tiles that left range are
+/// handed to `unload_stale_tiles`, and at most one new tile spawns per frame,
+/// nearest an anchor first: a tile holds thousands of plants, so a crossing
+/// that loaded or unloaded a whole row at once stalled the frame.
 pub(super) fn stream_scenery(
     mut commands: Commands,
     anchors: Query<&Transform, With<StreamAnchor>>,
@@ -214,52 +225,81 @@ pub(super) fn stream_scenery(
     if terrain.is_changed() {
         *shared_terrain = None;
     }
-    let centers = anchor_tiles(anchors);
-    if scenery.centers == centers {
-        return;
-    }
-    scenery.centers = centers.clone();
-    let shared_terrain = shared_terrain.get_or_insert_with(|| Arc::new(terrain.clone()));
-    scenery.active.retain(|coord, entity| {
-        let near = near_anchor(*coord, &centers, 1);
+    scenery.centers = anchor_tiles(anchors);
+    let Scenery {
+        active, centers, ..
+    } = &mut *scenery;
+    active.retain(|tile, entity| {
+        let near = near_anchor(*tile, centers, 1);
         if !near {
-            commands.entity(*entity).despawn();
+            commands
+                .entity(*entity)
+                .remove::<(PendingPlants, GrownPlants)>()
+                .insert(Unloading);
         }
         near
     });
-    for tile in neighborhoods(&centers, 1) {
-        if scenery.active.contains_key(&tile) {
-            continue;
+    let Some(tile) = neighborhoods(&scenery.centers, 1)
+        .filter(|tile| !scenery.active.contains_key(tile) && scenery.sites.contains_key(tile))
+        .min_by_key(|&tile| anchor_distance(tile, &scenery.centers))
+    else {
+        return;
+    };
+    let shared_terrain = shared_terrain.get_or_insert_with(|| Arc::new(terrain.clone()));
+    let entity = commands
+        .spawn((
+            Transform::default(),
+            Visibility::default(),
+            ChildOf(scenery.root),
+            PendingPlants::grow(shared_terrain.clone(), tile),
+        ))
+        .with_children(|objects| spawn_tile_objects(objects, &scenery.sites[&tile], tile, &server))
+        .id();
+    scenery.active.insert(tile, entity);
+}
+
+/// Despawns at most `UNLOADS_PER_FRAME` children of the tiles that left range,
+/// and each tile once it is empty.
+pub(super) fn unload_stale_tiles(
+    mut commands: Commands,
+    tiles: Query<(Entity, Option<&Children>), With<Unloading>>,
+) {
+    let mut budget = UNLOADS_PER_FRAME;
+    for (tile, children) in &tiles {
+        let children = children.map_or(&[][..], |children| &children[..]);
+        if children.len() < budget {
+            commands.entity(tile).despawn();
+            budget -= children.len() + 1;
+        } else {
+            for &child in &children[children.len() - budget..] {
+                commands.entity(child).despawn();
+            }
+            return;
         }
-        let Some(sites) = scenery.sites.get(&tile) else {
-            continue;
-        };
-        let entity = commands
-            .spawn((
-                Transform::default(),
-                Visibility::default(),
-                ChildOf(scenery.root),
-                PendingPlants::grow(shared_terrain.clone(), tile),
-            ))
-            .with_children(|objects| {
-                for site in &sites.solids {
-                    objects.spawn((site.pose, site.solid()));
-                }
-                for tree in &sites.canopies {
-                    objects.spawn((
-                        tree.pose,
-                        tree.collider(),
-                        tree.weight(),
-                        StandingTree(*tree),
-                    ));
-                }
-                trees::spawn_trees(objects, &server, &sites.undergrowth);
-                super::sites::spawn_solids(objects, tile);
-                super::town::spawn_solids(objects, tile);
-            })
-            .id();
-        scenery.active.insert(tile, entity);
     }
+}
+
+/// A scenery tile's solids, standing trees and undergrowth.
+fn spawn_tile_objects(
+    objects: &mut ChildSpawnerCommands,
+    sites: &Sites,
+    tile: IVec2,
+    server: &AssetServer,
+) {
+    for site in &sites.solids {
+        objects.spawn((site.pose, site.solid()));
+    }
+    for tree in &sites.canopies {
+        objects.spawn((
+            tree.pose,
+            tree.collider(),
+            tree.weight(),
+            StandingTree(*tree),
+        ));
+    }
+    trees::spawn_trees(objects, server, &sites.undergrowth);
+    super::sites::spawn_solids(objects, tile);
+    super::town::spawn_solids(objects, tile);
 }
 
 #[derive(Default)]
@@ -519,13 +559,123 @@ mod tests {
         );
     }
 
+    /// An app streaming empty scenery tiles, with the player in the middle of tile 0.
+    fn streaming_app(tiles: impl IntoIterator<Item = IVec2>) -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin))
+            .init_asset::<bevy::world_serialization::WorldAsset>()
+            .insert_resource(Terrain::new())
+            .add_systems(Update, (stream_scenery, unload_stale_tiles).chain());
+        let root = app.world_mut().spawn(Transform::IDENTITY).id();
+        let player = app
+            .world_mut()
+            .spawn((Player::default(), Transform::from_xyz(64.0, 0.0, 64.0)))
+            .id();
+        let empty = || Sites {
+            solids: vec![],
+            canopies: vec![],
+            undergrowth: vec![],
+        };
+        app.insert_resource(Scenery {
+            root,
+            sites: tiles.into_iter().map(|tile| (tile, empty())).collect(),
+            active: Default::default(),
+            centers: Vec::new(),
+        });
+        (app, player)
+    }
+
+    fn active(app: &App) -> Vec<IVec2> {
+        app.world()
+            .resource::<Scenery>()
+            .active
+            .keys()
+            .copied()
+            .collect()
+    }
+
+    #[test]
+    fn new_tiles_fill_in_one_per_frame_nearest_first() {
+        let (mut app, _) = streaming_app(neighborhoods(&[IVec2::ZERO], 1));
+        app.update();
+        assert_eq!(active(&app), [IVec2::ZERO]);
+        for _ in 1..9 {
+            app.update();
+        }
+        assert_eq!(active(&app).len(), 9);
+    }
+
+    #[test]
+    fn distant_tiles_leave_at_once_then_unload() {
+        let (mut app, player) = streaming_app(neighborhoods(&[IVec2::ZERO], 1));
+        for _ in 0..9 {
+            app.update();
+        }
+        let tiles: Vec<Entity> = app
+            .world()
+            .resource::<Scenery>()
+            .active
+            .values()
+            .copied()
+            .collect();
+        assert_eq!(tiles.len(), 9);
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .expect("player")
+            .translation = Vec3::new(10.5, 0.0, 10.5) * TILE_SIZE;
+        app.update();
+        assert!(active(&app).is_empty());
+        app.update();
+        assert!(
+            tiles
+                .iter()
+                .all(|&tile| app.world().get_entity(tile).is_err())
+        );
+    }
+
+    #[test]
+    fn unloading_tiles_despawn_a_few_children_per_frame() {
+        let mut app = App::new();
+        app.add_systems(Update, unload_stale_tiles);
+        let tile = app.world_mut().spawn(Unloading).id();
+        for _ in 0..2 * UNLOADS_PER_FRAME + 1 {
+            app.world_mut().spawn(ChildOf(tile));
+        }
+        let children = |app: &App| app.world().get::<Children>(tile).map_or(0, |c| c.len());
+        app.update();
+        assert_eq!(children(&app), UNLOADS_PER_FRAME + 1);
+        app.update();
+        assert_eq!(children(&app), 1);
+        app.update();
+        assert!(app.world().get_entity(tile).is_err());
+        let world = app.world_mut();
+        assert_eq!(world.query::<&ChildOf>().iter(world).count(), 0);
+    }
+
+    #[test]
+    fn overlapping_anchors_spawn_each_tile_once() {
+        let anchors = [IVec2::ZERO, IVec2::X];
+        let (mut app, _) = streaming_app(neighborhoods(&anchors, 1));
+        app.world_mut().spawn((
+            StreamAnchor,
+            Transform::from_xyz(TILE_SIZE + 64.0, 0.0, 64.0),
+        ));
+        for _ in 0..20 {
+            app.update();
+        }
+        assert_eq!(active(&app).len(), 12);
+        let root = app.world().resource::<Scenery>().root;
+        let children = app.world().get::<Children>(root).expect("streamed tiles");
+        assert_eq!(children.len(), 12);
+    }
+
     #[test]
     fn distant_colliders_unload_and_return_at_the_same_position() {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default(), TransformPlugin))
             .init_asset::<bevy::world_serialization::WorldAsset>()
             .insert_resource(Terrain::new())
-            .add_systems(Update, stream_scenery);
+            .add_systems(Update, (stream_scenery, unload_stale_tiles).chain());
         let root = app.world_mut().spawn(Transform::IDENTITY).id();
         let player = app
             .world_mut()

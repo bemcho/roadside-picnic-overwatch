@@ -29,6 +29,11 @@ impl Trampled {
     pub(super) fn contains(&self, at: Vec3) -> bool {
         self.0.contains(&Self::spot(at))
     }
+
+    /// Marks the plant rooted at `at` trampled; false if it already was.
+    pub(super) fn trample(&mut self, at: Vec3) -> bool {
+        self.0.insert(Self::spot(at))
+    }
 }
 
 pub(super) fn trample_plants(
@@ -43,7 +48,7 @@ pub(super) fn trample_plants(
             let rise = root.y - pose.translation.y;
             if (-CRUSH_HEIGHT..CRUSH_HEIGHT).contains(&rise)
                 && crusher.reaches(pose, root.xz(), 0.0)
-                && trampled.0.insert(Trampled::spot(root))
+                && trampled.trample(root)
             {
                 commands.entity(plant).despawn();
             }

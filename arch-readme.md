@@ -130,8 +130,10 @@ systems:
 6. A new key press transitions `AppState::Loading` to `AppState::InGame`.
 7. `ui/curtain.rs` covers the new world with an "Entering the Zone" screen. A
    render-world system publishes `PipelineCache::waiting_pipelines().count()`
-   through a shared atomic; the curtain lifts after the queue stays empty for
-   0.4 s (12 s cap), hiding shader compilation and first-frame spawn hitches.
+   through a shared atomic, and the world publishes `PlantsGrowing` while any
+   streamed tile still has plants to grow or spawn; the curtain lifts after
+   both stay idle for 0.4 s (12 s cap), hiding shader compilation, first-frame
+   spawn hitches and the plants filling in around the stalker.
 
 The preload list is also a contract. If a model is needed during `OnEnter` and
 is not preloaded, the splash can report ready before that asset is available.
@@ -159,9 +161,11 @@ world stays alive.
 
 ```text
 PreUpdate
-  stream_scenery
+  stream_scenery -> unload_stale_tiles -> finish_growing_plants
+    -> spawn_grown_plants -> note_growing_plants
   stream_ground_detail
   stream_cordon
+  stream_full_sites
 
 Update, only while InGamePhase::Running
   clock + weather -> wind gusts -> ground-cover wind uniform, bush sway
@@ -237,10 +241,16 @@ Horizon sample grid: 16 m
 The async landscape build prepares coarse scenic terrain and all site/scenery
 layouts up front. Nearby ground tiles swap to their detailed mesh on demand.
 Collision, imported trees, and plants stream around the player in a 3x3 tile
-neighborhood rather than following the distant visual range. Colliders spawn
-with the tile; each tile's plant sites are grown by a `plants::PendingPlants`
-task on the async compute pool, and `spawn_grown_plants` spawns at most one
-finished tile per frame to spread the spawns.
+neighborhood rather than following the distant visual range. Every streamed
+system caps its work per frame, so crossing into a new tile never stalls one:
+`stream_scenery` spawns at most one new tile per frame, nearest an anchor
+first, and marks tiles that left `Unloading`; `unload_stale_tiles` despawns
+300 of their children per frame, then the tile. `stream_ground_detail`
+switches one tile to its 2 m mesh per frame (back to the distant mesh at
+once). Colliders spawn with the tile; each tile's plant sites are grown by a
+`plants::PendingPlants` task on the async compute pool, `finish_growing_plants`
+turns a finished task into `GrownPlants`, and `spawn_grown_plants` spawns at
+most `PLANTS_PER_FRAME` of them per frame, nearest an anchor first.
 Every weed and bush is an imported model (`assets::PlantModel`): an entity with
 the textured `medium/` mesh within 30 m of the camera and a child with the
 texture-free `low/` mesh (same material) out to the scenery range, so plants
@@ -728,10 +738,17 @@ Important paths:
     takes four times the VRAM. BC formats need desktop-class GPUs (WebGPU with
     `texture-compression-bc`).
 
-21. **Keep heavy per-tile work off the main thread.**
+21. **Keep heavy per-tile work off the main thread, and cap it per frame.**
     Build streamed meshes in an async task (see `plants::PendingPlants`) and
     hand results over a few per frame; a burst of new meshes also costs a
-    long `allocate_and_free_meshes` on the render thread.
+    long `allocate_and_free_meshes` on the render thread. Bevy's own
+    per-entity work (`calculate_bounds`, material specialization, the
+    hierarchy observers that fire on every despawned child) made a whole
+    tile's plants cost 100+ ms to spawn and 20+ ms to despawn, so spawn and
+    despawn in budgets (`PLANTS_PER_FRAME`, `UNLOADS_PER_FRAME`). GLB meshes
+    keep their CPU copy, so `calculate_bounds` rescans every vertex for each
+    new entity: give mass-spawned meshes a precomputed `Aabb` with
+    `NoAutoAabb` (`plants::PlantLook`).
 
 22. **Stream around every `StreamAnchor`, not the player.**
     The stalker and (while zoomed in) the camera focus are anchors; scenery,

@@ -13,7 +13,7 @@ use super::scenery::{self, Scenery, Sites};
 use super::terrain::{HORIZON_TILE_RADIUS, SCENIC_TILE_RADIUS, TILE_RADIUS, Terrain, TerrainGrid};
 use super::terrain_material::TerrainMaterial;
 use super::water::{self, WaterMaterial};
-use super::{StreamAnchor, anchor_tiles, detail_range, near_anchor};
+use super::{StreamAnchor, anchor_distance, anchor_tiles, detail_range};
 
 struct TerrainTile {
     coord: IVec2,
@@ -42,46 +42,67 @@ pub(super) struct GroundLod {
     water: Option<Entity>,
 }
 
+/// Ground tiles within this many tiles of an anchor show their detailed mesh.
+const DETAIL_RADIUS: i32 = 2;
+
+/// Ground tiles that left range switch back at once; new ones switch one per
+/// frame, nearest an anchor first, since each mesh is built on this thread.
 pub(super) fn stream_ground_detail(
     mut commands: Commands,
     anchors: Query<&Transform, With<StreamAnchor>>,
     terrain: Res<Terrain>,
     materials: Res<super::LandscapeMaterials>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut last: Local<Vec<IVec2>>,
     mut tiles: Query<(Entity, &mut GroundLod, &mut Mesh3d)>,
 ) {
     let centers = anchor_tiles(anchors);
-    if *last == centers {
-        return;
-    }
-    *last = centers.clone();
+    let mut nearest: Option<(i32, Entity)> = None;
     for (entity, mut lod, mut mesh) in &mut tiles {
-        let near = near_anchor(lod.coord, &centers, 2);
-        if lod.near == near {
-            continue;
-        }
-        lod.near = near;
-        let water = if near {
-            let grid = TerrainGrid::detail(lod.coord);
-            let (detail, wet) = terrain.build_grid(grid);
-            mesh.0 = meshes.add(detail);
-            commands.entity(entity).remove::<NotShadowCaster>();
-            water::build_tile(grid, &wet).map(|surface| meshes.add(surface))
-        } else {
+        let distance = anchor_distance(lod.coord, &centers);
+        if lod.near && distance > DETAIL_RADIUS {
+            lod.near = false;
             mesh.0 = lod.distant.clone();
             commands.entity(entity).insert(NotShadowCaster);
-            lod.distant_water.clone()
-        };
-        if let Some(old) = lod.water.take() {
-            commands.entity(old).despawn();
+            let water = lod.distant_water.clone();
+            replace_water(&mut commands, entity, &mut lod, water, &materials.water);
+        } else if !lod.near
+            && distance <= DETAIL_RADIUS
+            && nearest.is_none_or(|(closest, _)| distance < closest)
+        {
+            nearest = Some((distance, entity));
         }
-        lod.water = water.map(|mesh| {
-            commands
-                .spawn((water::surface(mesh, &materials.water), ChildOf(entity)))
-                .id()
-        });
     }
+    let Some((_, entity)) = nearest else {
+        return;
+    };
+    let Ok((_, mut lod, mut mesh)) = tiles.get_mut(entity) else {
+        return;
+    };
+    lod.near = true;
+    let grid = TerrainGrid::detail(lod.coord);
+    let (detail, wet) = terrain.build_grid(grid);
+    mesh.0 = meshes.add(detail);
+    commands.entity(entity).remove::<NotShadowCaster>();
+    let water = water::build_tile(grid, &wet).map(|surface| meshes.add(surface));
+    replace_water(&mut commands, entity, &mut lod, water, &materials.water);
+}
+
+/// Swaps a ground tile's water surface for `water`.
+fn replace_water(
+    commands: &mut Commands,
+    tile: Entity,
+    lod: &mut GroundLod,
+    water: Option<Handle<Mesh>>,
+    material: &Handle<WaterMaterial>,
+) {
+    if let Some(old) = lod.water.take() {
+        commands.entity(old).despawn();
+    }
+    lod.water = water.map(|mesh| {
+        commands
+            .spawn((water::surface(mesh, material), ChildOf(tile)))
+            .id()
+    });
 }
 
 #[derive(Asset, TypePath)]
@@ -259,6 +280,91 @@ mod tests {
     use crate::player::Player;
     use crate::world::canopy::{CanopyVisual, ForestTree, Species};
     use crate::world::terrain::TILE_SIZE;
+
+    /// An app streaming ground detail over the 5×5 tiles around tile 0, all
+    /// sharing one distant mesh, with the player in the middle of tile 0.
+    fn ground_app() -> (App, Entity, Handle<Mesh>) {
+        let mut app = App::new();
+        app.insert_resource(Terrain::new())
+            .insert_resource(super::super::LandscapeMaterials {
+                terrain: Handle::default(),
+                water: Handle::default(),
+                foliage: Handle::default(),
+            })
+            .init_resource::<Assets<Mesh>>()
+            .add_systems(Update, stream_ground_detail);
+        let world = app.world_mut();
+        let distant = world.resource_mut::<Assets<Mesh>>().add(Cuboid::default());
+        for z in -2..=2 {
+            for x in -2..=2 {
+                world.spawn((
+                    Mesh3d(distant.clone()),
+                    GroundLod {
+                        coord: IVec2::new(x, z),
+                        distant: distant.clone(),
+                        distant_water: None,
+                        near: false,
+                        water: None,
+                    },
+                ));
+            }
+        }
+        let player = world
+            .spawn((Player::default(), Transform::from_xyz(64.0, 0.0, 64.0)))
+            .id();
+        (app, player, distant)
+    }
+
+    /// The tiles showing their detailed mesh.
+    fn detailed(app: &mut App, distant: &Handle<Mesh>) -> Vec<IVec2> {
+        let world = app.world_mut();
+        let mut tiles = world.query::<(&GroundLod, &Mesh3d)>();
+        tiles
+            .iter(world)
+            .filter(|(_, mesh)| mesh.0 != *distant)
+            .map(|(lod, _)| lod.coord)
+            .collect()
+    }
+
+    fn move_to_tile(app: &mut App, player: Entity, tile: IVec2) {
+        app.world_mut()
+            .get_mut::<Transform>(player)
+            .expect("player")
+            .translation = (tile.as_vec2() + Vec2::splat(0.5)).extend(0.0).xzy() * TILE_SIZE;
+    }
+
+    #[test]
+    fn ground_detail_fills_in_one_tile_per_frame_nearest_first() {
+        let (mut app, _, distant) = ground_app();
+        app.update();
+        assert_eq!(detailed(&mut app, &distant), [IVec2::ZERO]);
+        for _ in 1..25 {
+            app.update();
+        }
+        assert_eq!(detailed(&mut app, &distant).len(), 25);
+    }
+
+    #[test]
+    fn ground_detail_unloads_at_once() {
+        let (mut app, player, distant) = ground_app();
+        for _ in 0..25 {
+            app.update();
+        }
+        move_to_tile(&mut app, player, IVec2::new(12, 12));
+        app.update();
+        assert!(detailed(&mut app, &distant).is_empty());
+    }
+
+    #[test]
+    fn a_tile_that_leaves_range_before_its_turn_stays_distant() {
+        let (mut app, player, distant) = ground_app();
+        app.update();
+        move_to_tile(&mut app, player, IVec2::new(8, 0));
+        for _ in 0..25 {
+            app.update();
+        }
+        assert!(detailed(&mut app, &distant).is_empty());
+    }
 
     #[test]
     fn ground_detail_follows_the_player_into_the_new_land() {

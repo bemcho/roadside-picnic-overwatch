@@ -4,8 +4,7 @@ Harmont buildings are in the air
 
 add Institute vehicle https://studio.tripo3d.ai/3d-model/military-armored-vehicle-with-tracked-wheels-heavy-armor-rooftop-car-64efb0f3-6039-48fa-a8c7-44b7e3201c5f
 
-add secong long light on armoured - longer and wider light spot
-Harmont buildings are in the air
+
 
 skeletons, broken vehicles mark known anomalies
 

@@ -236,7 +236,10 @@ mod tests {
             .insert_resource(terrain)
             .init_resource::<Assets<Mesh>>()
             .add_message::<TreeBreak>()
-            .add_systems(PreUpdate, scenery::stream_scenery)
+            .add_systems(
+                PreUpdate,
+                (scenery::stream_scenery, scenery::unload_stale_tiles).chain(),
+            )
             .add_systems(
                 Update,
                 (animate_falling_trees, break_selected_trees).chain(),

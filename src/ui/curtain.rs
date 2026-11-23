@@ -1,6 +1,6 @@
 //! Entry curtain: keeps a loading screen over the freshly spawned Zone until the
-//! renderer has compiled its shader pipelines, so the world appears complete
-//! instead of popping in while the first frames compile.
+//! renderer has compiled its shader pipelines and the plants around the stalker
+//! have spawned, so the world appears complete instead of popping in.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -10,10 +10,11 @@ use bevy::render::render_resource::PipelineCache;
 use bevy::render::{Render, RenderApp};
 
 use crate::states::AppState;
+use crate::world::PlantsGrowing;
 
 use super::text;
 
-/// How long the pipeline queue must stay empty before the curtain lifts.
+/// How long the pipeline queue and plant spawning must stay idle before the curtain lifts.
 const SETTLE_SECONDS: f32 = 0.4;
 /// Never hold the player longer than this, even if pipelines keep arriving.
 const MAX_SECONDS: f32 = 12.0;
@@ -91,6 +92,7 @@ fn lift_curtain(
     mut commands: Commands,
     time: Res<Time<Real>>,
     backlog: Res<PipelineBacklog>,
+    plants: Res<PlantsGrowing>,
     curtain: Option<Single<(Entity, &mut EntryCurtain)>>,
 ) {
     let Some(curtain) = curtain else {
@@ -99,11 +101,8 @@ fn lift_curtain(
     let (entity, mut curtain) = curtain.into_inner();
     let dt = time.delta_secs();
     curtain.shown += dt;
-    curtain.settled = if backlog.0.load(Ordering::Relaxed) == 0 {
-        curtain.settled + dt
-    } else {
-        0.0
-    };
+    let busy = backlog.0.load(Ordering::Relaxed) > 0 || plants.0;
+    curtain.settled = if busy { 0.0 } else { curtain.settled + dt };
     if curtain.settled >= SETTLE_SECONDS || curtain.shown >= MAX_SECONDS {
         commands.entity(entity).despawn();
     }
@@ -118,25 +117,33 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn curtain_waits_for_compiling_pipelines_then_lifts() {
+    /// An app that has just entered the Zone, with its pipeline backlog.
+    fn entered_app() -> (App, PipelineBacklog) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, StatesPlugin, CurtainPlugin))
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
                 100,
             )))
+            .init_resource::<PlantsGrowing>()
             .init_state::<AppState>();
         app.world_mut()
             .resource_mut::<NextState<AppState>>()
             .set(AppState::InGame);
         let backlog = app.world().resource::<PipelineBacklog>().clone();
+        (app, backlog)
+    }
+
+    fn curtains(app: &mut App) -> usize {
+        app.world_mut()
+            .query::<&EntryCurtain>()
+            .iter(app.world())
+            .count()
+    }
+
+    #[test]
+    fn curtain_waits_for_compiling_pipelines_then_lifts() {
+        let (mut app, backlog) = entered_app();
         backlog.0.store(3, Ordering::Relaxed);
-        let curtains = |app: &mut App| {
-            app.world_mut()
-                .query::<&EntryCurtain>()
-                .iter(app.world())
-                .count()
-        };
 
         for _ in 0..10 {
             app.update();
@@ -151,6 +158,27 @@ mod tests {
             curtains(&mut app),
             0,
             "the curtain lifts once compiling settles"
+        );
+    }
+
+    #[test]
+    fn curtain_waits_for_plants_to_spawn_then_lifts() {
+        let (mut app, _) = entered_app();
+        app.world_mut().resource_mut::<PlantsGrowing>().0 = true;
+
+        for _ in 0..10 {
+            app.update();
+        }
+        assert_eq!(curtains(&mut app), 1, "plants are still spawning");
+
+        app.world_mut().resource_mut::<PlantsGrowing>().0 = false;
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(
+            curtains(&mut app),
+            0,
+            "the curtain lifts once plants settle"
         );
     }
 }

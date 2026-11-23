@@ -109,7 +109,8 @@ the stalker stands still.
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
   in other plugins. `Terrain::mesh_height_at` tracks the rendered surface near
   the player. Ground tiles swap from 2 m to 8 m sampling at distance, with
-  stitched edges across both resolutions. Larger 16 m horizon tiles keep the
+  stitched edges across both resolutions; within 2 tiles of an anchor they
+  switch to the 2 m mesh one per frame, nearest first, and back at once. Larger 16 m horizon tiles keep the
   coastal water, lake basin and rolling country visible beyond the traversal
   limit without nearby collision or plant detail.
   `tools/prepare_terrain_textures.py` extracts tiling albedo,
@@ -168,7 +169,10 @@ the stalker stands still.
   colliders. Individual trees can randomly snap and fall while in view
   (`src/world/tree_fall.rs`, `TreeBreak` message); their
   collision goes away immediately and they don't respawn during the run.
-  Colliders and undergrowth stream in a 3×3 chunk neighborhood.
+  Colliders and undergrowth stream in a 3×3 chunk neighborhood: one new
+  tile spawns per frame, nearest an anchor first, and a tile that leaves
+  is marked `Unloading` and despawned 300 children per frame
+  (`scenery::unload_stale_tiles`), so crossings don't stall a frame.
   Camera frusta and distance ranges cull scenery detail independently of
   collision and leave the terrain skyline visible.
 - **Wind** (`src/world/weather.rs`, `Wind`): the day's breeze with gusts of
@@ -191,9 +195,11 @@ the stalker stands still.
   instance batch. Each dry-weed seed grows a patch of up to 5 plants, other
   weeds and bushes up to 15 (a third of that in the belts, full patches in
   the crawl hole's thicket); sites
-  are computed on a worker thread as chunks stream in and one tile is spawned
-  per frame. Plants have no collision or shadows. The rear and sides of the
-  hangar form a dense shelterbelt; the central yard and roads stay clear.
+  are computed on a worker thread as chunks stream in, and at most
+  `PLANTS_PER_FRAME` (150) plants spawn per frame, nearest tile first, each
+  given its model's precomputed bounds (`Aabb` + `NoAutoAabb`). Plants have
+  no collision or shadows. The rear and sides of the hangar form a dense
+  shelterbelt; the central yard and roads stay clear.
 - **Vegetation** (`src/world/trees.rs`): four extracted, textured vegetation clusters
   (`assets/models/vegetation/medium/*.glb`) are scattered only around landmarks, on a jittered grid,
   weighted by `Terrain::woodland_at` (off-road, outside the quarry, sparse above
@@ -458,8 +464,9 @@ the stalker stands still.
   and the small tiling terrain PNGs.
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
-  empty briefly (at most 12 s), so shaders compile and spawn hitches happen
-  behind it instead of as pop-in. NVIDIA's driver caches compiled pipelines on
+  empty and every streamed plant has spawned (`world::PlantsGrowing`) for a
+  moment (at most 12 s), so shaders compile and spawn hitches happen behind
+  it instead of as pop-in. NVIDIA's driver caches compiled pipelines on
   disk; Bevy 0.20 itself has no persistent pipeline cache.
 
 ## Build & Run Commands

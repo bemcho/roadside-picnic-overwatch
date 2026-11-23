@@ -43,6 +43,7 @@ pub(crate) use ground_fog::{CAMERA_FAR, camera_distance_fog, camera_fog};
 pub(crate) use hydrology::SWAMP;
 pub(crate) use map::{MAP_SIZE, METERS_PER_PIXEL, map, map_pixel};
 pub use places::{Describe, Explored, Place, SURVEY_CELL, place_at, structure_on_ray};
+pub(crate) use plants::PlantsGrowing;
 pub(crate) use roads::traffic_routes;
 #[cfg(test)]
 pub(crate) use terrain::BASE;
@@ -113,6 +114,7 @@ impl Plugin for WorldPlugin {
         .init_asset::<Landscape>()
         .init_resource::<Terrain>()
         .init_resource::<crush::Trampled>()
+        .init_resource::<PlantsGrowing>()
         .add_message::<tree_fall::TreeBreak>()
         .add_systems(
             Startup,
@@ -174,7 +176,14 @@ impl Plugin for WorldPlugin {
         .add_systems(
             PreUpdate,
             (
-                (stream_scenery, plants::spawn_grown_plants).chain(),
+                (
+                    stream_scenery,
+                    scenery::unload_stale_tiles,
+                    plants::finish_growing_plants,
+                    plants::spawn_grown_plants,
+                    plants::note_growing_plants,
+                )
+                    .chain(),
                 stream_ground_detail,
                 cordon::stream_cordon,
                 sites::stream_full_sites,
@@ -261,9 +270,16 @@ fn neighborhoods(anchors: &[IVec2], radius: i32) -> impl Iterator<Item = IVec2> 
 
 /// Whether `tile` lies within `radius` tiles of any anchor tile.
 fn near_anchor(tile: IVec2, anchors: &[IVec2], radius: i32) -> bool {
+    anchor_distance(tile, anchors) <= radius
+}
+
+/// How many tiles `tile` lies from the nearest anchor tile (`i32::MAX` with none).
+fn anchor_distance(tile: IVec2, anchors: &[IVec2]) -> i32 {
     anchors
         .iter()
-        .any(|anchor| (tile - *anchor).abs().max_element() <= radius)
+        .map(|anchor| (tile - *anchor).abs().max_element())
+        .min()
+        .unwrap_or(i32::MAX)
 }
 
 /// Bevy grows a shared vertex slab 1.5x at a time up to 512 MiB, holding the
@@ -418,6 +434,13 @@ mod tests {
     use bevy::mesh::MeshPlugin;
 
     use super::*;
+
+    #[test]
+    fn anchor_distance_counts_tiles_to_the_nearest_anchor() {
+        let anchors = [IVec2::ZERO, IVec2::new(2, 0)];
+        assert_eq!(anchor_distance(IVec2::new(3, -1), &anchors), 1);
+        assert_eq!(anchor_distance(IVec2::ZERO, &[]), i32::MAX);
+    }
 
     #[test]
     fn distant_detail_and_objects_behind_the_camera_are_culled() {

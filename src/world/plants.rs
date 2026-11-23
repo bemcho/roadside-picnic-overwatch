@@ -6,7 +6,8 @@
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
-use bevy::camera::visibility::VisibilityRange;
+use bevy::camera::primitives::{Aabb, MeshAabb};
+use bevy::camera::visibility::{NoAutoAabb, VisibilityRange};
 use bevy::gltf::GltfMaterial;
 use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
@@ -31,7 +32,7 @@ use super::terrain::{
     BASE, HALF_SIZE, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep, value_noise,
 };
 use super::weather::Wind;
-use super::{detail_range, range_scene_meshes};
+use super::{StreamAnchor, anchor_distance, anchor_tiles, detail_range, range_scene_meshes};
 
 const CELL: f32 = 8.0;
 const SEED: u32 = 0x1035_F108;
@@ -46,6 +47,9 @@ const FAR: f32 = 66.0;
 const FAR_FADE: f32 = 10.0;
 /// The plant nearest the stalker within this distance shows its full scan.
 const FULL_RANGE: f32 = 8.0;
+/// Plants spawned per frame at most: a tile's thousands at once stalled the
+/// frame in Bevy's per-entity material and visibility bookkeeping.
+const PLANTS_PER_FRAME: usize = 150;
 /// Brightens glowweed's own emission enough to show at dusk.
 const GLOW_GAIN: f32 = 30.0;
 
@@ -126,11 +130,15 @@ impl MaterialExtension for PlantWind {
 }
 
 /// One imported plant's far and near meshes and their shared, wind-bent material.
+/// The meshes keep their CPU copy, so Bevy would rescan every vertex for each
+/// new plant: their bounds are measured once instead.
 #[derive(Default)]
 struct PlantLook {
     far: Handle<Mesh>,
     near: Handle<Mesh>,
     paint: Handle<PlantMaterial>,
+    far_bounds: Option<Aabb>,
+    near_bounds: Option<Aabb>,
 }
 
 /// Every plant model's look, by kind and then variant, and their wind buffer.
@@ -173,8 +181,10 @@ pub(super) fn prepare_plant_looks(
     paints: Res<Assets<GltfMaterial>>,
     mut materials: ResMut<Assets<PlantMaterial>>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
+    meshes: Res<Assets<Mesh>>,
 ) {
     let wind = buffers.add(ShaderBuffer::from(vec![Vec4::ZERO]));
+    let bounds = |mesh: &Handle<Mesh>| meshes.get(mesh).and_then(MeshAabb::get_aabb);
     let looks = Kind::ALL.map(|kind| {
         kind.models()
             .iter()
@@ -190,6 +200,8 @@ pub(super) fn prepare_plant_looks(
                     base.emissive *= GLOW_GAIN;
                 }
                 PlantLook {
+                    far_bounds: bounds(&far),
+                    near_bounds: bounds(&near),
                     far,
                     near,
                     paint: materials.add(PlantMaterial {
@@ -504,35 +516,86 @@ impl TilePlants {
 
 /// Plants still growing for a streamed scenery tile.
 #[derive(Component)]
-pub(super) struct PendingPlants(Task<TilePlants>);
+pub(super) struct PendingPlants {
+    tile: IVec2,
+    task: Task<TilePlants>,
+}
 
 impl PendingPlants {
     pub(super) fn grow(terrain: Arc<Terrain>, tile: IVec2) -> Self {
-        Self(AsyncComputeTaskPool::get().spawn(async move { TilePlants::grow(&terrain, tile) }))
+        let task =
+            AsyncComputeTaskPool::get().spawn(async move { TilePlants::grow(&terrain, tile) });
+        Self { tile, task }
     }
 }
 
-/// Spawns at most one grown tile per frame, spreading the spawns.
+/// A grown tile's plants still waiting to spawn.
+#[derive(Component)]
+pub(super) struct GrownPlants {
+    tile: IVec2,
+    sites: Vec<PlantSite>,
+}
+
+/// Whether streamed tiles still have plants to grow or spawn. The entry
+/// curtain stays up until they have all spawned.
+#[derive(Resource, Default, PartialEq)]
+pub struct PlantsGrowing(pub bool);
+
+/// Tiles with plants still to grow or spawn.
+type Growing = Or<(With<PendingPlants>, With<GrownPlants>)>;
+
+/// Notes whether any tile still has plants to grow or spawn.
+pub(super) fn note_growing_plants(tiles: Query<(), Growing>, mut growing: ResMut<PlantsGrowing>) {
+    growing.set_if_neq(PlantsGrowing(!tiles.is_empty()));
+}
+
+/// Hands each tile whose plants finished growing over to `spawn_grown_plants`.
+pub(super) fn finish_growing_plants(
+    mut commands: Commands,
+    mut tiles: Query<(Entity, &mut PendingPlants)>,
+) {
+    for (tile, mut pending) in &mut tiles {
+        if let Some(plants) = check_ready(&mut pending.task) {
+            commands
+                .entity(tile)
+                .remove::<PendingPlants>()
+                .insert(GrownPlants {
+                    tile: pending.tile,
+                    sites: plants.0,
+                });
+        }
+    }
+}
+
+/// Spawns at most `PLANTS_PER_FRAME` grown plants per frame, nearest an anchor
+/// first, so a new tile fills in over a few frames instead of stalling one.
 /// Trampled plants stay gone.
 pub(super) fn spawn_grown_plants(
     mut commands: Commands,
-    mut tiles: Query<(Entity, &mut PendingPlants)>,
+    anchors: Query<&Transform, With<StreamAnchor>>,
+    mut tiles: Query<(Entity, &mut GrownPlants)>,
     looks: Res<PlantLooks>,
     trampled: Res<Trampled>,
 ) {
-    let Some((tile, mut plants)) = tiles
-        .iter_mut()
-        .find_map(|(tile, mut pending)| Some((tile, check_ready(&mut pending.0)?)))
-    else {
-        return;
-    };
-    plants
-        .0
-        .retain(|site| !trampled.contains(site.pose.translation));
-    commands
-        .entity(tile)
-        .remove::<PendingPlants>()
-        .with_children(|parent| spawn_plants(parent, &plants.0, &looks));
+    let centers = anchor_tiles(anchors);
+    let mut tiles: Vec<_> = tiles.iter_mut().collect();
+    tiles.sort_by_key(|(_, grown)| anchor_distance(grown.tile, &centers));
+    let mut budget = PLANTS_PER_FRAME;
+    for (tile, mut grown) in tiles {
+        let take = budget.min(grown.sites.len());
+        let at = grown.sites.len() - take;
+        let mut batch = grown.sites.split_off(at);
+        batch.retain(|site| !trampled.contains(site.pose.translation));
+        let mut tile = commands.entity(tile);
+        tile.with_children(|parent| spawn_plants(parent, &batch, &looks));
+        if grown.sites.is_empty() {
+            tile.remove::<GrownPlants>();
+        }
+        budget -= take;
+        if budget == 0 {
+            break;
+        }
+    }
 }
 
 /// Each plant shows its near model up close and crossfades to its far model.
@@ -549,21 +612,31 @@ fn spawn_plants(parent: &mut ChildSpawnerCommands, sites: &[PlantSite], looks: &
     };
     for site in sites {
         let look = looks.of(site);
-        parent
-            .spawn((
-                Plant {
-                    model: &site.kind.models()[site.variant],
-                },
-                site.pose,
-                Mesh3d(look.near.clone()),
-                MeshMaterial3d(look.paint.clone()),
-                near.clone(),
-            ))
-            .with_child((
+        let mut plant = parent.spawn((
+            Plant {
+                model: &site.kind.models()[site.variant],
+            },
+            site.pose,
+            Mesh3d(look.near.clone()),
+            MeshMaterial3d(look.paint.clone()),
+            near.clone(),
+        ));
+        bound(&mut plant, look.near_bounds);
+        plant.with_children(|plant| {
+            let mut far_model = plant.spawn((
                 Mesh3d(look.far.clone()),
                 MeshMaterial3d(look.paint.clone()),
                 far.clone(),
             ));
+            bound(&mut far_model, look.far_bounds);
+        });
+    }
+}
+
+/// Gives a plant model its measured bounds, so Bevy skips recomputing them.
+fn bound(model: &mut EntityCommands, bounds: Option<Aabb>) {
+    if let Some(bounds) = bounds {
+        model.insert((bounds, NoAutoAabb));
     }
 }
 
@@ -661,7 +734,7 @@ mod tests {
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
             .init_resource::<PlantLooks>()
             .init_resource::<Trampled>()
-            .add_systems(Update, spawn_grown_plants);
+            .add_systems(Update, (finish_growing_plants, spawn_grown_plants).chain());
         let tile = base_tile() + IVec2::NEG_Y;
         let expected = TilePlants::grow(&Terrain::new(), tile);
         let root = app
@@ -670,13 +743,15 @@ mod tests {
             .id();
         for _ in 0..2_000 {
             app.update();
-            if !app.world().entity(root).contains::<PendingPlants>() {
+            let root = app.world().entity(root);
+            if !root.contains::<PendingPlants>() && !root.contains::<GrownPlants>() {
                 break;
             }
             std::thread::sleep(Duration::from_millis(5));
         }
         let world = app.world_mut();
         assert!(!world.entity(root).contains::<PendingPlants>());
+        assert!(!world.entity(root).contains::<GrownPlants>());
         let children = world.entity(root).get::<Children>().expect("grown plants");
         let plants = children
             .iter()
@@ -684,6 +759,162 @@ mod tests {
             .count();
         assert_eq!(plants, expected.0.len());
         assert!(plants > 0);
+    }
+
+    /// `count` grown dry grasses in a row on `tile`.
+    fn grown(tile: IVec2, count: usize) -> GrownPlants {
+        let sites = (0..count)
+            .map(|i| PlantSite {
+                kind: Kind::DryGrass,
+                variant: 0,
+                pose: Transform::from_xyz(i as f32, 0.0, 0.0),
+            })
+            .collect();
+        GrownPlants { tile, sites }
+    }
+
+    /// An app spawning plants from a grown tile of `count` dry grasses in a row.
+    fn grown_tile(count: usize) -> (App, Entity) {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_resource::<PlantLooks>()
+            .init_resource::<Trampled>()
+            .add_systems(Update, spawn_grown_plants);
+        let tile = app.world_mut().spawn(grown(IVec2::ZERO, count)).id();
+        (app, tile)
+    }
+
+    fn plants_on(app: &mut App, tile: Entity) -> usize {
+        let world = app.world_mut();
+        let mut plants = world.query_filtered::<&ChildOf, With<Plant>>();
+        plants
+            .iter(world)
+            .filter(|parent| parent.parent() == tile)
+            .count()
+    }
+
+    #[test]
+    fn a_grown_tile_spawns_at_most_plants_per_frame_until_done() {
+        let (mut app, tile) = grown_tile(2 * PLANTS_PER_FRAME + 1);
+        app.update();
+        assert_eq!(plants_on(&mut app, tile), PLANTS_PER_FRAME);
+        app.update();
+        app.update();
+        assert_eq!(plants_on(&mut app, tile), 2 * PLANTS_PER_FRAME + 1);
+        assert!(!app.world().entity(tile).contains::<GrownPlants>());
+    }
+
+    #[test]
+    fn nearest_tiles_spawn_their_plants_first() {
+        let (mut app, far) = grown_tile(PLANTS_PER_FRAME + 50);
+        app.world_mut()
+            .entity_mut(far)
+            .insert(grown(IVec2::new(3, 0), PLANTS_PER_FRAME + 50));
+        let near = app
+            .world_mut()
+            .spawn(grown(IVec2::ZERO, PLANTS_PER_FRAME + 50))
+            .id();
+        app.world_mut()
+            .spawn((StreamAnchor, Transform::from_xyz(64.0, 0.0, 64.0)));
+        app.update();
+        assert_eq!(plants_on(&mut app, near), PLANTS_PER_FRAME);
+        assert_eq!(plants_on(&mut app, far), 0);
+        app.update();
+        assert_eq!(plants_on(&mut app, near), PLANTS_PER_FRAME + 50);
+        assert_eq!(
+            plants_on(&mut app, far),
+            PLANTS_PER_FRAME - 50,
+            "the budget carries over"
+        );
+    }
+
+    #[test]
+    fn growing_plants_are_noted_until_all_have_spawned() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .init_resource::<PlantsGrowing>()
+            .add_systems(Update, note_growing_plants);
+        let growing = |app: &App| app.world().resource::<PlantsGrowing>().0;
+        let tile = app.world_mut().spawn(grown(IVec2::ZERO, 1)).id();
+        app.update();
+        assert!(growing(&app), "a grown tile still has plants to spawn");
+
+        app.world_mut().entity_mut(tile).remove::<GrownPlants>();
+        app.update();
+        assert!(!growing(&app));
+
+        let task = AsyncComputeTaskPool::get().spawn(async { TilePlants(Vec::new()) });
+        app.world_mut().spawn(PendingPlants {
+            tile: IVec2::ZERO,
+            task,
+        });
+        app.update();
+        assert!(growing(&app), "a pending tile is still growing");
+    }
+
+    #[test]
+    fn plants_trampled_while_waiting_never_spawn() {
+        let (mut app, tile) = grown_tile(2);
+        assert!(
+            app.world_mut()
+                .resource_mut::<Trampled>()
+                .trample(Vec3::ZERO)
+        );
+        app.update();
+        app.update();
+        assert_eq!(plants_on(&mut app, tile), 1);
+    }
+
+    #[test]
+    fn a_tile_despawned_mid_spawn_drops_its_plants() {
+        let (mut app, tile) = grown_tile(2 * PLANTS_PER_FRAME);
+        app.update();
+        app.world_mut().despawn(tile);
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<(), With<Plant>>()
+                .iter(world)
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn plants_carry_their_models_bounds() {
+        let (mut app, tile) = grown_tile(0);
+        let bounds = Aabb::from_min_max(Vec3::ZERO, Vec3::ONE);
+        let world = app.world_mut();
+        let mut looks = world.resource_mut::<PlantLooks>();
+        let grass = &mut looks.looks[Kind::DryGrass as usize][0];
+        grass.near_bounds = Some(bounds);
+        grass.far_bounds = Some(bounds);
+        let site = |kind, x| PlantSite {
+            kind,
+            variant: 0,
+            pose: Transform::from_xyz(x, 0.0, 0.0),
+        };
+        let sites = vec![site(Kind::DryGrass, 0.0), site(Kind::Shrub, 1.0)];
+        world.entity_mut(tile).insert(GrownPlants {
+            tile: IVec2::ZERO,
+            sites,
+        });
+        app.update();
+
+        let world = app.world_mut();
+        let mut plants = world.query_filtered::<(Entity, &Transform, &Children), With<Plant>>();
+        let plants: Vec<_> = plants
+            .iter(world)
+            .map(|(near, pose, children)| (near, children[0], pose.translation.x == 0.0))
+            .collect();
+        assert_eq!(plants.len(), 2);
+        for (near, far, grass) in plants {
+            for entity in [near, far] {
+                assert_eq!(world.get::<Aabb>(entity).copied(), grass.then_some(bounds));
+                assert_eq!(world.entity(entity).contains::<NoAutoAabb>(), grass);
+            }
+        }
     }
 
     #[test]
