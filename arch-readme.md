@@ -807,9 +807,10 @@ Important paths:
     scans only through `GpuScans` (want, pin, prefill within the live budget)
     rather than outright. A freed buffer goes back to wgpu's allocator, which
     holds video memory in 256 MiB blocks and returns a block to the driver only
-    once it is empty: `nvidia-smi` drops by a whole block now and then (2809 to
-    2553 MiB in one Task 4b run) but mostly stays level (Task 9: eight scans,
-    about 1 GB, left in a drive and it went from 5439 to 5427 MiB). The
+    once it is empty: `nvidia-smi` drops by a whole block now and then (on the
+    6 GB RTX 2060 it once fell from 2809 to 2553 MiB in a replay roaming the
+    sites) but mostly stays level (in a drive away from the hangar, eight
+    scans, about 1 GB, left and it went from 5439 to 5427 MiB). The
     driver's usage, which `live_scan_budget` reads, behaves the same, so the
     budget counts that pooled memory as the game's own and shrinks by each
     scan that leaves.

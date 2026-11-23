@@ -384,10 +384,12 @@ move forth and back", "minimal disk io"). Native builds only: `wasm32` has a
   been shown for at least two minutes and is not near any anchor. The least
   recently shown one goes first. If nothing may leave, the new scan waits and
   its mid tier stays. A copy that leaves is only dropped from the GPU: the RAM
-  copy stays and nothing is read from disk. Every scan fits once the driver
-  offers the game about 7.4 GiB, which takes a 10 GB card, so nothing ever
-  leaves there (measured in phase 1, Task 9: the 42 scans take about 4.4 GiB
-  on the GPU; this first said 12 GB, an estimate). *(Assistant's call: two minutes is a starting point.)*
+  copy stays and nothing is read from disk. Every scan should fit once the
+  driver offers the game about 7.4 GiB, which takes a 10 GB card, so nothing
+  ever leaves there (estimated in phase 1, Task 9: the 42 scans take about
+  4.4 GiB on the GPU, with 14 of the 24 site scans measured and the rest taken
+  at ~107 MiB, plus 2.4 GiB for the rest of the game and the 0.5 GiB margin;
+  not yet run on a larger card. This first said 12 GB). *(Assistant's call: two minutes is a starting point.)*
 - **Upload early.** Start a scan's upload once an anchor comes within about
   40 m of an object that may show it (the car covers that in under 2 s at
   24 m/s). Show it only once it is on the GPU; until then the mid or near tier
@@ -402,9 +404,11 @@ move forth and back", "minimal disk io"). Native builds only: `wasm32` has a
   45 ms of `prepare_assets<GpuImage>`). The walk had five (plant scans of
   76-135 MB), the drive one (the Institute, 65 MB), and the wood run, with
   every tree and plant scan on the GPU before the curtain, none. Do not split
-  scans to get around that (see GPU buffers under Constraints); whether a
-  limit returns, with the ring and the shroud made not to re-upload each
-  change, is for phase 2.
+  scans to get around that (see GPU buffers under Constraints). No upload
+  limit is added in phase 1; whether one returns (with the ring and the
+  shroud made not to re-upload each change) is decided after the
+  eviction-cascade fix is measured, since these gaps came while the budget
+  cascaded.
 - Sites and landmarks keep their own rule for when to show a scan
   (`sites.rs`: within 150 m of a `StreamAnchor`), under the same budget. In
   the trace the garage took ~1.1 s to load from disk; from RAM it arrives in
@@ -459,7 +463,7 @@ section to `README.md`, next to the run commands, along these lines:
 >   machine has free (the loading screen takes longer the first time). On the
 >   GPU it keeps as many close-up (UHD) models as the driver says fit, and
 >   frees the least recently seen ones when memory runs short. From about
->   10 GB up, all of them stay. Use the flag to leave video memory for other
+>   10 GB up (estimated), all of them stay. Use the flag to leave video memory for other
 >   programs, or where the driver cannot report it (then the game assumes
 >   6 GB).
 > - `--detail <x>` (default 1.0): how far the higher-detail versions of trees,

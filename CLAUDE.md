@@ -481,14 +481,16 @@ the stalker stands still.
   `python3 ~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py <glb>...`
   (it works on the compressed file and keeps its KTX2 images byte-identical).
 - **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
-  behind the splash the `ram://` asset source reads every UHD scan the game
-  can show (`world::uhd_files`: the five trees, the plants, then the sites
+  behind the splash the `ram://` asset source reads every streamed UHD scan
+  (the 42 in `world::uhd_files`: the five trees, the plants, then the sites
   nearest the hangar first) into RAM, four files at a time, while 2 GiB of
   RAM stay free (`RAM_HEADROOM`). A file that does not fit stays on disk and
   loads from `assets/` through the same source; the splash waits for the fill.
-  Every UHD load goes through `assets::uhd(path)` (`ram://` natively,
-  `assets/` on the web) and only through `GpuScans`, never straight from the
-  `AssetServer`. Callers `want` a scan each frame from `UPLOAD_LEAD` (40 m)
+  Every streamed UHD scan loads through `assets::uhd(path)` (`ram://`
+  natively, `assets/` on the web) and only through `GpuScans`, never straight
+  from the `AssetServer`; the always-shown UHD models (the stalker,
+  `STALKER_MODEL`, and the checkpoints, `SITE_CHECKPOINT`) are preloaded from
+  `assets/` instead. Callers `want` a scan each frame from `UPLOAD_LEAD` (40 m)
   short of where it shows, the five tree scans are `pin`ned, and `scene()`
   returns the scan only once it is resident; a caller despawns its instance
   when the scan leaves, since the VRAM is freed only once nothing holds the
@@ -507,9 +509,12 @@ the stalker stands still.
   (`UHD scan … left the GPU` in the log). Where the driver cannot report
   VRAM, the budget is `--vram` (6 GB without it) less `DESKTOP_GB` (0.6),
   `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060: peak RSS
-  9.5–11.7 GiB, the fill 3.3 GB in 10–12 s warm or cold, 1.4–2.0 GB of scans
-  on the GPU; all 42 scans take about 4.4 GiB on the GPU, so every one stays
-  from a driver budget of about 7.4 GiB (a 10 GB card).
+  9.5–11.7 GiB, the fill 3.3 GB in 10–14 s warm or cold, 1.4–1.9 GB of scans
+  on the GPU. All 42 scans would take about 4.4 GiB on the GPU, so every one
+  would stay from a driver budget of about 7.4 GiB (a 10 GB card); that is an
+  estimate (14 of the 24 site scans measured, the rest taken at ~107 MiB,
+  plus 2.4 GiB for the rest of the game and the 0.5 GiB margin), not run on
+  a larger card.
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
   empty, every streamed plant has spawned (`world::PlantsGrowing`) and the

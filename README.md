@@ -211,10 +211,13 @@ of RAM, the models that do not fit stay on disk and load from there when
 needed.
 
 It keeps as many close-up models on the GPU as the driver says fit, and frees
-the least recently seen ones when video memory runs short. All of them take
-about 4.4 GB of video memory, so every one stays on the GPU once the driver
-offers the game about 7.4 GB, which takes a 10 GB card; a 6 GB card keeps
-about 1.9 GB of them at a time.
+the least recently seen ones when video memory runs short. By our estimate
+(not yet tried on a larger card), all of them take about 4.4 GB of video
+memory, so every one would stay on the GPU once the driver offers the game
+about 7.4 GB, which takes a 10 GB card; a 6 GB card has room for about
+1.9 GB of them. Known issue: for now a shrinking budget can push most of them
+off the GPU at once, down to 0.3–1.1 GB, until they load again; a follow-up
+fixes this.
 
 - `--vram <GB>` caps the video memory the game uses. Use it to leave room for
   other programs, or where the driver cannot report VRAM (the game then
