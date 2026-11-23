@@ -908,8 +908,12 @@ pub(super) fn stream_full_sites(
             .map(|anchor| anchor.translation.xz().distance(landmark.center))
             .fold(f32::INFINITY, f32::min);
         let full = fulls.iter().find(|(_, full)| full.display == display);
-        if full.is_some() || nearest < reach + UPLOAD_LEAD {
-            scans.want(path, nearest - reach);
+        let distance = nearest - reach;
+        if full.is_some() {
+            // Shown, and kept up to `FULL_SCAN_KEEP` past the reach.
+            scans.want(path, distance.min(0.0));
+        } else if distance < UPLOAD_LEAD {
+            scans.want(path, distance);
         }
         match full {
             None if nearest < reach => {
@@ -1296,13 +1300,13 @@ mod tests {
         // site asks again past its reach, where the margin keeps its instance.
         let mut scans = app.world_mut().resource_mut::<GpuScans>();
         scans.plan(5.0);
-        assert_eq!(scans.last_used(first_scan()), Some(5.0));
+        assert_eq!(scans.last_shown(first_scan()), Some(5.0));
         stand_from_reach(&mut app, anchor, 55.0);
         app.update();
         assert_eq!(full_sites(&mut app).len(), 1, "kept inside the margin");
         let mut scans = app.world_mut().resource_mut::<GpuScans>();
         assert!(scans.plan(10.0).load.is_empty(), "it is loaded already");
-        assert_eq!(scans.last_used(first_scan()), Some(10.0), "still wanted");
+        assert_eq!(scans.last_shown(first_scan()), Some(10.0), "still shown");
 
         stand_from_reach(&mut app, anchor, 61.0);
         app.update();

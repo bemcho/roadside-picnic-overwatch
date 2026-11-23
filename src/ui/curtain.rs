@@ -95,7 +95,7 @@ fn lift_curtain(
     time: Res<Time<Real>>,
     backlog: Res<PipelineBacklog>,
     plants: Res<PlantsGrowing>,
-    scans: Res<GpuScans>,
+    mut scans: ResMut<GpuScans>,
     curtain: Option<Single<(Entity, &mut EntryCurtain)>>,
 ) {
     let Some(curtain) = curtain else {
@@ -112,6 +112,8 @@ fn lift_curtain(
     curtain.settled = if busy { 0.0 } else { curtain.settled + dt };
     if curtain.settled >= SETTLE_SECONDS || curtain.shown >= MAX_SECONDS {
         commands.entity(entity).despawn();
+        // The world's own uploads have landed: scans may use the whole budget.
+        scans.entered();
         info!("Entered the Zone");
     }
 }
@@ -213,6 +215,31 @@ mod tests {
             0,
             "the curtain lifts once the scan is resident"
         );
+    }
+
+    #[test]
+    fn lifting_the_curtain_lets_wanted_scans_fill_the_whole_budget() {
+        const PLANT: &str = "models/plants/uhd/plant.glb";
+        let (mut app, _) = entered_app();
+        app.insert_resource(GpuScans::entering(100 << 20));
+        app.world_mut()
+            .resource_mut::<GpuScans>()
+            .estimate(PLANT, 50 << 20);
+        let plan = |app: &mut App| {
+            let mut scans = app.world_mut().resource_mut::<GpuScans>();
+            scans.want(PLANT, 0.0);
+            scans.plan(0.0).load
+        };
+        assert!(
+            plan(&mut app).is_empty(),
+            "behind the curtain it leaves headroom"
+        );
+
+        for _ in 0..6 {
+            app.update();
+        }
+        assert_eq!(curtains(&mut app), 0);
+        assert_eq!(plan(&mut app), [PLANT]);
     }
 
     #[test]

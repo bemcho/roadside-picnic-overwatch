@@ -729,7 +729,7 @@ fn want_plant_scans<'a>(
         if distance > UPLOAD_LEAD {
             continue;
         }
-        scans.want(full, distance);
+        scans.want(full, distance - FULL_RANGE);
         let closer = nearest.as_ref().is_none_or(|(best, _)| distance < *best);
         if distance <= FULL_RANGE && closer {
             let near = NearPlant {
@@ -1209,7 +1209,7 @@ mod tests {
             app.update();
             let mut scans = app.world_mut().resource_mut::<GpuScans>();
             assert!(scans.plan(now).load.is_empty(), "it is loaded already");
-            assert_eq!(scans.last_used(shrub_scan()), Some(now));
+            assert_eq!(scans.last_shown(shrub_scan()), Some(now));
         }
     }
 

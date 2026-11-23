@@ -465,8 +465,8 @@ type StreamedTree<'a> = (
 ///
 /// The trees' scans are pinned, so they wait on the GPU already and only the
 /// instances stream. The want keeps the nearest tree's scan fresh, and brings
-/// it in, by dropping idle unpinned scans, should a card too tight for the
-/// pins have left it out.
+/// it in, by dropping unpinned scans that make way, should a card too tight
+/// for the pins have left it out.
 pub(super) fn stream_close_trees(
     mut commands: Commands,
     mut scans: ResMut<GpuScans>,
@@ -477,7 +477,8 @@ pub(super) fn stream_close_trees(
         let distance = scan_distance(pose, camera.translation);
         let near = distance < UHD_LOAD;
         if near {
-            scans.want(visual.close, distance);
+            // The scan starts to fade in at the end of its range.
+            scans.want(visual.close, distance - (UHD_RANGE + UHD_FADE));
         }
         match shown {
             None if near => {
@@ -757,7 +758,7 @@ mod tests {
         app.update();
         let mut scans = app.world_mut().resource_mut::<GpuScans>();
         assert!(scans.plan(5.0).load.is_empty(), "it is loaded already");
-        assert_eq!(scans.last_used(assets::TREE_SMALL_UHD), Some(5.0));
+        assert_eq!(scans.last_shown(assets::TREE_SMALL_UHD), Some(5.0));
     }
 
     #[test]

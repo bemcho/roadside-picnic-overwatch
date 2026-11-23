@@ -36,7 +36,7 @@ impl Plugin for GpuScansPlugin {
             .and_then(|launch| launch.vram_gb)
             .unwrap_or(DEFAULT_VRAM_GB);
         let residency = ScanResidency::default();
-        app.insert_resource(GpuScans::new(scan_budget(vram_gb)))
+        app.insert_resource(GpuScans::entering(scan_budget(vram_gb)))
             .insert_resource(residency.clone())
             .add_systems(
                 First,

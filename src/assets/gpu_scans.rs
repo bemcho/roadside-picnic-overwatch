@@ -20,7 +20,8 @@ use bevy::prelude::*;
 pub use streaming::GpuScansPlugin;
 use streaming::ScanHandles;
 
-/// Seconds a scan stays on the GPU after it was last wanted, whatever the pressure.
+/// Seconds a scan stays on the GPU after it last showed, whatever other scans
+/// want (only a budget shrunk below the resident scans drops it sooner).
 pub const KEEP_SECONDS: f32 = 120.0;
 /// Metres short of the range where a scan shows at which callers start wanting
 /// it, so it is on the GPU by the time it is needed.
@@ -29,7 +30,8 @@ pub const UPLOAD_LEAD: f32 = 40.0;
 pub const MARGIN_GB: f32 = 0.5;
 /// GiB the desktop holds, for the fallback only (0.63 GiB measured on the 2060).
 pub const DESKTOP_GB: f32 = 0.6;
-/// GiB the game holds without any streamed scan, measured at the map overview.
+/// GiB the game holds without any streamed scan, measured at the map overview:
+/// for the fallback only, as a live reading measures the game itself.
 pub const GAME_VRAM_GB: f32 = 2.4;
 /// GPU bytes per file byte of a scan (the five trees: about 700 MB from 428 MB).
 pub const GPU_BYTES_PER_FILE_BYTE: f32 = 1.65;
@@ -37,9 +39,16 @@ pub const GPU_BYTES_PER_FILE_BYTE: f32 = 1.65;
 /// allocator steps, and one such step in everything else lowers the budget by
 /// as much (0.4 GB measured on the 2060, just after the entry curtain). A
 /// scan nobody wants yet must not sit at the budget's edge, where that dip
-/// evicts it and prefill loads it back. Wanted and pinned scans keep the full
-/// budget.
+/// evicts it and prefill loads it back. Behind the entry curtain, while the
+/// world's own uploads still land, every admission leaves it free
+/// (`GpuScans::entering`); past it, wanted and pinned scans keep the full budget.
 pub const PREFILL_HEADROOM_GB: f32 = 0.5;
+/// Seconds a dropped scan's bytes may take to leave the driver's usage before
+/// they stop holding room for other scans. Rendering lets go of a scan within
+/// a few frames, but wgpu's allocator keeps freed memory in its 256 MiB blocks
+/// until a block empties, so a free may never show; a scan loaded later
+/// usually reuses it, which the reading then shows.
+pub const FREE_WAIT_SECONDS: f32 = 30.0;
 
 /// The driver's device-local heap budget for this process and this process's
 /// usage of it, in bytes.
@@ -67,18 +76,12 @@ fn gb(bytes: u64) -> f64 {
 }
 
 /// The scan budget from a live driver reading: what the driver (or the
-/// player's `cap`) leaves once everything but the scans is counted, less a
-/// margin. `usage - resident_scans` is everything else the game holds; it
-/// never counts for less than `GAME_VRAM_GB`, so a reading taken while the
-/// world's own uploads are still landing does not over-admit.
-pub fn live_scan_budget(reading: VramReading, resident_scans: u64, cap: Option<u64>) -> u64 {
+/// player's `cap`) leaves once the rest of the game is counted, less the
+/// margin. `GpuScans::apply_reading` measures the rest of the game.
+pub fn live_scan_budget(reading: VramReading, rest_of_game: u64, cap: Option<u64>) -> u64 {
     let ceiling = cap.map_or(reading.budget, |cap| cap.min(reading.budget));
-    let others = reading
-        .usage
-        .saturating_sub(resident_scans)
-        .max(gib(GAME_VRAM_GB));
     ceiling
-        .saturating_sub(others)
+        .saturating_sub(rest_of_game)
         .saturating_sub(gib(MARGIN_GB))
 }
 
@@ -103,10 +106,11 @@ struct Scan {
     bytes: u64,
     is_measured: bool,
     pinned: bool,
-    /// Seconds on the caller's clock when it was last wanted; `None` for a
-    /// scan nobody has wanted, such as a prefilled one.
-    last_used: Option<f32>,
-    /// The nearest ask this frame, cleared by `plan`.
+    /// Seconds on the caller's clock when it last showed (was wanted at a
+    /// distance of 0 or less); `None` for a scan never shown, such as a
+    /// prefilled one.
+    last_shown: Option<f32>,
+    /// The nearest ask this frame (see `GpuScans::want`), cleared by `plan`.
     wanted: Option<f32>,
     /// Proposed by `prefill` this frame, cleared by `plan`.
     speculative: bool,
@@ -125,10 +129,27 @@ impl Scan {
         self.wanted.unwrap_or(f32::INFINITY)
     }
 
-    /// When it was last wanted, for ranking: a scan nobody wanted is the oldest.
-    fn used_at(&self) -> f32 {
-        self.last_used.unwrap_or(f32::NEG_INFINITY)
+    /// When it last showed, for ranking: a scan never shown is the oldest.
+    fn shown_at(&self) -> f32 {
+        self.last_shown.unwrap_or(f32::NEG_INFINITY)
     }
+
+    /// Where it queues to make way for another scan, first to leave first:
+    /// those nobody wants, least recently shown first, then those wanted,
+    /// furthest from showing first.
+    fn leave_order(&self) -> (bool, f32) {
+        match self.wanted {
+            None => (false, self.shown_at()),
+            Some(distance) => (true, -distance),
+        }
+    }
+}
+
+/// Bytes of a scan dropped at `at` seconds, which the driver's usage may still hold.
+#[derive(Clone, Copy, Debug)]
+struct Free {
+    bytes: u64,
+    at: f32,
 }
 
 /// The scans that may hold a GPU copy, within a byte budget.
@@ -139,7 +160,20 @@ impl Scan {
 /// `resident_bytes`.
 #[derive(Resource, Default)]
 pub struct GpuScans {
+    /// What the resident scans may hold before one must leave. Admission
+    /// fills less: see `budget()`.
     budget: u64,
+    /// The most the rest of the game (all but the scans) has held, by the
+    /// live readings so far; `None` until one comes, and for good where the
+    /// driver cannot report VRAM.
+    rest_peak: Option<u64>,
+    /// Scans dropped whose bytes the last reading may still hold, oldest first.
+    frees: Vec<Free>,
+    /// Bytes of `frees` that the reading had held for `FREE_WAIT_SECONDS`.
+    stuck: u64,
+    /// The world still uploads behind the entry curtain: every admission
+    /// leaves `PREFILL_HEADROOM_GB` free.
+    entering: bool,
     // Ordered, so equal distances and ages resolve the same way every run.
     scans: BTreeMap<&'static str, Scan>,
     warned: HashSet<&'static str>,
@@ -156,29 +190,71 @@ impl GpuScans {
         }
     }
 
+    /// Books for a run whose world still uploads behind the entry curtain:
+    /// until `entered`, every admission leaves `PREFILL_HEADROOM_GB` free, as
+    /// a prefill always does. Those uploads raise the rest of the game by
+    /// about as much before the curtain lifts (from 1.8-2.0 GiB at the first
+    /// reading to 2.4 GiB on the 2060), and the budget shrinks with them.
+    pub fn entering(budget: u64) -> Self {
+        Self {
+            entering: true,
+            ..Self::new(budget)
+        }
+    }
+
+    /// The entry curtain lifted: wanted and pinned scans may fill the whole budget.
+    pub fn entered(&mut self) {
+        self.entering = false;
+    }
+
     /// A new live budget; the next `plan` evicts down to it if needed.
     pub fn set_budget(&mut self, budget: u64) {
         self.budget = budget;
     }
 
-    /// Takes the budget from a driver reading, and says whether it did. While
-    /// a scan is loaded but not yet confirmed on the GPU, the reading may
-    /// already hold it, and `live_scan_budget` would count it as everything
-    /// else: near a full budget `plan` would then evict a scan it should
-    /// keep. So the last budget stays until the confirmation.
-    pub fn apply_reading(&mut self, reading: VramReading, cap: Option<u64>) -> bool {
-        let uploading = self
-            .scans
-            .values()
-            .any(|scan| scan.state == State::Loaded && !scan.resident);
-        if !uploading {
-            self.set_budget(live_scan_budget(reading, self.resident_bytes(), cap));
+    /// Takes the budget from a driver reading at `now` seconds, and says
+    /// whether it did.
+    ///
+    /// The reading's usage beyond the resident scans is the rest of the game
+    /// plus the scans dropped that the driver has not freed yet (`frees`).
+    /// The budget leaves room for the most the rest of the game has held
+    /// (`rest_peak`), so a scan leaving never shrinks it. Frees the reading
+    /// no longer holds, freed or reused by a scan loaded since, are forgotten,
+    /// oldest first; one it still holds after `FREE_WAIT_SECONDS` no longer
+    /// holds room for new scans (`budget()`).
+    ///
+    /// While a scan uploads, the reading may already hold part of it, which
+    /// would count as the rest of the game, and for good: so the last budget
+    /// stays until the render world confirms it.
+    pub fn apply_reading(&mut self, reading: VramReading, cap: Option<u64>, now: f32) -> bool {
+        if self.uploading() {
+            return false;
         }
-        !uploading
+        let rest = reading.usage.saturating_sub(self.resident_bytes());
+        let peak = self.rest_peak.unwrap_or(0);
+        self.settle_frees(rest.saturating_sub(peak));
+        let peak = peak.max(rest.saturating_sub(self.freeing()));
+        self.rest_peak = Some(peak);
+        self.note_stuck_frees(now);
+        self.set_budget(live_scan_budget(reading, peak, cap));
+        debug!(
+            "VRAM: usage {} MB, scans {} MB, rest of the game {} MB at most, freeing {} MB ({} MB stuck); budget {} MB",
+            reading.usage >> 20,
+            self.resident_bytes() >> 20,
+            peak >> 20,
+            self.freeing() >> 20,
+            self.stuck >> 20,
+            self.budget >> 20,
+        );
+        true
     }
 
+    /// What scans may fill: the live budget less the bytes of dropped scans
+    /// the driver has held for `FREE_WAIT_SECONDS`, which may never come free.
+    /// Those still count as scan memory for the resident scans, though, as
+    /// dropping another scan for them would free nothing either.
     pub fn budget(&self) -> u64 {
-        self.budget
+        self.budget.saturating_sub(self.stuck)
     }
 
     /// Bytes of the scans the render world confirmed on the GPU: what the
@@ -214,12 +290,19 @@ impl GpuScans {
 
     /// Loads before every unpinned scan and never leaves for one, but only
     /// within the budget. It does not evict others to load unless it is
-    /// wanted (a tree near the camera): then it may drop idle unpinned scans.
+    /// wanted (a tree near the camera): then it may drop unpinned scans that
+    /// make way (`make_room`).
     pub fn pin(&mut self, path: &'static str) {
         self.scan_mut(path).pinned = true;
     }
 
-    /// Asks for the scan this frame; the smallest distance of several asks stands.
+    /// Asks for the scan this frame. `distance` is how far, in metres, the
+    /// asking anchor is from where the scan would show: 0 or less means it
+    /// shows now (and counts as shown), more means it is wanted ahead of
+    /// showing, from `UPLOAD_LEAD` out. Every caller measures alike, as scans
+    /// queue to load and make way for each other by it: a wanted scan may
+    /// drop one wanted further from showing that does not show now and has
+    /// not shown for `KEEP_SECONDS`. The smallest distance of several asks stands.
     pub fn want(&mut self, path: &'static str, distance: f32) {
         let scan = self.scan_mut(path);
         scan.wanted = Some(
@@ -231,8 +314,7 @@ impl GpuScans {
     /// Proposes the scan to the next `plan` as a speculative load. It queues
     /// after every ask, loads only into room that stays `PREFILL_HEADROOM_GB`
     /// short of the budget, never makes another scan leave, and is not
-    /// stamped as used: until someone wants it, it counts as never shown and
-    /// is the first to leave.
+    /// stamped as shown: until it shows, it is the first to leave.
     pub fn prefill(&mut self, path: &'static str) {
         self.scan_mut(path).speculative = true;
     }
@@ -262,16 +344,17 @@ impl GpuScans {
     /// loading and drops as off, and clears this frame's wants and prefills.
     ///
     /// Admission counts every scan in `used`, so uploads in flight keep their
-    /// room. The over-budget step counts only the loaded scans, which are the
-    /// ones the driver's usage holds (and `live_scan_budget` subtracted from the
-    /// budget): a scan still uploading, in `usage` but not yet `measured`, must
-    /// not make a healthy budget look overcommitted.
+    /// room. The over-budget step counts only the resident scans, the ones the
+    /// reading holds apart from the rest of the game, against the live budget
+    /// without `budget()`'s cut for frees that never showed: a scan still
+    /// uploading must not make a healthy budget look overcommitted, nor must
+    /// memory that dropping a scan does not give back make more scans leave.
     pub fn plan(&mut self, now: f32) -> Admission {
         let mut admission = Admission::default();
         self.begin_plan(now);
         if self.resident_bytes() > self.budget {
             // The budget shrank. Drop one scan per plan: the reading's numbers lag the GPU's frees.
-            admission.evict.extend(self.evict_over_budget());
+            admission.evict.extend(self.evict_over_budget(now));
         } else {
             for path in self.pending() {
                 self.admit(path, now, &mut admission);
@@ -318,44 +401,111 @@ impl GpuScans {
     }
 
     fn room(&self) -> u64 {
-        self.budget.saturating_sub(self.used())
+        self.budget().saturating_sub(self.used())
     }
 
-    /// Whether `bytes` more fit the budget without dropping anything: all a
-    /// pinned scan nobody wants may ask, as it never evicts others.
+    /// Whether `bytes` more fit the budget without dropping anything, less
+    /// the headroom behind the entry curtain: all a pinned scan nobody wants
+    /// may ask, as it never evicts others.
     fn fits(&self, bytes: u64) -> bool {
-        self.deficit(bytes) == 0
+        self.deficit(bytes + self.reserve()) == 0
+    }
+
+    /// Bytes admission leaves free: `PREFILL_HEADROOM_GB` behind the entry
+    /// curtain (`entering`), none past it.
+    fn reserve(&self) -> u64 {
+        if self.entering {
+            gib(PREFILL_HEADROOM_GB)
+        } else {
+            0
+        }
     }
 
     /// Whether `bytes` more fit while `PREFILL_HEADROOM_GB` stays free: the
     /// one rule for what a prefill may take, kept by both the choice of file
-    /// and its admission.
+    /// and its admission. The same headroom behind the curtain as past it.
     fn fits_prefill(&self, bytes: u64) -> bool {
-        self.fits(bytes + gib(PREFILL_HEADROOM_GB))
+        self.deficit(bytes + gib(PREFILL_HEADROOM_GB)) == 0
     }
 
     /// Bytes that must leave before `bytes` more fit the budget. Unlike
     /// `room()`, exact when the uploads in flight already put `used()` past the
     /// budget, where `room()` reads 0 and hides how far.
     fn deficit(&self, bytes: u64) -> u64 {
-        (self.used() + bytes).saturating_sub(self.budget)
+        (self.used() + bytes).saturating_sub(self.budget())
     }
 
-    /// Stamps every scan wanted this frame as used now and forgets who waited.
+    /// Stamps every scan showing this frame (wanted at a distance of 0 or
+    /// less) as shown now, and forgets who waited.
     fn begin_plan(&mut self, now: f32) {
         for scan in self.scans.values_mut() {
-            if scan.wanted.is_some() {
-                scan.last_used = Some(now);
+            if scan.wanted.is_some_and(|distance| distance <= 0.0) {
+                scan.last_shown = Some(now);
             }
             scan.waiting = false;
         }
     }
 
+    /// Takes the scan off the GPU at `now`. Once a live reading has come,
+    /// its bytes count as freeing until a reading shows them gone.
+    fn drop_scan(&mut self, path: &'static str, now: f32) {
+        let scan = self.scan_mut(path);
+        scan.state = State::Off;
+        let bytes = scan.bytes;
+        if self.rest_peak.is_some() {
+            self.frees.push(Free { bytes, at: now });
+        }
+    }
+
+    /// A scan is loaded and not yet confirmed on the GPU. One still loading
+    /// has nothing there: its parts reach the render world in the frame it
+    /// is measured.
+    fn uploading(&self) -> bool {
+        self.scans
+            .values()
+            .any(|scan| scan.state == State::Loaded && !scan.resident)
+    }
+
+    /// Bytes of the dropped scans the last reading may still hold.
+    fn freeing(&self) -> u64 {
+        self.frees.iter().map(|free| free.bytes).sum()
+    }
+
+    /// Forgets frees, oldest first, until they total no more than `held`,
+    /// what the reading holds beyond the rest of the game's peak.
+    fn settle_frees(&mut self, held: u64) {
+        let mut gone = self.freeing().saturating_sub(held);
+        self.frees.retain_mut(|free| {
+            let settled = free.bytes.min(gone);
+            gone -= settled;
+            free.bytes -= settled;
+            free.bytes > 0
+        });
+    }
+
+    /// Counts the frees held for `FREE_WAIT_SECONDS` at `now`, and logs when there are more.
+    fn note_stuck_frees(&mut self, now: f32) {
+        let stuck = self
+            .frees
+            .iter()
+            .filter(|free| now - free.at >= FREE_WAIT_SECONDS)
+            .map(|free| free.bytes)
+            .sum();
+        if stuck > self.stuck {
+            info!(
+                "UHD scans dropped {FREE_WAIT_SECONDS} s ago or more still hold {} MB of the driver's usage; new scans no longer count on it",
+                stuck >> 20
+            );
+        }
+        self.stuck = stuck;
+    }
+
     /// For when the resident scans alone (`resident_bytes`) exceed the budget:
-    /// drops the oldest resident scan not shown this frame (one nobody ever
-    /// wanted, such as a prefilled one, is the oldest), unpinned before
-    /// pinned. Scans still loading or uploading are neither counted nor dropped.
-    fn evict_over_budget(&mut self) -> Option<&'static str> {
+    /// drops the resident scan nobody wants this frame that showed least
+    /// recently (one never shown, such as a prefilled one, first), unpinned
+    /// before pinned. Scans still loading or uploading are neither counted nor
+    /// dropped.
+    fn evict_over_budget(&mut self, now: f32) -> Option<&'static str> {
         let (&path, _) = self
             .scans
             .iter()
@@ -365,9 +515,9 @@ impl GpuScans {
             .min_by(|(_, a), (_, b)| {
                 a.pinned
                     .cmp(&b.pinned)
-                    .then(a.used_at().total_cmp(&b.used_at()))
+                    .then(a.shown_at().total_cmp(&b.shown_at()))
             })?;
-        self.scan_mut(path).state = State::Off;
+        self.drop_scan(path, now);
         Some(path)
     }
 
@@ -389,16 +539,17 @@ impl GpuScans {
         pending.into_iter().map(|(&path, _)| path).collect()
     }
 
-    /// Loads the scan if it fits, after dropping idle scans when it must. A
-    /// scan asked for this frame may drop them, pinned or not; a pinned scan
-    /// nobody asks for (the startup admission) loads only into room already
-    /// free. Pinned scans are never idle, so none drops another.
+    /// Loads the scan if it fits, after dropping scans that make way for it
+    /// when it must. A scan asked for this frame may drop them, pinned or
+    /// not; a pinned scan nobody asks for (the startup admission) loads only
+    /// into room already free. Pinned scans never make way, so none drops
+    /// another. Loading is not showing: the scan is stamped once it shows.
     fn admit(&mut self, path: &'static str, now: f32, admission: &mut Admission) {
         let Some(scan) = self.scans.get(path) else {
             return;
         };
-        let (bytes, pinned, wanted) = (scan.bytes, scan.pinned, scan.wanted.is_some());
-        if !pinned && !wanted {
+        let (bytes, pinned, wanted) = (scan.bytes, scan.pinned, scan.wanted);
+        if !pinned && wanted.is_none() {
             // Only prefilled: no eviction, no stamp, and no waiting, which a
             // real ask does.
             if self.fits_prefill(bytes) {
@@ -407,11 +558,11 @@ impl GpuScans {
             }
             return;
         }
-        let fits = self.fits(bytes) || (wanted && self.free_idle(bytes, now, &mut admission.evict));
+        let fits = self.fits(bytes)
+            || wanted
+                .is_some_and(|distance| self.make_room(bytes, distance, now, &mut admission.evict));
         if fits {
-            let scan = self.scan_mut(path);
-            scan.state = State::Loading;
-            scan.last_used = Some(now);
+            self.scan_mut(path).state = State::Loading;
             admission.load.push(path);
         } else if pinned {
             self.warn_pinned_waits(path, bytes);
@@ -420,36 +571,52 @@ impl GpuScans {
         }
     }
 
-    /// Drops idle scans, oldest first, until `bytes` fit, and says whether they
-    /// do. Drops nothing when even all of them would not make room.
-    fn free_idle(&mut self, bytes: u64, now: f32, evicted: &mut Vec<&'static str>) -> bool {
-        let idle = self.idle(now);
-        let freed: u64 = idle.iter().map(|path| self.scans[path].bytes).sum();
-        if self.deficit(bytes) > freed {
+    /// Drops the scans that make way for one wanted at `distance`, in their
+    /// order, until `bytes` more fit, and says whether they do. Drops
+    /// nothing when even all of them would not make room.
+    fn make_room(
+        &mut self,
+        bytes: u64,
+        distance: f32,
+        now: f32,
+        evicted: &mut Vec<&'static str>,
+    ) -> bool {
+        let needed = bytes + self.reserve();
+        let ways = self.making_way(distance, now);
+        let freed: u64 = ways.iter().map(|path| self.scans[path].bytes).sum();
+        if self.deficit(needed) > freed {
             return false;
         }
-        for path in idle {
-            if self.deficit(bytes) == 0 {
+        for path in ways {
+            if self.deficit(needed) == 0 {
                 break;
             }
-            self.scan_mut(path).state = State::Off;
+            self.drop_scan(path, now);
             evicted.push(path);
         }
         true
     }
 
-    /// Loaded, unpinned scans unused for `KEEP_SECONDS` (a scan nobody wanted
-    /// is idle at once), oldest first.
-    fn idle(&self, now: f32) -> Vec<&'static str> {
-        let mut idle: Vec<_> = self
+    /// The scans that make way for one wanted at `distance`, first to leave
+    /// first (`Scan::leave_order`): loaded, unpinned, not shown for
+    /// `KEEP_SECONDS` (a scan never shown, at once), and either wanted by
+    /// nobody or wanted further from showing than it and not showing now.
+    fn making_way(&self, distance: f32, now: f32) -> Vec<&'static str> {
+        let mut ways: Vec<_> = self
             .scans
             .iter()
             .filter(|(_, scan)| {
-                scan.state == State::Loaded && !scan.pinned && now - scan.used_at() >= KEEP_SECONDS
+                scan.state == State::Loaded
+                    && !scan.pinned
+                    && now - scan.shown_at() >= KEEP_SECONDS
+                    && scan.wanted.is_none_or(|wanted| wanted > distance.max(0.0))
             })
             .collect();
-        idle.sort_by(|(_, a), (_, b)| a.used_at().total_cmp(&b.used_at()));
-        idle.into_iter().map(|(&path, _)| path).collect()
+        ways.sort_by(|(_, a), (_, b)| {
+            let (a, b) = (a.leave_order(), b.leave_order());
+            a.0.cmp(&b.0).then(a.1.total_cmp(&b.1))
+        });
+        ways.into_iter().map(|(&path, _)| path).collect()
     }
 
     fn warn_pinned_waits(&mut self, path: &'static str, bytes: u64) {
@@ -462,7 +629,7 @@ impl GpuScans {
                 "pinned UHD scan {path} needs {} MB but {} of {} MB are free; it waits for room",
                 bytes >> 20,
                 self.room() >> 20,
-                self.budget >> 20,
+                self.budget() >> 20,
             );
         }
     }
@@ -482,9 +649,9 @@ impl GpuScans {
         });
     }
 
-    /// When the scan was last shown, as `plan` stamped it; `None` if never.
-    pub fn last_used(&self, path: &'static str) -> Option<f32> {
-        self.scans.get(path)?.last_used
+    /// When the scan last showed, as `plan` stamped it; `None` if never.
+    pub fn last_shown(&self, path: &'static str) -> Option<f32> {
+        self.scans.get(path)?.last_shown
     }
 }
 
@@ -510,9 +677,9 @@ mod tests {
 
     /// Wants the scan, plans it in with room to spare, reports its size, and
     /// confirms it on the GPU.
-    fn fake_loaded(scans: &mut GpuScans, path: &'static str, bytes: u64, last_used: f32) {
+    fn fake_loaded(scans: &mut GpuScans, path: &'static str, bytes: u64, shown: f32) {
         scans.want(path, 0.0);
-        assert_eq!(scans.plan(last_used).load, [path], "{path} needs room");
+        assert_eq!(scans.plan(shown).load, [path], "{path} needs room");
         scans.measured(path, Some(bytes));
         confirm(scans, path);
     }
@@ -631,40 +798,20 @@ mod tests {
     fn the_live_budget_is_what_the_driver_leaves_minus_a_margin() {
         // GiB as bytes, independent of the production conversion.
         let gib = |gb: f32| (gb * (1u64 << 30) as f32) as u64;
-        // T1200: driver budget 3.9 GiB, game uses 3.0 GiB of which 0.5 GiB are scans
+        // T1200: driver budget 3.9 GiB; the rest of the game uses 2.5 GiB
         let reading = VramReading {
             budget: gib(3.9),
             usage: gib(3.0),
         };
         assert_eq!(
-            live_scan_budget(reading, gib(0.5), None),
+            live_scan_budget(reading, gib(2.5), None),
             gib(3.9 - 2.5 - MARGIN_GB)
         );
         assert_eq!(
-            live_scan_budget(reading, gib(0.5), Some(gib(3.5))),
+            live_scan_budget(reading, gib(2.5), Some(gib(3.5))),
             gib(3.5 - 2.5 - MARGIN_GB)
         );
-        // Early in the run the world's own uploads are still landing: the
-        // 1.8 GiB in use count as the game's settled 2.4 GiB.
-        let early = VramReading {
-            budget: gib(4.9),
-            usage: gib(1.8),
-        };
-        assert_eq!(
-            live_scan_budget(early, 0, None),
-            gib(4.9) - gib(GAME_VRAM_GB) - gib(MARGIN_GB)
-        );
-        assert_eq!(
-            live_scan_budget(
-                VramReading {
-                    budget: gib(2.0),
-                    usage: gib(3.0)
-                },
-                0,
-                None
-            ),
-            0
-        );
+        assert_eq!(live_scan_budget(reading, gib(3.6), None), 0);
     }
 
     #[test]
@@ -676,19 +823,186 @@ mod tests {
         scans.estimate_exact("b", 400 * MB);
         scans.want("b", 0.0);
         assert_eq!(scans.plan(1.0).load, ["b"]);
-        scans.measured("b", Some(400 * MB)); // loaded; the render world has not confirmed it
 
-        // The driver's usage already holds b: it reads as 400 MB of "everything else".
-        let reading = VramReading {
+        // None of b is on the GPU while it loads (its parts reach the render
+        // world in the frame it is measured), so the reading is taken in:
+        // behind the curtain, where scans load one after another, the budget
+        // follows the driver.
+        let loading = VramReading {
             budget: gib(6.0),
-            usage: gib(GAME_VRAM_GB) + 700 * MB,
+            usage: gib(2.0) + 300 * MB,
         };
-        assert!(!scans.apply_reading(reading, None));
-        assert_eq!(scans.budget(), gib(2.0), "the last budget stays");
+        assert!(scans.apply_reading(loading, None, 2.0), "loading");
+        let budget = live_scan_budget(loading, gib(2.0), None);
+        assert_eq!(scans.budget(), budget);
+
+        // Once measured, the driver's usage may hold some or all of b, which
+        // would read as the rest of the game.
+        let uploading = VramReading {
+            usage: gib(2.0) + 700 * MB,
+            ..loading
+        };
+        scans.measured("b", Some(400 * MB)); // the render world has not confirmed it
+        assert!(!scans.apply_reading(uploading, None, 3.0), "uploading");
+        assert_eq!(scans.budget(), budget, "the last budget stays");
 
         confirm(&mut scans, "b");
-        assert!(scans.apply_reading(reading, None));
-        assert_eq!(scans.budget(), live_scan_budget(reading, 700 * MB, None));
+        assert!(scans.apply_reading(uploading, None, 4.0));
+        assert_eq!(scans.budget(), budget);
+    }
+
+    /// Books with "a" (shown at 0 s) and "b" (shown at 10 s), 100 MB each,
+    /// and the reading taken in at 20 s that leaves them exactly the budget.
+    fn two_scans_at_the_budget() -> (GpuScans, VramReading) {
+        let mut scans = GpuScans::new(200 * MB);
+        fake_loaded(&mut scans, "a", 100 * MB, 0.0);
+        fake_loaded(&mut scans, "b", 100 * MB, 10.0);
+        let rest = gib(2.5); // the rest of the game, as on the 2060
+        let reading = VramReading {
+            budget: rest + 200 * MB + gib(MARGIN_GB),
+            usage: rest + 200 * MB,
+        };
+        assert!(scans.apply_reading(reading, None, 20.0));
+        assert_eq!(scans.budget(), 200 * MB);
+        (scans, reading)
+    }
+
+    #[test]
+    fn an_eviction_does_not_shrink_the_budget_before_the_driver_frees_it() {
+        let (mut scans, full) = two_scans_at_the_budget();
+        // Another program takes 50 MB: "a" leaves.
+        let tighter = VramReading {
+            budget: full.budget - 50 * MB,
+            ..full
+        };
+        assert!(scans.apply_reading(tighter, None, 21.0));
+        assert_eq!(scans.plan(21.0).evict, ["a"]);
+
+        // The driver has not freed "a" yet: its bytes are not the rest of the game.
+        assert!(scans.apply_reading(tighter, None, 22.0));
+        assert_eq!(scans.budget(), 150 * MB);
+        assert!(scans.plan(22.0).evict.is_empty(), "b stays");
+
+        // Once the driver frees it, the rest of the game growing back by as
+        // much is the game's own.
+        let freed = VramReading {
+            usage: tighter.usage - 100 * MB,
+            ..tighter
+        };
+        assert!(scans.apply_reading(freed, None, 23.0));
+        assert_eq!(scans.budget(), 150 * MB);
+        assert!(scans.apply_reading(tighter, None, 24.0));
+        assert_eq!(scans.budget(), 50 * MB);
+
+        // A free the driver never shows holds room only for a while.
+        let (mut scans, _) = two_scans_at_the_budget();
+        assert!(scans.apply_reading(tighter, None, 21.0));
+        assert_eq!(scans.plan(21.0).evict, ["a"]);
+        let waited = 21.0 + FREE_WAIT_SECONDS;
+        assert!(scans.apply_reading(tighter, None, waited - 1.0));
+        assert_eq!(scans.budget(), 150 * MB, "it still holds its room");
+        assert!(scans.apply_reading(tighter, None, waited));
+        assert_eq!(scans.budget(), 50 * MB, "it no longer does");
+        assert!(
+            scans.plan(waited).evict.is_empty(),
+            "nor does b leave for it: that would free nothing either"
+        );
+    }
+
+    #[test]
+    fn the_reserve_is_the_high_water_mark_of_the_rest_of_the_game_plus_the_margin() {
+        let driver = gib(4.0);
+        // Takes in a reading where the rest of the game uses `rest`.
+        let read = |scans: &mut GpuScans, rest: u64, at: f32| {
+            let usage = rest + scans.resident_bytes();
+            let reading = VramReading {
+                budget: driver,
+                usage,
+            };
+            assert!(scans.apply_reading(reading, None, at));
+            scans.budget()
+        };
+        let mut scans = GpuScans::new(0);
+        assert_eq!(
+            read(&mut scans, gib(1.0), 0.0),
+            driver - gib(1.0) - gib(MARGIN_GB),
+            "not the 2.4 GiB of a fixed reserve"
+        );
+        fake_loaded(&mut scans, "a", 300 * MB, 0.0);
+        let peak = driver - gib(1.5) - gib(MARGIN_GB);
+        assert_eq!(read(&mut scans, gib(1.5), 1.0), peak, "the rise counts");
+        assert_eq!(read(&mut scans, gib(1.2), 2.0), peak, "the dip does not");
+    }
+
+    /// Plans a 150 MB site scan wanted at `site` metres from showing, at 1 s,
+    /// into a 300 MB budget full of 100 MB plant scans, each loaded at 0 s
+    /// while wanted at its distance from showing, and wanted there still.
+    fn plan_a_site_among_plants(plants: [(&'static str, f32); 3], site: f32) -> Admission {
+        let mut scans = GpuScans::new(300 * MB);
+        let want_plants = |scans: &mut GpuScans| {
+            for (path, distance) in plants {
+                scans.estimate_exact(path, 100 * MB);
+                scans.want(path, distance);
+            }
+        };
+        want_plants(&mut scans);
+        assert_eq!(scans.plan(0.0).load.len(), 3);
+        for (path, _) in plants {
+            scans.measured(path, Some(100 * MB));
+            confirm(&mut scans, path);
+        }
+        want_plants(&mut scans);
+        scans.estimate_exact("site", 150 * MB);
+        scans.want("site", site);
+        scans.plan(1.0)
+    }
+
+    #[test]
+    fn a_site_about_to_show_displaces_plant_scans_not_yet_showing() {
+        let plants = [("plant 10", 10.0), ("plant 20", 20.0), ("plant 30", 30.0)];
+        let admission = plan_a_site_among_plants(plants, 0.0);
+        assert_eq!(
+            admission.evict,
+            ["plant 30", "plant 20"],
+            "the furthest first"
+        );
+        assert_eq!(admission.load, ["site"]);
+    }
+
+    #[test]
+    fn a_scan_showing_now_is_never_displaced() {
+        // The site is well inside its range, but every plant shows already.
+        let plants = [("plant -8", -8.0), ("plant -3", -3.0), ("plant 0", 0.0)];
+        let admission = plan_a_site_among_plants(plants, -10.0);
+        assert!(admission.evict.is_empty(), "{:?}", admission.evict);
+        assert!(admission.load.is_empty(), "the site waits");
+    }
+
+    #[test]
+    fn behind_the_curtain_every_admission_keeps_the_headroom_free() {
+        let headroom = gib(PREFILL_HEADROOM_GB);
+        let mut scans = GpuScans::entering(headroom + 200 * MB);
+        scans.estimate_exact("tree", 250 * MB);
+        scans.pin("tree");
+        scans.estimate_exact("plant", 100 * MB);
+        scans.want("plant", 0.0);
+        let load = scans.plan(0.0).load;
+        assert_eq!(load, ["plant"], "the tree would sit in the headroom");
+        scans.measured("plant", Some(100 * MB));
+        confirm(&mut scans, "plant");
+        assert!(scans.settled(), "nor does the curtain wait for it");
+
+        scans.entered();
+        assert_eq!(scans.plan(1.0).load, ["tree"], "the curtain is up");
+    }
+
+    #[test]
+    fn behind_the_curtain_a_prefill_leaves_the_headroom_once() {
+        let mut scans = GpuScans::entering(gib(PREFILL_HEADROOM_GB) + 100 * MB);
+        scans.estimate_exact("site", 100 * MB);
+        assert_eq!(scans.next_prefill(&["site"]), Some("site"));
+        scans.prefill("site");
+        assert_eq!(scans.plan(0.0).load, ["site"]);
     }
 
     #[test]
@@ -738,11 +1052,11 @@ mod tests {
     }
 
     #[test]
-    fn a_scan_used_within_two_minutes_never_leaves() {
+    fn a_scan_shown_within_two_minutes_never_leaves() {
         let mut scans = GpuScans::new(300 * MB);
         fake_loaded(&mut scans, "a", 250 * MB, 0.0);
-        scans.want("a", 50.0);
-        scans.plan(100.0); // still near an anchor at t = 100 s
+        scans.want("a", 0.0);
+        scans.plan(100.0); // still shown at t = 100 s
         scans.estimate_exact("b", 100 * MB);
         scans.want("b", 10.0); // b needs a's room at t = 150 s
         let admission = scans.plan(150.0);

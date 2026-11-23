@@ -149,7 +149,10 @@ systems:
    pinned by `canopy::pin_tree_scans`) is not yet on the GPU; the curtain
    lifts after all stay idle for 0.4 s (12 s cap) and logs `Entered the
    Zone`, hiding shader compilation, first-frame spawn hitches, the trees'
-   scan uploads and the plants filling in around the stalker. `prefill_scans`
+   scan uploads and the plants filling in around the stalker. Until it lifts
+   (`GpuScans::entered`), every scan admission leaves `PREFILL_HEADROOM_GB`
+   free, as the world's own uploads still raise the rest of the game's VRAM
+   and the live budget shrinks with them. `prefill_scans`
    (`assets/gpu_scans/streaming.rs`, `Last`, after `admit_scans`) then fills
    the scan budget from `UhdFiles` in order, one scan at a time, stopping
    `PREFILL_HEADROOM_GB` (0.5) short of it so a dip in the live budget does
@@ -811,9 +814,14 @@ Important paths:
     6 GB RTX 2060 it once fell from 2809 to 2553 MiB in a replay roaming the
     sites) but mostly stays level (in a drive away from the hangar, eight
     scans, about 1 GB, left and it went from 5439 to 5427 MiB). The
-    driver's usage, which `live_scan_budget` reads, behaves the same, so the
-    budget counts that pooled memory as the game's own and shrinks by each
-    scan that leaves.
+    driver's usage behaves the same. So `GpuScans::apply_reading` counts a
+    dropped scan's bytes as scan memory, not the rest of the game's, until a
+    reading shows them freed or reused by a later load, and sizes the budget
+    by the most the rest of the game has used this run: a scan that leaves
+    never shrinks the budget (it did, which emptied the GPU of scans one per
+    second). Bytes still held after `FREE_WAIT_SECONDS` stop holding room for
+    new scans, but never make another scan leave, which would free nothing
+    either.
 
 25. **Mind the shroud when adding meshes or materials.**
     `shroud::cull_shrouded` drops any entity with an `Aabb` that stands wholly
