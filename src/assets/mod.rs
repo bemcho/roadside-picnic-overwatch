@@ -193,20 +193,12 @@ pub struct UhdFiles(pub Vec<&'static str>);
 
 /// Where a UHD scan loads from: RAM when filled, else `assets/`.
 #[cfg(not(target_arch = "wasm32"))]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "scans load through it once the GPU budget lands")
-)]
 pub fn uhd(path: &'static str) -> AssetPath<'static> {
     AssetPath::from(path).with_source(ram_source::RAM_SOURCE)
 }
 
 /// Where a UHD scan loads from: the web build has no RAM level, so `assets/`.
 #[cfg(target_arch = "wasm32")]
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "scans load through it once the GPU budget lands")
-)]
 pub fn uhd(path: &'static str) -> AssetPath<'static> {
     AssetPath::from(path)
 }

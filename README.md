@@ -201,6 +201,22 @@ Do not launch `target/release/roadside-picnic` directly for normal play: Bevy
 may resolve `assets/` relative to the executable directory instead of the
 repository.
 
+### Graphics quality
+
+The game reads every close-up (UHD) model once at start and keeps it in RAM,
+so the first loading screen takes longer. That uses about 3.3 GB of RAM.
+
+It keeps as many close-up models on the GPU as the driver says fit, and frees
+the least recently seen ones when video memory runs short.
+
+- `--vram <GB>` caps the video memory the game uses. Use it to leave room for
+  other programs, or where the driver cannot report VRAM (the game then
+  assumes 6 GB). It combines with `--new`:
+
+  ```bash
+  cargo run --release -- --vram 3
+  ```
+
 ## Development
 
 ```bash

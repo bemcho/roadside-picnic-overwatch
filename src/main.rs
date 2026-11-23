@@ -14,6 +14,7 @@ mod zone;
 
 use bevy::prelude::*;
 
+use assets::gpu_scans::GpuScansPlugin;
 #[cfg(not(target_arch = "wasm32"))]
 use assets::ram_source::{RamSourcePlugin, register_ram_source};
 use assets::{PreloadedAssets, preload_game_assets};
@@ -33,6 +34,8 @@ fn main() {
     app.add_plugins(DefaultPlugins)
         // Parsed once the log is up, so a bad `--vram` value is reported.
         .insert_resource(LaunchOptions::from_env())
+        // After the options: its fallback budget follows `--vram`.
+        .add_plugins(GpuScansPlugin)
         .init_state::<AppState>()
         .add_sub_state::<SplashPhase>()
         .add_sub_state::<InGamePhase>()

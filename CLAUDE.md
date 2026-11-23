@@ -52,6 +52,8 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **F5** — save progress (it also saves every minute and on quitting)
 - **Q** — quit
 - Start with `cargo run --release -- --new` to ignore the save and begin afresh
+- `cargo run --release -- --vram <GB>` caps the video memory the game uses
+  (by default, what the driver reports free)
 
 ## Tactical view
 
