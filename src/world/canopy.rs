@@ -16,7 +16,7 @@ use crate::assets::{self, PreloadedAssets};
 use crate::player::PlayerCamera;
 
 use super::collision::{Collider, Pillar, Weight};
-use super::cordon::{hangar_belt, inside_yard, near_wall_or_checkpoint, shelterbelt};
+use super::cordon::{hangar_belt, inside_yard, near_wall_or_checkpoint, shelterbelt, tree_belt};
 use super::hydrology::SWAMP;
 use super::terrain::{
     BALD_CENTER, BASE, QUARRY_CENTER, TILE_SIZE, Terrain, lattice_hash, lerp, smoothstep,
@@ -285,12 +285,10 @@ impl ForestTree {
     }
 }
 
-pub(super) fn hangar_trees(terrain: &Terrain, tile: IVec2) -> Vec<ForestTree> {
+/// The belts' trees: behind and beside the hangar, and along the patrolled
+/// stretch of the Perimeter (`tree_belt`).
+pub(super) fn belt_trees(terrain: &Terrain, tile: IVec2) -> Vec<ForestTree> {
     const CELLS: i32 = 12;
-    let mid = (tile.as_vec2() + Vec2::splat(0.5)) * TILE_SIZE;
-    if (mid - Vec2::from(BASE)).abs().max_element() > 113.0 + TILE_SIZE * 0.5 {
-        return Vec::new();
-    }
     let start = tile * CELLS;
     let cell = TILE_SIZE / CELLS as f32;
     let mut trees = Vec::new();
@@ -300,8 +298,9 @@ pub(super) fn hangar_trees(terrain: &Terrain, tile: IVec2) -> Vec<ForestTree> {
             let at = (Vec2::new(x as f32, z as f32)
                 + Vec2::new(lerp(0.24, 0.76, roll(0)), lerp(0.24, 0.76, roll(1))))
                 * cell;
-            if roll(2) >= hangar_belt(at) * 0.60
+            if roll(2) >= tree_belt(at)
                 || near_wall_or_checkpoint(at, 2.6)
+                || super::sites::clear_footprint(at, 4.0)
                 || terrain.normal_at(at.x, at.y).y < 0.88
             {
                 continue;
@@ -317,7 +316,7 @@ pub(super) fn hangar_trees(terrain: &Terrain, tile: IVec2) -> Vec<ForestTree> {
                 at,
                 Quat::from_rotation_y(roll(5) * TAU),
                 scale,
-                true,
+                hangar_belt(at) > 0.0,
             ));
         }
     }
@@ -628,9 +627,10 @@ mod tests {
         let mut trees = Vec::new();
         for z in -2..=1 {
             for x in -2..=2 {
-                trees.extend(hangar_trees(&terrain, base_tile() + IVec2::new(x, z)));
+                trees.extend(belt_trees(&terrain, base_tile() + IVec2::new(x, z)));
             }
         }
+        trees.retain(|tree| hangar_belt(tree.pose.translation.xz()) > 0.0);
         assert!((60..=110).contains(&trees.len()), "{} trees", trees.len());
         assert!(
             trees
@@ -649,6 +649,52 @@ mod tests {
             assert!(at.y <= terrain.mesh_height_at(at.xz()));
             assert!(terrain.road_mask(at.x, at.z) <= 0.02);
             assert!(!near_wall_or_checkpoint(at.xz(), 2.6));
+        }
+    }
+
+    #[test]
+    fn trees_line_the_patrolled_perimeter_clear_of_the_patrol_and_the_gate() {
+        use crate::world::cordon::{
+            PATROL_TURNS, PERIMETER_GATE, PERIMETER_X, reserve_patrol_track,
+        };
+
+        let terrain = Terrain::new();
+        let column = (PERIMETER_X / TILE_SIZE).floor() as i32;
+        let trees: Vec<_> = (-4..=6)
+            .flat_map(|z| belt_trees(&terrain, IVec2::new(column, z)))
+            .filter(|tree| hangar_belt(tree.pose.translation.xz()) == 0.0)
+            .collect();
+        let side = |zone: bool| {
+            trees
+                .iter()
+                .filter(|tree| (tree.pose.translation.x < PERIMETER_X) == zone)
+                .count()
+        };
+        assert!(
+            side(true) > 15 && side(false) > 15,
+            "{} / {}",
+            side(true),
+            side(false)
+        );
+        let [south, north] = PATROL_TURNS;
+        for tree in &trees {
+            let at = tree.pose.translation.xz();
+            assert!(
+                (south.y..north.y).contains(&at.y),
+                "tree past the patrol at {at}"
+            );
+            assert!(
+                (at - PERIMETER_GATE).abs().max_element() >= 34.0,
+                "tree at the gate {at}"
+            );
+            assert!(
+                !reserve_patrol_track(at),
+                "tree on the patrol's track at {at}"
+            );
+            assert!(
+                !near_wall_or_checkpoint(at, 2.6),
+                "tree in the wall at {at}"
+            );
         }
     }
 

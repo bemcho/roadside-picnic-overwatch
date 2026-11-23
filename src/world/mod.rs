@@ -143,7 +143,7 @@ impl Plugin for WorldPlugin {
                 tree_fall::start_break_clock,
                 wildlife::spawn_wildlife,
                 cordon::prepare_cordon,
-                cordon::spawn_boom,
+                cordon::spawn_booms,
                 cordon::spawn_hole_sign,
                 sites::spawn_sites,
                 town::spawn_town,
@@ -213,7 +213,7 @@ impl Plugin for WorldPlugin {
             Update,
             (
                 (guards::patrol_guards, guards::animate_guards).chain(),
-                cordon::lift_boom,
+                cordon::lift_booms,
                 cordon::notice_crawl_hole,
             )
                 .run_if(in_state(InGamePhase::Running)),

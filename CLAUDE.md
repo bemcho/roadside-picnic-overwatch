@@ -84,8 +84,8 @@ marker, opaque near-black smoke over unsurveyed cells and a few birds wheeling o
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
 in `drive_vehicle`. Shift-clicks append legs pathfound from the last stop
-(`MoveOrder::append`). A car with an `InstitutePass` routes through the
-Institute gate's closed boom, which lifts as it arrives. A yellow ring (`ui/locator.rs`) lies on the ground around
+(`MoveOrder::append`). Routes pass through the yard gate's boom, and a car
+with an `InstitutePass` through the Institute gate's; each lifts as it arrives. A yellow ring (`ui/locator.rs`) lies on the ground around
 the stalker, or the car they drive, at every zoom: its vertices follow the
 rendered terrain (or the water when wading), it never shrinks under 34 px wide,
 a relative depth bias keeps it over road slabs and stones, and it pulses while
@@ -189,7 +189,8 @@ the stalker stands still.
   textured scan). The multipart UHD scans differ in shape from their medium
   models, so their swap shows. Plants sharing a model draw as one GPU
   instance batch. Each dry-weed seed grows a patch of up to 5 plants, other
-  weeds and bushes up to 15 (a third of that in the hangar shelterbelt); sites
+  weeds and bushes up to 15 (a third of that in the belts, full patches in
+  the crawl hole's thicket); sites
   are computed on a worker thread as chunks stream in and one tile is spawned
   per frame. Plants have no collision or shadows. The rear and sides of the
   hangar form a dense shelterbelt; the central yard and roads stay clear.
@@ -208,20 +209,26 @@ the stalker stands still.
   Regenerate each collision pillar file with `tools/trim_tree_base.py` whenever
   the source geometry changes.
 - **Cordons** (`src/world/cordon.rs`): the enclosed hangar yard has a level
-  staging area, with a checkpoint beside the 16 m opening on the north road.
+  staging area. Its north gap holds the checkpoint, turned so its own barrier
+  lies on the wall line, and a 12 m lane beside it that a striped yard boom
+  (`Gate::Yard`) closes; it lifts for the stalker and their car.
   The Perimeter wall (`PERIMETER_X`) runs the map's length between Harmont and
   the Zone at three times the panel's height (`PERIMETER_RISE`); `in_zone`
   tells the sides apart. Its one gate is the Institute's on the highway,
   narrowed to the road and closed by a red-and-white boom (`Boom`) that lifts
   only for a body carrying an `InstitutePass` (the stalkers' car, on Institute
-  papers) and lowers once it has passed; a second checkpoint guards it. The
+  papers) and lowers once it has passed (`Gate::Institute`); a second
+  checkpoint guards it. The
   old breach on the Chapter 4 track is walled up. The only other way through
   is the crawl hole (`CRAWL_HOLE`): the ground is dug a metre under the wall
   (`hole_depth`, applied in `land_height`), and over it the wall's pillars
-  start just below ground, so only a crawling stalker fits under. A thicket
-  hides it, and its tooltip shows only within 8 m. A belt of weeds and bushes
+  start just below ground, so only a crawling stalker fits under. A dense
+  bush thicket (`thicket`) lines both sides of the wall 45 m either way of
+  it, and its tooltip shows only within 8 m. A belt of weeds and bushes
   (`PERIMETER_BELT`) lines both sides of the Perimeter, clear of the patrol
-  track and the gate. A separate continuous wall marks the map's edge; the panels
+  track and the gate; along the patrolled stretch it grows thicker, mostly
+  bushes (`bushy`), with trees on both sides (`tree_belt`,
+  `canopy::belt_trees`). A separate continuous wall marks the map's edge; the panels
   follow the rendered terrain and stay above the water. Wall meshes and solid collision stream in nearby terrain tiles.
   Keep the staging area and driveway clear; the tree and bush shelterbelt is
   concentrated behind the hangar and along the sides.
@@ -288,8 +295,8 @@ the stalker stands still.
   (`assets/models/soldiers/medium/`, rigged by `tools/rig_stalker.py`;
   `--walk-arms` sets the walk clip's arm swing, `--armature` keeps a Tripo
   rig's own skeleton): two at each gate (the hangar yard's and the Institute's)
-  pace a short beat beside the opening, and five sentries walk short beats
-  beside the two checkpoints. Each idles watching at either end of its beat.
+  pace a short beat beside the opening (the yard's whole gap, checkpoint and
+  lane), and five sentries walk short beats beside the two checkpoints. Each idles watching at either end of its beat.
 - **UN patrol** (`src/player/vehicle/patrol.rs`): four white armored cars
   (`UN_VEHICLE`, the stalkers' car repainted with a UN marking in its roof
   atlas; the flank plates are separate quads with `textures/decals/un_flank.png`)
@@ -384,7 +391,8 @@ the stalker stands still.
   the hangar's south wall, inside the level cordon yard and off the front gate
   route. Each yard vehicle has static collision sampled from its prepared GLB.
 - **Armored vehicle** (`src/player/vehicle.rs`): parked in the hangar, driveable with
-  independent wheel pivots and a forward spotlight that turns on while occupied.
+  independent wheel pivots and two lamps that turn on while occupied: a dipped
+  beam at the grille and a roof searchlight that throws a longer, wider spot.
   The chassis and suspension sample the rendered terrain under the wheels.
   Forward speed rises from 16 m/s off-road to 24 m/s on the center of a graded
   road, then blends back down near the shoulder and retains the ford water cap.

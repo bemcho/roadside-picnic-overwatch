@@ -183,7 +183,7 @@ fn sites_for_tile(terrain: &Terrain, tile: IVec2, cell: f32, kind: Kind) -> Vec<
 /// A tile's objects, its batched reeds and its batched rocks.
 pub(super) fn build_tile(terrain: &Terrain, tile: IVec2) -> (Sites, Option<Mesh>, Option<Mesh>) {
     let mut stone = Batch::default();
-    let mut canopies = canopy::hangar_trees(terrain, tile);
+    let mut canopies = canopy::belt_trees(terrain, tile);
     canopies.extend(
         sites_for_tile(terrain, tile, 8.0, Kind::Tree)
             .into_iter()

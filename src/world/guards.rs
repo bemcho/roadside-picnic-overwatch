@@ -15,7 +15,7 @@ use crate::assets::{GUARDS, PreloadedAssets};
 
 use super::collision::{Collider, Pillar, Unclimbable};
 use super::cordon::{
-    CHECKPOINT, GATE, GATE_HALF, PERIMETER_CHECKPOINT, PERIMETER_GATE, PERIMETER_GATE_HALF,
+    CHECKPOINT, PERIMETER_CHECKPOINT, PERIMETER_GATE, PERIMETER_GATE_HALF, YARD_GAP,
 };
 use super::places::{Describe, Place};
 use super::terrain::{Terrain, lattice_hash, lerp};
@@ -112,7 +112,7 @@ fn sentry(at: Vec2, along: Vec2, watch: Vec2) -> Guard {
 /// gate, and the sentries by the two checkpoints, clear of the patrol's lanes.
 fn guards() -> impl Iterator<Item = Guard> {
     let posts = [
-        post(GATE, GATE_HALF, Vec2::X, Vec2::Y),
+        post(YARD_GAP.0, YARD_GAP.1, Vec2::X, Vec2::Y),
         post(PERIMETER_GATE, PERIMETER_GATE_HALF, Vec2::Y, Vec2::X),
     ];
     let sentries = [
@@ -128,9 +128,9 @@ fn guards() -> impl Iterator<Item = Guard> {
             Vec2::Y,
             Vec2::X,
         ),
-        // Inside the hangar yard, south and west of its checkpoint.
+        // Inside the hangar yard, behind its checkpoint and east of it.
         sentry(CHECKPOINT + Vec2::new(-2.0, -6.5), Vec2::X, Vec2::Y),
-        sentry(CHECKPOINT + Vec2::new(-9.0, -1.0), Vec2::NEG_Y, Vec2::X),
+        sentry(CHECKPOINT + Vec2::new(7.5, -5.0), Vec2::NEG_Y, Vec2::NEG_X),
     ];
     posts.into_iter().flatten().chain(sentries)
 }
@@ -327,8 +327,8 @@ mod tests {
                 .count();
             assert_eq!(near, count, "sentries at {checkpoint}");
         }
-        for (opening, half) in [(GATE, GATE_HALF), (PERIMETER_GATE, PERIMETER_GATE_HALF)] {
-            let near: Vec<_> = all
+        for (opening, half) in [YARD_GAP, (PERIMETER_GATE, PERIMETER_GATE_HALF)] {
+            let near: Vec<_> = all[..4]
                 .iter()
                 .filter(|guard| {
                     guard.beat[0].distance(opening) < half + BEAT_START + BEAT_OUT + 1.0
@@ -363,7 +363,7 @@ mod tests {
                 20,
             )))
             .add_systems(Update, patrol_guards);
-        let [mut guard, _] = post(GATE, GATE_HALF, Vec2::X, Vec2::Y);
+        let [mut guard, _] = post(YARD_GAP.0, YARD_GAP.1, Vec2::X, Vec2::Y);
         let start = guard.beat[0];
         guard.rest = 0.0;
         let id = app

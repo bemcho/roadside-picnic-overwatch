@@ -1,11 +1,14 @@
 //! Concrete cordons: around the hangar yard, along the Perimeter that
 //! separates Harmont from the Zone, and at the edge of the map.
 //!
-//! The Perimeter stands three times as high as the others. A boom closes the
-//! Institute gate's road and lifts only for someone on Institute business
-//! (`InstitutePass`); the stalkers' old breach is walled up, and the way into
-//! the Zone on foot is a crawl hole dug under the wall south of it, hidden in a
-//! thicket (`CRAWL_HOLE`).
+//! The Perimeter stands three times as high as the others. Booms close the
+//! roads through two gates: the hangar yard's, beside its checkpoint, lifts for
+//! the stalker and their car, and the Institute gate's only for someone on
+//! Institute business (`InstitutePass`). The stalkers' old breach is walled up,
+//! and the way into the Zone on foot is a crawl hole dug under the wall south
+//! of it, hidden in a thicket (`CRAWL_HOLE`).
+
+use std::f32::consts::PI;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::gltf::GltfMaterial;
@@ -27,10 +30,32 @@ use super::{StreamAnchor, WorldRoot, anchor_tiles, detail_range, near_anchor, ne
 const YARD_MIN: Vec2 = Vec2::new(BASE.0 - 64.0, BASE.1 - 64.0);
 const YARD_MAX: Vec2 = Vec2::new(BASE.0 + 64.0, BASE.1 + 60.0);
 const GATE_CENTER: f32 = BASE.0 - 1.0;
+/// The yard's gate in its north wall: a lane `GATE_HALF` either side of `GATE`,
+/// as wide as the Institute's so the same boom closes it.
 pub(super) const GATE: Vec2 = Vec2::new(GATE_CENTER, YARD_MAX.y);
-pub(super) const GATE_HALF: f32 = 8.0;
-pub(super) const CHECKPOINT: Vec2 = Vec2::new(GATE_CENTER - 13.6, YARD_MAX.y - 8.2);
+pub(super) const GATE_HALF: f32 = PERIMETER_GATE_HALF;
+/// The hangar checkpoint stands in the gap east of the lane, turned about so
+/// its barrier lines the wall and points at the lane, ending beside the boom.
+pub(super) const CHECKPOINT: Vec2 = Vec2::new(
+    GATE_CENTER + GATE_HALF + BARRIER_END * CHECKPOINT_SCALE + 0.5,
+    YARD_MAX.y + BARRIER_Z * CHECKPOINT_SCALE,
+);
+const CHECKPOINT_YAW: f32 = PI;
+/// The whole gap in the yard's wall, lane and checkpoint: its middle and half
+/// its width.
+pub(super) const YARD_GAP: (Vec2, f32) = {
+    let (west, east) = (WEST_JAMB.x, CHECKPOINT.x + CHECKPOINT_HALF.x);
+    (
+        Vec2::new((west + east) * 0.5, YARD_MAX.y),
+        (east - west) * 0.5,
+    )
+};
 const CHECKPOINT_SCALE: f32 = 11.0;
+const CHECKPOINT_HALF: Vec2 = Vec2::new(0.489 * CHECKPOINT_SCALE, 0.348 * CHECKPOINT_SCALE);
+/// The checkpoint scan's barrier arm runs along its +X at z = `BARRIER_Z`,
+/// out to `BARRIER_END` (model units).
+const BARRIER_Z: f32 = 0.06;
+const BARRIER_END: f32 = 0.48;
 /// The UHD checkpoint's ground level, in model units.
 const CHECKPOINT_DATUM: f32 = -0.41;
 /// The Perimeter: the UN wall between Harmont, on the hangar's side (+X), and
@@ -92,13 +117,11 @@ const HOLE_PILLAR: &[Pillar] = &[Pillar {
     bottom: -0.05,
     ..PERIMETER_PILLAR[0]
 }];
-/// The boom at the Institute gate: its post stands at the south jamb on
-/// Harmont's side and its arm spans the road along +Z, `BOOM_LENGTH` long.
-const BOOM_POST: Vec2 = Vec2::new(PERIMETER_X + 1.0, PERIMETER_GATE.y - PERIMETER_GATE_HALF);
+/// A gate's boom spans its road, `BOOM_LENGTH` long, from a post at one side.
 const BOOM_LENGTH: f32 = 2.0 * PERIMETER_GATE_HALF;
 const BOOM_HINGE: f32 = 1.0;
-/// It lifts while someone on Institute business is this near the gate, a
-/// whole swing taking 1 / `BOOM_RATE` seconds, and stops nobody once this far up.
+/// It lifts while someone it opens for is this near the gate, a whole swing
+/// taking 1 / `BOOM_RATE` seconds, and stops nobody once this far up.
 const BOOM_REACH: f32 = 40.0;
 const BOOM_RATE: f32 = 0.8;
 const BOOM_OPEN: f32 = 0.7;
@@ -124,7 +147,8 @@ const SOUTHEAST: Vec2 = Vec2::new(YARD_MAX.x, YARD_MIN.y);
 const NORTHWEST: Vec2 = Vec2::new(YARD_MIN.x, YARD_MAX.y);
 const NORTHEAST: Vec2 = YARD_MAX;
 const WEST_JAMB: Vec2 = Vec2::new(GATE_CENTER - GATE_HALF, YARD_MAX.y);
-const EAST_JAMB: Vec2 = Vec2::new(GATE_CENTER + GATE_HALF, YARD_MAX.y);
+/// The wall's east end, hidden in the checkpoint's sandbags.
+const EAST_JAMB: Vec2 = Vec2::new(CHECKPOINT.x + 2.5, YARD_MAX.y);
 const YARD_RUNS: [(Vec2, Vec2); 5] = [
     (SOUTHWEST, SOUTHEAST),
     (SOUTHEAST, NORTHEAST),
@@ -165,11 +189,56 @@ pub(super) fn hole_depth(at: Vec2) -> f32 {
 #[derive(Component)]
 pub(crate) struct InstitutePass;
 
-/// The boom across the Institute gate's road, `lift` from lowered (0) to up (1).
-#[derive(Component, Default)]
+/// The gates closed by a boom.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum Gate {
+    /// The hangar yard's, beside its checkpoint.
+    Yard,
+    /// The Institute's, in the Perimeter.
+    Institute,
+}
+
+impl Gate {
+    /// The middle of the gate's lane.
+    fn opening(self) -> Vec2 {
+        match self {
+            Gate::Yard => GATE,
+            Gate::Institute => PERIMETER_GATE,
+        }
+    }
+
+    /// Where the boom's post stands and which way its arm reaches across.
+    fn post(self) -> (Vec2, Vec2) {
+        match self {
+            // On the wall's line at the end of the checkpoint's barrier.
+            Gate::Yard => (Vec2::new(GATE.x + GATE_HALF, GATE.y), Vec2::NEG_X),
+            // At the south jamb, on Harmont's side.
+            Gate::Institute => (
+                Vec2::new(PERIMETER_X + 1.0, PERIMETER_GATE.y - PERIMETER_GATE_HALF),
+                Vec2::Y,
+            ),
+        }
+    }
+}
+
+/// The boom across a gate's road, `lift` from lowered (0) to up (1).
+#[derive(Component)]
 #[require(Unclimbable)]
 pub(crate) struct Boom {
+    gate: Gate,
     lift: f32,
+}
+
+impl Boom {
+    fn new(gate: Gate) -> Self {
+        Self { gate, lift: 0.0 }
+    }
+
+    /// Whether it lifts for the stalker, or, with `pass`, for someone on
+    /// Institute business: the yard's for both, the Institute's only for the latter.
+    pub(crate) fn opens_for(&self, pass: bool) -> bool {
+        pass || self.gate == Gate::Yard
+    }
 }
 
 /// The boom's arm, hinged at the top of its post.
@@ -217,6 +286,7 @@ pub(super) fn reserve_scenery(at: Vec2, clearance: f32) -> bool {
     (at.cmpge(YARD_MIN - margin).all() && at.cmple(YARD_MAX + margin).all())
         || (at.abs().max_element() - EDGE).abs() < clearance
         || (at.x - PERIMETER_X).abs() < clearance + 3.0
+        || near_checkpoint(at, CHECKPOINT, clearance + 3.0)
         || near_checkpoint(at, PERIMETER_CHECKPOINT, clearance + 3.0)
         || on_patrol_track(at, clearance)
 }
@@ -236,8 +306,7 @@ fn on_patrol_track(at: Vec2, clearance: f32) -> bool {
 }
 
 fn near_checkpoint(at: Vec2, checkpoint: Vec2, clearance: f32) -> bool {
-    let half = Vec2::new(0.489, 0.348) * CHECKPOINT_SCALE;
-    let outside = (at - checkpoint).abs() - half;
+    let outside = (at - checkpoint).abs() - CHECKPOINT_HALF;
     outside.max(Vec2::ZERO).length_squared() < clearance * clearance
 }
 
@@ -267,6 +336,23 @@ pub(super) fn shelterbelt(at: Vec2) -> f32 {
         .max(hole_thicket(at))
 }
 
+/// Where the belt grows mostly bushes: the crawl hole's thicket and the
+/// patrolled stretch of the Perimeter.
+pub(super) fn bushy(at: Vec2) -> bool {
+    thicket(at) || (patrolled(at) && perimeter_belt(at) > 0.0)
+}
+
+/// The dense thicket along the wall around the crawl hole.
+pub(super) fn thicket(at: Vec2) -> bool {
+    hole_thicket(at) > 0.0
+}
+
+/// How densely trees grow in a belt, from 0.0 to 1.0: behind and beside the
+/// hangar, and along both sides of the patrolled stretch of the Perimeter.
+pub(super) fn tree_belt(at: Vec2) -> f32 {
+    (hangar_belt(at) * 0.60).max(perimeter_trees(at))
+}
+
 /// The dense belt behind and beside the hangar, from 0.0 to 1.0.
 pub(super) fn hangar_belt(at: Vec2) -> f32 {
     let offset = at - Vec2::from(BASE);
@@ -294,20 +380,47 @@ fn perimeter_belt(at: Vec2) -> f32 {
     {
         return 0.0;
     }
-    if off < 0.0 {
-        // Thickest against the wall on the Zone's side.
-        lerp(0.8, 0.4, off / PERIMETER_BELT.0)
+    // Thickest against the wall on the Zone's side, and along the patrol.
+    let (wall, edge, harmont) = if patrolled(at) {
+        (1.0, 0.55, 0.75)
     } else {
-        0.55
+        (0.8, 0.4, 0.55)
+    };
+    if off < 0.0 {
+        lerp(wall, edge, off / PERIMETER_BELT.0)
+    } else {
+        harmont
     }
 }
 
+/// Along the stretch of the Perimeter the patrol watches, from 50 m south of
+/// the hangar to 50 m past the Institute.
+fn patrolled(at: Vec2) -> bool {
+    (PATROL_TURNS[0].y..PATROL_TURNS[1].y).contains(&at.y)
+}
+
+/// Trees on both sides of the patrolled stretch, clear of the patrol's lanes
+/// and of the gate with its guards.
+fn perimeter_trees(at: Vec2) -> f32 {
+    let off = at.x - PERIMETER_X;
+    if !patrolled(at)
+        || !(PERIMETER_BELT.0..PERIMETER_BELT.1).contains(&off)
+        || on_patrol_track(at, 2.5)
+        || near_checkpoint(at, PERIMETER_CHECKPOINT, 4.0)
+        || (at - PERIMETER_GATE).abs().max_element() < 34.0
+    {
+        return 0.0;
+    }
+    if off < 0.0 { 0.5 } else { 0.35 }
+}
+
+/// A thicket of bushes along both sides of the wall, densest over the crawl hole.
 fn hole_thicket(at: Vec2) -> f32 {
     let offset = (at - CRAWL_HOLE).abs();
-    if offset.x > 9.0 || offset.y > 12.0 || on_patrol_track(at, 0.5) {
+    if offset.x > 12.0 || offset.y > 45.0 || on_patrol_track(at, 0.5) {
         0.0
     } else {
-        1.0
+        lerp(1.0, 0.75, smoothstep(10.0, 45.0, offset.y))
     }
 }
 
@@ -321,13 +434,14 @@ pub(super) fn preload_cordon(server: Res<AssetServer>, mut preloaded: ResMut<Pre
     );
 }
 
-/// A checkpoint on level ground, facing along +X.
-fn checkpoint_pose(terrain: &Terrain, at: Vec2) -> Transform {
+/// A checkpoint on level ground, turned `yaw` from facing along +X.
+fn checkpoint_pose(terrain: &Terrain, at: Vec2, yaw: f32) -> Transform {
     Transform::from_xyz(
         at.x,
         terrain.mesh_height_at(at) - CHECKPOINT_DATUM * CHECKPOINT_SCALE - 0.035,
         at.y,
     )
+    .with_rotation(Quat::from_rotation_y(yaw))
     .with_scale(Vec3::splat(CHECKPOINT_SCALE))
 }
 
@@ -347,9 +461,9 @@ pub(super) fn prepare_cordon(
     let root = commands
         .spawn((WorldRoot, Transform::IDENTITY, Visibility::default()))
         .id();
-    for (name, at) in [
-        ("Hangar checkpoint", CHECKPOINT),
-        ("Perimeter checkpoint", PERIMETER_CHECKPOINT),
+    for (name, at, yaw) in [
+        ("Hangar checkpoint", CHECKPOINT, CHECKPOINT_YAW),
+        ("Perimeter checkpoint", PERIMETER_CHECKPOINT, 0.0),
     ] {
         commands.spawn((
             ChildOf(root),
@@ -357,7 +471,7 @@ pub(super) fn prepare_cordon(
             WorldAssetRoot(
                 server.load(GltfAssetLabel::Scene(0).from_asset(assets::SITE_CHECKPOINT)),
             ),
-            checkpoint_pose(&terrain, at),
+            checkpoint_pose(&terrain, at, yaw),
             Collider(CHECKPOINT_PILLARS),
             Unclimbable,
             detail_range(400.0, 40.0),
@@ -373,9 +487,9 @@ pub(super) fn prepare_cordon(
     });
 }
 
-/// Paints the boom across the Institute gate: a post, and an arm of red and
-/// white stripes a meter long each.
-pub(super) fn spawn_boom(
+/// Paints the booms across the yard's and the Institute's gates: a post, and an
+/// arm of red and white stripes a meter long each.
+pub(super) fn spawn_booms(
     mut commands: Commands,
     terrain: Res<Terrain>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -392,52 +506,60 @@ pub(super) fn spawn_boom(
     let segments = BOOM_LENGTH.round() as usize;
     let length = BOOM_LENGTH / segments as f32;
     let segment = meshes.add(Cuboid::new(0.12, 0.12, length));
-    commands
-        .spawn((
-            WorldRoot,
-            Name::new("Institute gate boom"),
-            Boom::default(),
-            Collider(BOOM_PILLARS),
-            Transform::from_xyz(BOOM_POST.x, terrain.mesh_height_at(BOOM_POST), BOOM_POST.y),
-            Visibility::default(),
-            detail_range(400.0, 40.0),
-        ))
-        .with_children(|boom| {
-            boom.spawn((
-                Mesh3d(meshes.add(Cuboid::new(0.3, BOOM_HINGE + 0.4, 0.3))),
-                MeshMaterial3d(post),
-                Transform::from_xyz(0.0, (BOOM_HINGE + 0.4) * 0.5 - 0.2, 0.0),
-            ));
-            boom.spawn((
-                BoomArm,
-                Transform::from_xyz(0.0, BOOM_HINGE, 0.0),
+    let pole = meshes.add(Cuboid::new(0.3, BOOM_HINGE + 0.4, 0.3));
+    for gate in [Gate::Yard, Gate::Institute] {
+        let (at, along) = gate.post();
+        commands
+            .spawn((
+                WorldRoot,
+                Name::new("Gate boom"),
+                Boom::new(gate),
+                Collider(BOOM_PILLARS),
+                // The arm reaches along the post's +Z.
+                Transform::from_xyz(at.x, terrain.mesh_height_at(at), at.y)
+                    .with_rotation(Quat::from_rotation_y(along.x.atan2(along.y))),
                 Visibility::default(),
+                detail_range(400.0, 40.0),
             ))
-            .with_children(|arm| {
-                for i in 0..segments {
-                    arm.spawn((
-                        Mesh3d(segment.clone()),
-                        MeshMaterial3d(stripes[i % 2].clone()),
-                        Transform::from_xyz(0.0, 0.0, (i as f32 + 0.5) * length),
-                    ));
-                }
+            .with_children(|boom| {
+                boom.spawn((
+                    Mesh3d(pole.clone()),
+                    MeshMaterial3d(post.clone()),
+                    Transform::from_xyz(0.0, (BOOM_HINGE + 0.4) * 0.5 - 0.2, 0.0),
+                ));
+                boom.spawn((
+                    BoomArm,
+                    Transform::from_xyz(0.0, BOOM_HINGE, 0.0),
+                    Visibility::default(),
+                ))
+                .with_children(|arm| {
+                    for i in 0..segments {
+                        arm.spawn((
+                            Mesh3d(segment.clone()),
+                            MeshMaterial3d(stripes[i % 2].clone()),
+                            Transform::from_xyz(0.0, 0.0, (i as f32 + 0.5) * length),
+                        ));
+                    }
+                });
             });
-        });
+    }
 }
 
-/// Lifts the boom while anyone on Institute business is near the gate and
-/// lowers it again after them; only the lowered arm stops anyone.
-pub(super) fn lift_boom(
+/// Lifts each boom while anyone it opens for is near its gate and lowers it
+/// again after them; only the lowered arm stops anyone.
+pub(super) fn lift_booms(
     time: Res<Time>,
     passes: Query<&GlobalTransform, With<InstitutePass>>,
+    stalkers: Query<&GlobalTransform, With<Player>>,
     mut booms: Query<(&mut Boom, &mut Collider, &Children)>,
     mut arms: Query<&mut Transform, With<BoomArm>>,
 ) {
-    let business = passes
-        .iter()
-        .any(|pose| pose.translation().xz().distance(PERIMETER_GATE) < BOOM_REACH);
-    let step = BOOM_RATE * time.delta_secs() * if business { 1.0 } else { -1.0 };
     for (mut boom, mut collider, children) in &mut booms {
+        let opening = boom.gate.opening();
+        let near = |pose: &GlobalTransform| pose.translation().xz().distance(opening) < BOOM_REACH;
+        let business =
+            passes.iter().any(near) || (boom.opens_for(false) && stalkers.iter().any(near));
+        let step = BOOM_RATE * time.delta_secs() * if business { 1.0 } else { -1.0 };
         boom.lift = (boom.lift + step).clamp(0.0, 1.0);
         let solid = if boom.lift < BOOM_OPEN {
             BOOM_PILLARS
@@ -817,7 +939,7 @@ mod tests {
         let mut solids = solids_near(&terrain, gate, 30.0);
         solids.push((
             Collider(CHECKPOINT_PILLARS),
-            checkpoint_pose(&terrain, CHECKPOINT).into(),
+            checkpoint_pose(&terrain, CHECKPOINT, CHECKPOINT_YAW).into(),
         ));
         let obstacles = || solids.iter().map(|(solid, pose)| (solid, pose));
         let body = Body {
@@ -842,11 +964,8 @@ mod tests {
                 ));
             }
         }
-        let bunker = checkpoint_pose(&terrain, CHECKPOINT).transform_point(Vec3::new(
-            0.0,
-            CHECKPOINT_DATUM,
-            0.0,
-        ));
+        let bunker = checkpoint_pose(&terrain, CHECKPOINT, CHECKPOINT_YAW)
+            .transform_point(Vec3::new(0.0, CHECKPOINT_DATUM, 0.0));
         assert!(blocked(&Transform::from_translation(bunker), obstacles()));
         let yard = Vec2::from(BASE);
         for x in [-42.0, 42.0] {
@@ -863,7 +982,7 @@ mod tests {
     fn the_armored_vehicle_drives_from_the_yard_through_the_checkpoint() {
         let terrain = Terrain::new();
         let gate = Vec2::new(GATE_CENTER, YARD_MAX.y);
-        let checkpoint = checkpoint_pose(&terrain, CHECKPOINT);
+        let checkpoint = checkpoint_pose(&terrain, CHECKPOINT, CHECKPOINT_YAW);
         let mut app = App::new();
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_millis(16));
@@ -999,13 +1118,17 @@ mod tests {
             .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
                 50,
             )))
-            .add_systems(Update, lift_boom);
+            .add_systems(Update, lift_booms);
         let world = app.world_mut();
         let arm = world.spawn((BoomArm, Transform::IDENTITY)).id();
-        let post = BOOM_POST.extend(terrain.mesh_height_at(BOOM_POST)).xzy();
+        let (post, along) = Gate::Institute.post();
+        assert_eq!(along, Vec2::Y);
+        let post = post.extend(terrain.mesh_height_at(post)).xzy();
+        // The stalker on foot is turned away.
+        world.spawn((Player::default(), GlobalTransform::from_translation(post)));
         let boom = world
             .spawn((
-                Boom::default(),
+                Boom::new(Gate::Institute),
                 Collider(BOOM_PILLARS),
                 GlobalTransform::from_translation(post),
             ))
@@ -1051,6 +1174,41 @@ mod tests {
             app.world().get::<Collider>(boom).unwrap().0.len(),
             BOOM_PILLARS.len()
         );
+    }
+
+    #[test]
+    fn the_yard_boom_closes_the_lane_beside_the_checkpoint_and_lifts_for_the_stalker() {
+        let (post, along) = Gate::Yard.post();
+        assert_eq!(post + along * BOOM_LENGTH, WEST_JAMB);
+        // The checkpoint's own barrier lines the wall and ends at the boom's post.
+        let barrier = checkpoint_pose(&Terrain::new(), CHECKPOINT, CHECKPOINT_YAW)
+            .transform_point(Vec3::new(BARRIER_END, 0.0, BARRIER_Z))
+            .xz();
+        assert!((barrier.y - GATE.y).abs() < 0.01, "barrier at {barrier}");
+        assert!(
+            (0.3..0.7).contains(&(barrier.x - post.x)),
+            "barrier at {barrier}"
+        );
+        assert!(!Boom::new(Gate::Institute).opens_for(false));
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .add_systems(Update, lift_booms);
+        let world = app.world_mut();
+        let arm = world.spawn((BoomArm, Transform::IDENTITY)).id();
+        let boom = world
+            .spawn((Boom::new(Gate::Yard), Collider(BOOM_PILLARS)))
+            .add_child(arm)
+            .id();
+        let yard = GATE.extend(0.0).xzy() - Vec3::Z * 20.0;
+        world.spawn((Player::default(), GlobalTransform::from_translation(yard)));
+        for _ in 0..60 {
+            app.update();
+        }
+        assert!(app.world().get::<Collider>(boom).unwrap().0.is_empty());
     }
 
     #[test]

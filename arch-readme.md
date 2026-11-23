@@ -95,7 +95,7 @@ flowchart LR
 | Fog of war | `src/world/shroud.rs` | `Shroud` state (V), survey mask texture for the ground fog pass (opaque drifting black smoke, drawn after the sky), culling of shrouded entities |
 | Streaming | `src/world/landscape.rs`, `scenery.rs` | Async terrain build, LOD swaps, 3x3 scenery/collider streaming |
 | Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
-| Cordons | `src/world/cordon.rs` | Yard wall, 3× Perimeter, Institute gate `Boom` and `InstitutePass`, crawl hole (`hole_depth`), shelterbelts |
+| Cordons | `src/world/cordon.rs` | Yard wall and gap checkpoint, 3× Perimeter, the gates' `Boom`s (`Gate::Yard` lifts for the stalker, `Gate::Institute` for an `InstitutePass`), crawl hole (`hole_depth`) and its thicket, shelterbelts and belt trees (`tree_belt`) |
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
 | Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `old_road.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway and asphalt roads, marsh props, big rocks |
 | Cordon guards | `src/world/guards.rs` | Two pacing, rigged UN soldiers at each gate and five sentries by the checkpoints |
@@ -422,8 +422,9 @@ point-and-click order and its clicked stops: `issue_move_order` ray-casts the
 click onto the rendered terrain (`orders::cast_to_ground`) and plans the route
 with grid A* around collider pillars and deep water (`player/path.rs`); with
 Shift held it plans from the last stop and appends the leg
-(`MoveOrder::append`). A driven car with an `InstitutePass` ignores the gate's
-`Boom` when planning. `sync_order_markers` keeps one ground ring per stop,
+(`MoveOrder::append`). Planning ignores a `Boom` that opens for the mover
+(`Boom::opens_for`): the yard's always, the Institute's for a driven car with
+an `InstitutePass`. `sync_order_markers` keeps one ground ring per stop,
 spawning more from `OrderMarkerLook` as needed. `move_player`:
 
 1. reads camera-relative WASD input (which cancels an order), otherwise

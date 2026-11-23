@@ -21,7 +21,8 @@ use bevy::world_serialization::WorldInstanceReady;
 use crate::assets::{self, PlantModel, PreloadedAssets};
 
 use super::cordon::{
-    CRAWL_HOLE, PERIMETER_BELT, PERIMETER_X, near_wall_or_checkpoint, reserve_scenery, shelterbelt,
+    CRAWL_HOLE, PERIMETER_BELT, PERIMETER_X, bushy, near_wall_or_checkpoint, reserve_scenery,
+    shelterbelt, thicket,
 };
 use super::crush::Trampled;
 use super::hydrology::Wetlands;
@@ -318,8 +319,9 @@ fn expand_patches<'a>(
     seeds.iter().flat_map(move |&seed| {
         let root = seed.pose.translation.xz();
         let id = (root * 100.0).as_ivec2();
-        // The belt's seeds already stand close together.
-        let patch_size = if in_belt {
+        // The belt's seeds already stand close together; the crawl hole's
+        // thicket still grows full patches.
+        let patch_size = if in_belt && !thicket(root) {
             seed.kind.patch().div_ceil(3)
         } else {
             seed.kind.patch()
@@ -454,7 +456,13 @@ fn grow_belt_plants(terrain: &Terrain, tile: IVec2, sites: &mut Vec<PlantSite>) 
             {
                 continue;
             }
-            let kind = pick_plant(roll(3), [0.18, 0.12, 0.22, 0.25, 0.24])
+            // Dry grass, glowweed, hogweed, shrubs and thornbushes.
+            let weights = if bushy(at) {
+                [0.06, 0.04, 0.10, 0.42, 0.40]
+            } else {
+                [0.18, 0.12, 0.22, 0.25, 0.24]
+            };
+            let kind = pick_plant(roll(3), weights)
                 .expect("shelterbelt plant weights cover the random roll");
             sites.extend(PlantSite::grounded(
                 terrain,

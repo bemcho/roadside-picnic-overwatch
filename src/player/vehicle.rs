@@ -165,54 +165,79 @@ pub(crate) fn spawn_vehicle(
         WorldAssetRoot(assets::load_vehicle_scene(assets, assets::BASE_VEHICLE)),
     ));
     vehicle.observe(attach_wheels);
-    mount_spotlight(&mut vehicle, meshes, materials);
+    mount_spotlights(&mut vehicle, meshes, materials);
     vehicle.id()
 }
 
-fn mount_spotlight(
+/// The vehicle's two lamps, in model coordinates (local +Z is the nose): a
+/// dipped beam at the grille that lights the ground just ahead, and a
+/// searchlight on the cab roof that throws a longer, wider spot down the road.
+/// Both shine only while someone drives.
+fn mount_spotlights(
     vehicle: &mut EntityCommands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
-    // Grille mount in model coordinates; local +Z is the vehicle's nose.
-    let mount =
-        Transform::from_xyz(0.0, 0.255, 0.473).looking_to(FORWARD - Vec3::Y * 0.19, Vec3::Y);
+    let color = Color::srgb(0.91, 0.96, 1.0);
+    let dipped = (
+        Transform::from_xyz(0.0, 0.255, 0.473).looking_to(FORWARD - Vec3::Y * 0.19, Vec3::Y),
+        0.034,
+        SpotLight {
+            color,
+            intensity: 2.2e7,
+            range: 32.0,
+            radius: 0.16,
+            inner_angle: 0.19,
+            outer_angle: 0.37,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+    );
+    let searchlight = (
+        Transform::from_xyz(0.07, 0.436, 0.115).looking_to(FORWARD - Vec3::Y * 0.035, Vec3::Y),
+        0.045,
+        SpotLight {
+            color,
+            intensity: 6.0e7,
+            range: 120.0,
+            radius: 0.22,
+            inner_angle: 0.2,
+            outer_angle: 0.46,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+    );
+    let housing = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.18, 0.19, 0.20),
+        metallic: 0.55,
+        perceptual_roughness: 0.56,
+        ..default()
+    });
+    let lens = materials.add(StandardMaterial {
+        emissive: LinearRgba::rgb(0.85, 0.93, 1.0) * 24_000.0,
+        ..default()
+    });
     vehicle.with_children(|body| {
-        body.spawn((
-            Mesh3d(meshes.add(Cylinder::new(0.034, 0.044))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                base_color: Color::srgb(0.18, 0.19, 0.20),
-                metallic: 0.55,
-                perceptual_roughness: 0.56,
-                ..default()
-            })),
-            mount.with_rotation(mount.rotation * Quat::from_rotation_x(FRAC_PI_2)),
-        ));
-        body.spawn((
-            VehicleSpotlight,
-            SpotLight {
-                color: Color::srgb(0.91, 0.96, 1.0),
-                intensity: 2.2e7,
-                range: 32.0,
-                radius: 0.16,
-                inner_angle: 0.19,
-                outer_angle: 0.37,
-                shadow_maps_enabled: true,
-                ..default()
-            },
-            Visibility::Hidden,
-            Transform::from_translation(mount.transform_point(Vec3::NEG_Z * 0.03))
-                .with_rotation(mount.rotation),
-        ))
-        .with_child((
-            Mesh3d(meshes.add(Circle::new(0.028))),
-            MeshMaterial3d(materials.add(StandardMaterial {
-                emissive: LinearRgba::rgb(0.85, 0.93, 1.0) * 24_000.0,
-                ..default()
-            })),
-            Transform::from_xyz(0.0, 0.0, 0.007).with_rotation(Quat::from_rotation_y(PI)),
-            NotShadowCaster,
-        ));
+        for (mount, size, light) in [dipped, searchlight] {
+            body.spawn((
+                Mesh3d(meshes.add(Cylinder::new(size, size * 1.3))),
+                MeshMaterial3d(housing.clone()),
+                mount.with_rotation(mount.rotation * Quat::from_rotation_x(FRAC_PI_2)),
+            ));
+            body.spawn((
+                VehicleSpotlight,
+                light,
+                Visibility::Hidden,
+                Transform::from_translation(mount.transform_point(Vec3::NEG_Z * size * 0.88))
+                    .with_rotation(mount.rotation),
+            ))
+            .with_child((
+                Mesh3d(meshes.add(Circle::new(size * 0.82))),
+                MeshMaterial3d(lens.clone()),
+                Transform::from_xyz(0.0, 0.0, 0.007).with_rotation(Quat::from_rotation_y(PI)),
+                NotShadowCaster,
+            ));
+        }
     });
 }
 

@@ -153,8 +153,8 @@ pub(super) fn prepare_order_markers(
     });
 }
 
-/// What a route may be blocked by, and whether it is the Institute gate's boom
-/// or carries a pass through it.
+/// What a route may be blocked by, and whether it is a gate's boom or carries
+/// a pass through the Institute gate.
 type Solids<'w, 's> = Query<
     'w,
     's,
@@ -163,7 +163,7 @@ type Solids<'w, 's> = Query<
         &'static Collider,
         &'static GlobalTransform,
         Option<&'static Weight>,
-        Has<Boom>,
+        Option<&'static Boom>,
         Has<InstitutePass>,
     ),
 >;
@@ -203,14 +203,16 @@ pub(super) fn issue_move_order(
         None => (STANDING, WADE_DEPTH, STALKER_ARRIVAL, STALKER),
     };
     // The driven vehicle must not block its own route, nor anything lighter,
-    // nor the Institute gate's boom when it carries a pass.
+    // nor a gate's boom that lifts for it (the yard's always does).
     let pass = vehicle
         .and_then(|car| colliders.get(car).ok())
         .is_some_and(|(.., pass)| pass);
     let obstacles = colliders
         .iter()
         .filter(|&(entity, _, _, weight, boom, _)| {
-            Some(entity) != vehicle && mover.blocked_by(weight) && !(boom && pass)
+            Some(entity) != vehicle
+                && mover.blocked_by(weight)
+                && !boom.is_some_and(|boom| boom.opens_for(pass))
         })
         .map(|(_, collider, pose, ..)| (collider, pose));
     // Shift queues the new leg after the current target.
