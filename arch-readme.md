@@ -131,9 +131,14 @@ systems:
 7. `ui/curtain.rs` covers the new world with an "Entering the Zone" screen. A
    render-world system publishes `PipelineCache::waiting_pipelines().count()`
    through a shared atomic, and the world publishes `PlantsGrowing` while any
-   streamed tile still has plants to grow or spawn; the curtain lifts after
-   both stay idle for 0.4 s (12 s cap), hiding shader compilation, first-frame
-   spawn hitches and the plants filling in around the stalker.
+   streamed tile still has plants to grow or spawn, and `GpuScans::settled`
+   stays false while a UHD scan is loading or a pinned one (the five trees,
+   pinned by `canopy::pin_tree_scans`) is not yet on the GPU; the curtain
+   lifts after all stay idle for 0.4 s (12 s cap) and logs `Entered the
+   Zone`, hiding shader compilation, first-frame spawn hitches, the trees'
+   scan uploads and the plants filling in around the stalker. `prefill_scans`
+   (`assets/gpu_scans/streaming.rs`, `Last`, after `admit_scans`) then fills
+   the rest of the scan budget from `UhdFiles` in order, one scan at a time.
 
 The preload list is also a contract. If a model is needed during `OnEnter` and
 is not preloaded, the splash can report ready before that asset is available.

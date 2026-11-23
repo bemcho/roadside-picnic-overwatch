@@ -4,8 +4,9 @@
 //! is on the GPU. This module keeps the books: `GpuScans::plan` says what to
 //! load and what to drop. `streaming` (`GpuScansPlugin`) loads the admitted
 //! scans render-only from `ram://`, measures them and learns from the render
-//! world (`residency`) when they are resident; `vram` keeps the budget on the
-//! driver's live VRAM reading.
+//! world (`residency`) when they are resident, and prefills spare room with
+//! the files nobody wants yet; `vram` keeps the budget on the driver's live
+//! VRAM reading.
 
 mod residency;
 mod streaming;
@@ -23,7 +24,7 @@ use streaming::ScanHandles;
 pub const KEEP_SECONDS: f32 = 120.0;
 /// Metres short of the range where a scan shows at which callers start wanting
 /// it, so it is on the GPU by the time it is needed.
-// The tree, plant and site streams of Tasks 6 and 7 use it.
+// The tree, plant and site streams of Tasks 7 and 8 use it.
 #[expect(dead_code)]
 pub const UPLOAD_LEAD: f32 = 40.0;
 /// GiB left free of scans, for the driver and for other programs' growth.
@@ -147,6 +148,22 @@ impl GpuScans {
         self.budget = budget;
     }
 
+    /// Takes the budget from a driver reading, and says whether it did. While
+    /// a scan is loaded but not yet confirmed on the GPU, the reading may
+    /// already hold it, and `live_scan_budget` would count it as everything
+    /// else: near a full budget `plan` would then evict a scan it should
+    /// keep. So the last budget stays until the confirmation.
+    pub fn apply_reading(&mut self, reading: VramReading, cap: Option<u64>) -> bool {
+        let uploading = self
+            .scans
+            .values()
+            .any(|scan| scan.state == State::Loaded && !scan.resident);
+        if !uploading {
+            self.set_budget(live_scan_budget(reading, self.resident_bytes(), cap));
+        }
+        !uploading
+    }
+
     pub fn budget(&self) -> u64 {
         self.budget
     }
@@ -175,8 +192,6 @@ impl GpuScans {
     /// every pinned scan that fits on the GPU. A pinned scan admission
     /// declines (it does not fit without dropping others, which pins never
     /// do) and a failed load (confirmed with nothing on the GPU) hold nothing up.
-    // The entry curtain waits for it from Task 6.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn settled(&self) -> bool {
         self.scans.values().all(|scan| match scan.state {
             State::Off => !scan.pinned || !self.fits(scan.bytes),
@@ -187,15 +202,11 @@ impl GpuScans {
 
     /// Loads before every unpinned scan and never leaves for one, but only
     /// within the budget.
-    // The tree pins of Task 6 call it.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn pin(&mut self, path: &'static str) {
         self.scan_mut(path).pinned = true;
     }
 
     /// Asks for the scan this frame; the smallest distance of several asks stands.
-    // The plant, site and artifact streams of Tasks 7 and 8 call it.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn want(&mut self, path: &'static str, distance: f32) {
         let scan = self.scan_mut(path);
         scan.wanted = Some(
@@ -253,8 +264,6 @@ impl GpuScans {
     /// The first file of `order` that is off and fits the free room, while no
     /// scan is loading and no wanted scan waits (as of the last `plan`). A
     /// pinned scan too big for the card is not wanted and never holds it back.
-    // The prefill of Task 6 calls it.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn next_prefill(&self, order: &[&'static str]) -> Option<&'static str> {
         if self
             .scans
@@ -409,6 +418,21 @@ impl GpuScans {
                 self.budget >> 20,
             );
         }
+    }
+}
+
+#[cfg(test)]
+impl GpuScans {
+    /// Puts a scan on the GPU as `load` and the render world's confirmation
+    /// would leave it, for tests of the callers that wait for it.
+    pub fn insert_resident(&mut self, path: &'static str, scene: Handle<WorldAsset>) {
+        let scan = self.scan_mut(path);
+        scan.state = State::Loaded;
+        scan.resident = true;
+        scan.handles = Some(ScanHandles {
+            gltf: Handle::default(),
+            scene: Some(scene),
+        });
     }
 }
 
@@ -589,6 +613,30 @@ mod tests {
             ),
             0
         );
+    }
+
+    #[test]
+    fn a_reading_taken_while_a_scan_uploads_keeps_the_last_budget() {
+        // GiB as bytes, independent of the production conversion.
+        let gib = |gb: f32| (gb * (1u64 << 30) as f32) as u64;
+        let mut scans = GpuScans::new(gib(2.0));
+        fake_loaded(&mut scans, "a", 300 * MB, 0.0);
+        scans.estimate_exact("b", 400 * MB);
+        scans.want("b", 0.0);
+        assert_eq!(scans.plan(1.0).load, ["b"]);
+        scans.measured("b", Some(400 * MB)); // loaded; the render world has not confirmed it
+
+        // The driver's usage already holds b: it reads as 400 MB of "everything else".
+        let reading = VramReading {
+            budget: gib(6.0),
+            usage: gib(GAME_VRAM_GB) + 700 * MB,
+        };
+        assert!(!scans.apply_reading(reading, None));
+        assert_eq!(scans.budget(), gib(2.0), "the last budget stays");
+
+        confirm(&mut scans, "b");
+        assert!(scans.apply_reading(reading, None));
+        assert_eq!(scans.budget(), live_scan_budget(reading, 700 * MB, None));
     }
 
     #[test]

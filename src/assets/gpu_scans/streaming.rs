@@ -11,6 +11,8 @@ use bevy::prelude::*;
 use bevy::render::{Render, RenderApp, RenderSystems};
 
 #[cfg(not(target_arch = "wasm32"))]
+use crate::assets::UhdFiles;
+#[cfg(not(target_arch = "wasm32"))]
 use crate::assets::ram_source::RamFill;
 use crate::assets::uhd;
 use crate::launch::{DEFAULT_VRAM_GB, LaunchOptions};
@@ -43,7 +45,13 @@ impl Plugin for GpuScansPlugin {
             .add_systems(Update, measure_scans)
             .add_systems(Last, admit_scans.run_if(in_state(AppState::InGame)));
         #[cfg(not(target_arch = "wasm32"))]
-        app.add_systems(OnEnter(AppState::InGame), estimate_scans);
+        app.add_systems(OnEnter(AppState::InGame), estimate_scans)
+            .add_systems(
+                Last,
+                prefill_scans
+                    .after(admit_scans)
+                    .run_if(in_state(AppState::InGame)),
+            );
         if let Some(render_app) = app.get_sub_app_mut(RenderApp) {
             render_app.insert_resource(residency).add_systems(
                 Render,
@@ -169,6 +177,23 @@ fn admit_scans(
     }
 }
 
+/// How far off a prefilled scan counts as wanted: past any real ask, so the
+/// scans callers want come first.
+#[cfg(not(target_arch = "wasm32"))]
+const PREFILL_DISTANCE: f32 = f32::MAX;
+
+/// Fills the budget's spare room, before anything asks for the scans: wants
+/// the next file of `UhdFiles` that fits, which the next `admit_scans` loads.
+/// One at a time, as `next_prefill` waits for the last to be measured. The
+/// web build has no file lengths to size a scan by, so it cannot tell what
+/// fits and prefills nothing.
+#[cfg(not(target_arch = "wasm32"))]
+fn prefill_scans(mut scans: ResMut<GpuScans>, files: Res<UhdFiles>) {
+    if let Some(path) = scans.next_prefill(&files.0) {
+        scans.want(path, PREFILL_DISTANCE);
+    }
+}
+
 /// The asset stores a finished scan is measured from.
 #[derive(SystemParam)]
 struct ScanAssets<'w> {
@@ -276,5 +301,40 @@ fn note_resident_scans(mut scans: ResMut<GpuScans>, residency: Res<ScanResidency
                 bytes >> 20
             );
         }
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    const MB: u64 = 1 << 20;
+
+    #[test]
+    fn prefill_loads_one_scan_at_a_time_until_the_budget_is_used() {
+        let files = ["a", "b", "c"];
+        let mut scans = GpuScans::new(400 * MB);
+        for path in files {
+            scans.estimate(path, 100 * MB); // 165 MB on the GPU each
+        }
+        let mut app = App::new();
+        app.insert_resource(scans)
+            .insert_resource(UhdFiles(files.to_vec()))
+            .add_systems(Update, prefill_scans);
+        let frame = |app: &mut App| {
+            app.update();
+            app.world_mut().resource_mut::<GpuScans>().plan(0.0).load
+        };
+
+        assert_eq!(frame(&mut app), ["a"]);
+        assert!(frame(&mut app).is_empty(), "a is still loading");
+        app.world_mut()
+            .resource_mut::<GpuScans>()
+            .measured("a", Some(165 * MB));
+        assert_eq!(frame(&mut app), ["b"]);
+        app.world_mut()
+            .resource_mut::<GpuScans>()
+            .measured("b", Some(165 * MB));
+        assert!(frame(&mut app).is_empty(), "c does not fit the 70 MB left");
     }
 }

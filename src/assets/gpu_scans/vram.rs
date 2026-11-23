@@ -6,7 +6,7 @@ use bevy::render::renderer::RenderDevice;
 
 use crate::launch::{DEFAULT_VRAM_GB, LaunchOptions};
 
-use super::{GpuScans, VramReading, gb, gib, live_scan_budget};
+use super::{GpuScans, VramReading, gb, gib};
 
 /// Seconds between two readings of the driver's budget.
 const READ_EVERY: f32 = 1.0;
@@ -23,9 +23,10 @@ pub struct VramLog {
 }
 
 /// About once a second, sets the scan budget from the driver's live reading,
-/// capped by `--vram`. Where the driver cannot report one, the fallback
-/// `GpuScansPlugin` set stays. The first reading is logged whenever it comes;
-/// an empty one is warned about once, and only while none has come.
+/// capped by `--vram`, unless a scan is still uploading (`apply_reading`).
+/// Where the driver cannot report one, the fallback `GpuScansPlugin` set
+/// stays. The first reading taken in is logged whenever it comes; an empty
+/// one is warned about once, and only while none has come.
 pub fn track_vram_budget(
     mut scans: ResMut<GpuScans>,
     device: Res<RenderDevice>,
@@ -49,11 +50,12 @@ pub fn track_vram_budget(
         }
         return;
     };
-    let budget = live_scan_budget(reading, scans.resident_bytes(), launch.vram_gb.map(gib));
-    scans.set_budget(budget);
+    if !scans.apply_reading(reading, launch.vram_gb.map(gib)) {
+        return;
+    }
     if !log.read {
         log.read = true;
-        let (b, u, s) = (gb(reading.budget), gb(reading.usage), gb(budget));
+        let (b, u, s) = (gb(reading.budget), gb(reading.usage), gb(scans.budget()));
         info!("VRAM: driver budget {b:.1} GB, game using {u:.1} GB; UHD scans may use {s:.1} GB");
     }
 }

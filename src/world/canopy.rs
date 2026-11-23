@@ -12,6 +12,7 @@ use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::prelude::*;
 use bevy::world_serialization::WorldInstanceReady;
 
+use crate::assets::gpu_scans::GpuScans;
 use crate::assets::{self, PreloadedAssets};
 use crate::player::PlayerCamera;
 
@@ -382,6 +383,14 @@ pub(super) fn uhd_files() -> impl Iterator<Item = &'static str> {
     MODELS.iter().map(|model| model.close)
 }
 
+/// Pins the five trees' full scans: they load first, the entry curtain waits
+/// for them, and no other scan makes them leave the GPU.
+pub(super) fn pin_tree_scans(mut scans: ResMut<GpuScans>) {
+    for path in uhd_files() {
+        scans.pin(path);
+    }
+}
+
 /// Preloads the crown-card models; the full scans stream in near the camera.
 pub(super) fn preload_canopies(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
     for spec in &MODELS {
@@ -557,6 +566,27 @@ mod tests {
                 "{species:?}"
             );
         }
+    }
+
+    #[test]
+    fn the_five_tree_scans_are_pinned() {
+        let mut app = App::new();
+        app.insert_resource(GpuScans::new(1 << 30))
+            .add_systems(Startup, pin_tree_scans);
+        app.update();
+
+        // Nothing is wanted, so only pinned scans load.
+        let mut pinned = app.world_mut().resource_mut::<GpuScans>().plan(0.0).load;
+        pinned.sort_unstable();
+        let mut trees = [
+            assets::TREE_SMALL_UHD,
+            assets::TREE_BIG_UHD,
+            assets::TREE_VERY_TALL_UHD,
+            assets::TREE_BIRCH_UHD,
+            assets::TREE_DEAD_UHD,
+        ];
+        trees.sort_unstable();
+        assert_eq!(pinned, trees);
     }
 
     /// An app streaming the scan of a tree at `pose`, viewed from the origin.

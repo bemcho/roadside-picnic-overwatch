@@ -124,6 +124,7 @@ impl Plugin for WorldPlugin {
                 prepare_landscape,
                 load_landscape_materials,
                 canopy::preload_canopies,
+                canopy::pin_tree_scans,
                 wildlife::preload_wildlife,
                 cordon::preload_cordon,
                 sites::preload_sites,
