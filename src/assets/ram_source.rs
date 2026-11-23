@@ -31,9 +31,10 @@ pub const RAM_SOURCE: &str = "ram";
 /// Files read at once: each open file holds an 8 MiB read pipe.
 const READS_IN_FLIGHT: usize = 4;
 
-/// RAM the fill leaves free for the rest of the game and the machine: 500 MiB.
-/// The user chose to keep this little free so more scans fill RAM.
-const RAM_HEADROOM: u64 = 500 << 20;
+/// RAM the fill leaves free for the rest of the game and the machine: 2 GiB.
+/// The game's RAM grows about 1.7 GiB after the fill while scans stream, so
+/// less would push a tight host into swap.
+const RAM_HEADROOM: u64 = 2 << 30;
 
 /// Bytes per GB in the log; GB here are GiB, as in the VRAM budget.
 const GIB: f64 = (1u64 << 30) as f64;
