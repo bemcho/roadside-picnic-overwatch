@@ -121,7 +121,13 @@ impl Lane {
 
     fn point(&self, along: f32) -> Vec2 {
         let along = along.rem_euclid(self.length());
-        let i = self.reached.partition_point(|&reached| reached <= along) - 1;
+        // A hair below zero, `rem_euclid` rounds up to the whole lap: that is
+        // the end of the last leg.
+        let i = self
+            .reached
+            .partition_point(|&reached| reached <= along)
+            .clamp(1, self.points.len())
+            - 1;
         let (a, b) = (self.points[i], self.points[(i + 1) % self.points.len()]);
         a.lerp(
             b,
@@ -396,6 +402,16 @@ mod tests {
         );
         let edge = 100.0 - 2.0 * KEEP_RIGHT;
         assert!(lane.length() < 4.0 * edge && lane.length() > 4.0 * edge - 16.0);
+    }
+
+    #[test]
+    fn a_hair_before_the_lap_start_is_the_lap_start() {
+        let road = [Vec2::ZERO, Vec2::new(0.0, 200.0)];
+        let lane = Lane::new(&road, false);
+        // `rem_euclid` rounds this up to the whole lap, one past the last point.
+        let along: f32 = -1e-6;
+        assert_eq!(along.rem_euclid(lane.length()), lane.length());
+        assert!(lane.point(along).distance(lane.point(0.0)) < 1e-3);
     }
 
     #[test]
