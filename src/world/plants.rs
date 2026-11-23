@@ -19,6 +19,7 @@ use bevy::tasks::futures::check_ready;
 use bevy::tasks::{AsyncComputeTaskPool, Task};
 use bevy::world_serialization::WorldInstanceReady;
 
+use crate::assets::gpu_scans::{GpuScans, UPLOAD_LEAD};
 use crate::assets::{self, PlantModel, PreloadedAssets};
 
 use super::cordon::{
@@ -648,56 +649,98 @@ fn bound(model: &mut EntityCommands, bounds: Option<Aabb>) {
     }
 }
 
+type PlantsQuery<'w, 's> =
+    Query<'w, 's, (Entity, &'static Plant, &'static Transform, &'static ChildOf)>;
+
+/// A plant that has a full scan and stands within `FULL_RANGE` of the stalker.
+struct NearPlant<'a> {
+    entity: Entity,
+    full: &'static str,
+    pose: &'a Transform,
+    tile: &'a ChildOf,
+}
+
 /// Swaps the plant nearest the stalker for its full scan, and back. The
 /// multipart scans differ in shape from their near models, so those swaps show.
+///
+/// A scan is wanted from `UPLOAD_LEAD` out, so it is on the GPU by the time
+/// the stalker is near, and it shows only once it is. Until then the plant's
+/// own model stays. A scan that leaves the GPU takes its instance with it,
+/// which is when the GPU frees it.
 pub(super) fn stream_full_plants(
     mut commands: Commands,
     player: Query<&Transform, With<crate::player::Player>>,
-    plants: Query<(Entity, &Plant, &Transform, &ChildOf)>,
+    plants: PlantsQuery,
     fulls: Query<(Entity, &FullPlant)>,
-    server: Res<AssetServer>,
+    mut scans: ResMut<GpuScans>,
 ) {
-    let nearest = player.single().ok().and_then(|player| {
-        plants
-            .iter()
-            .filter_map(|(entity, plant, pose, tile)| {
-                let full = plant.model.full?;
-                let distance = player.translation.xz().distance(pose.translation.xz());
-                (distance <= FULL_RANGE).then_some((distance, entity, full, pose, tile))
-            })
-            .min_by(|a, b| a.0.total_cmp(&b.0))
-    });
-    let active = nearest.map(|(_, entity, ..)| entity);
+    let nearest = player
+        .single()
+        .ok()
+        .and_then(|player| want_plant_scans(&mut scans, player.translation.xz(), &plants));
+    let active = nearest.and_then(|near| Some((scans.scene(near.full)?, near)));
+    let active_plant = active.as_ref().map(|(_, near)| near.entity);
     for (entity, full) in &fulls {
-        if active != Some(full.plant) {
+        if active_plant != Some(full.plant) {
             commands.entity(entity).despawn();
             if plants.contains(full.plant) {
                 commands.entity(full.plant).insert(Visibility::Inherited);
             }
         }
     }
-    let Some((_, entity, full, pose, tile)) = nearest else {
+    let Some((scene, near)) = active else {
         return;
     };
-    if fulls.iter().any(|(_, full)| full.plant == entity) {
+    if fulls.iter().any(|(_, full)| full.plant == near.entity) {
         return;
     }
-    let at = pose.translation;
+    let at = near.pose.translation;
     commands
         .spawn((
             FullPlant {
-                plant: entity,
-                rest: pose.rotation,
+                plant: near.entity,
+                rest: near.pose.rotation,
                 phase: (at.x * 0.37 + at.z * 0.23) % TAU,
             },
-            *pose,
-            ChildOf(tile.parent()),
-            WorldAssetRoot(server.load(GltfAssetLabel::Scene(0).from_asset(full))),
+            *near.pose,
+            ChildOf(near.tile.parent()),
+            WorldAssetRoot(scene),
             detail_range(12.0, 2.0),
             Visibility::Hidden,
         ))
         .observe(range_scene_meshes)
         .observe(reveal_full_plant);
+}
+
+/// Wants the full scan of every plant within `UPLOAD_LEAD` of `player`, and
+/// returns the nearest plant within `FULL_RANGE` that has one.
+fn want_plant_scans<'a>(
+    scans: &mut GpuScans,
+    player: Vec2,
+    plants: &'a PlantsQuery,
+) -> Option<NearPlant<'a>> {
+    let mut nearest: Option<(f32, NearPlant)> = None;
+    for (entity, plant, pose, tile) in plants {
+        let Some(full) = plant.model.full else {
+            continue;
+        };
+        let distance = player.distance(pose.translation.xz());
+        if distance > UPLOAD_LEAD {
+            continue;
+        }
+        scans.want(full, distance);
+        let closer = nearest.as_ref().is_none_or(|(best, _)| distance < *best);
+        if distance <= FULL_RANGE && closer {
+            let near = NearPlant {
+                entity,
+                full,
+                pose,
+                tile,
+            };
+            nearest = Some((distance, near));
+        }
+    }
+    nearest.map(|(_, near)| near)
 }
 
 /// Shows a loaded full scan and hides the plant it stands in for.
@@ -1077,5 +1120,112 @@ mod tests {
             plants += 1;
         }
         assert_eq!(plants, sites.len());
+    }
+
+    /// The scan of the first shrub model.
+    fn shrub_scan() -> &'static str {
+        Kind::Shrub.models()[0]
+            .full
+            .expect("a shrub has a full scan")
+    }
+
+    /// An app streaming full scans for a shrub `distance` metres from the
+    /// stalker, on a GPU holding `scans`.
+    fn streaming_plant(distance: f32, scans: GpuScans) -> (App, Entity) {
+        let mut app = App::new();
+        app.insert_resource(scans)
+            .add_systems(Update, stream_full_plants);
+        app.world_mut()
+            .spawn((crate::player::Player::default(), Transform::IDENTITY));
+        let tile = app.world_mut().spawn(Transform::IDENTITY).id();
+        let plant = app
+            .world_mut()
+            .spawn((
+                Plant {
+                    model: &Kind::Shrub.models()[0],
+                },
+                Transform::from_xyz(distance, 0.0, 0.0),
+                ChildOf(tile),
+            ))
+            .id();
+        (app, plant)
+    }
+
+    /// The books of a GPU with the shrub's scan resident.
+    fn shrub_resident() -> GpuScans {
+        let mut scans = GpuScans::new(1 << 30);
+        scans.insert_resident(shrub_scan(), Handle::default());
+        scans
+    }
+
+    fn full_plants(app: &mut App) -> Vec<Entity> {
+        let world = app.world_mut();
+        let mut fulls = world.query_filtered::<Entity, With<FullPlant>>();
+        fulls.iter(world).collect()
+    }
+
+    #[test]
+    fn plants_within_40_m_ask_for_their_scans() {
+        let (mut app, _) = streaming_plant(30.0, GpuScans::new(1 << 30));
+        app.update();
+        assert!(full_plants(&mut app).is_empty(), "too far to show");
+        let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
+        assert_eq!(plan.load, [shrub_scan()]);
+    }
+
+    #[test]
+    fn plants_past_40_m_do_not_ask_for_their_scans() {
+        let (mut app, _) = streaming_plant(45.0, GpuScans::new(1 << 30));
+        app.update();
+        let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
+        assert!(plan.load.is_empty(), "{:?}", plan.load);
+    }
+
+    #[test]
+    fn the_nearest_plant_shows_its_scan_only_once_on_the_gpu() {
+        let (mut app, plant) = streaming_plant(5.0, GpuScans::new(1 << 30));
+        app.update();
+        assert!(
+            full_plants(&mut app).is_empty(),
+            "the scan is not on the GPU"
+        );
+
+        let mut scans = app.world_mut().resource_mut::<GpuScans>();
+        scans.insert_resident(shrub_scan(), Handle::default());
+        app.update();
+        let fulls = full_plants(&mut app);
+        assert_eq!(fulls.len(), 1);
+        let full = app.world().entity(fulls[0]).get::<FullPlant>();
+        assert_eq!(full.map(|full| full.plant), Some(plant));
+    }
+
+    #[test]
+    fn a_shown_scan_is_wanted_every_frame() {
+        let (mut app, _) = streaming_plant(5.0, shrub_resident());
+        app.update();
+        assert_eq!(full_plants(&mut app).len(), 1);
+        for now in [10.0, 20.0, 30.0] {
+            app.update();
+            let mut scans = app.world_mut().resource_mut::<GpuScans>();
+            assert!(scans.plan(now).load.is_empty(), "it is loaded already");
+            assert_eq!(scans.last_used(shrub_scan()), Some(now));
+        }
+    }
+
+    #[test]
+    fn a_scan_that_leaves_the_gpu_takes_its_instance_and_gives_the_plant_back() {
+        let (mut app, plant) = streaming_plant(5.0, shrub_resident());
+        app.update();
+        assert_eq!(full_plants(&mut app).len(), 1);
+        // The scan has loaded and stands in for the plant.
+        app.world_mut().entity_mut(plant).insert(Visibility::Hidden);
+
+        // Eviction: nothing is on the GPU any more.
+        app.insert_resource(GpuScans::new(1 << 30));
+        app.update();
+
+        assert!(full_plants(&mut app).is_empty(), "frees its VRAM");
+        let shown = app.world().entity(plant).get::<Visibility>();
+        assert_eq!(shown, Some(&Visibility::Inherited));
     }
 }

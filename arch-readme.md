@@ -263,9 +263,12 @@ most `PLANTS_PER_FRAME` of them per frame, nearest an anchor first.
 Every weed and bush is an imported model (`assets::PlantModel`): an entity with
 the textured `medium/` mesh within 30 m of the camera and a child with the
 texture-free `low/` mesh (same material) out to the scenery range, so plants
-sharing a model draw as one GPU instance batch. `stream_full_plants` puts the
-full `uhd/` scan in place of the one plant nearest the stalker within 8 m and
-hides that plant once the scan is ready; only that scan's textures are loaded.
+sharing a model draw as one GPU instance batch. `stream_full_plants` wants the
+full `uhd/` scans of plants within `UPLOAD_LEAD` (40 m) of the stalker from
+`GpuScans`, and once the scan of the one plant nearest the stalker within 8 m
+is on the GPU, puts it in place of that plant and hides the plant. If the scan
+leaves the GPU the instance goes (that is when the GPU frees it) and the plant
+shows again.
 Dry-weed seeds grow patches of up to 5 plants, other weeds and bushes up to 15;
 every placement passes the road, water, yard, and site-clearance filters.
 

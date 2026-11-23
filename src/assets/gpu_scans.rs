@@ -24,8 +24,6 @@ use streaming::ScanHandles;
 pub const KEEP_SECONDS: f32 = 120.0;
 /// Metres short of the range where a scan shows at which callers start wanting
 /// it, so it is on the GPU by the time it is needed.
-// The tree, plant and site streams of Tasks 7 and 8 use it.
-#[expect(dead_code)]
 pub const UPLOAD_LEAD: f32 = 40.0;
 /// GiB left free of scans, for the driver and for other programs' growth.
 pub const MARGIN_GB: f32 = 0.5;
@@ -196,8 +194,6 @@ impl GpuScans {
     }
 
     /// The scan's scene, once every mesh and image of it is on the GPU.
-    // The tree, plant, site and artifact streams of Tasks 7 and 8 call it.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn scene(&self, path: &'static str) -> Option<Handle<WorldAsset>> {
         let scan = self.scans.get(path).filter(|scan| scan.resident)?;
         scan.handles.as_ref()?.scene.clone()
@@ -222,8 +218,6 @@ impl GpuScans {
     }
 
     /// Asks for the scan this frame; the smallest distance of several asks stands.
-    // The plant, site and artifact streams of Tasks 7 and 8 call it.
-    #[cfg_attr(not(test), expect(dead_code))]
     pub fn want(&mut self, path: &'static str, distance: f32) {
         let scan = self.scan_mut(path);
         scan.wanted = Some(
@@ -483,6 +477,11 @@ impl GpuScans {
             gltf: Handle::default(),
             scene: Some(scene),
         });
+    }
+
+    /// When the scan was last shown, as `plan` stamped it; `None` if never.
+    pub fn last_used(&self, path: &'static str) -> Option<f32> {
+        self.scans.get(path)?.last_used
     }
 }
 

@@ -163,9 +163,11 @@ the stalker stands still.
   ~500-triangle primitive each: simplified textured wood and, for living
   trees, cutout crown faces baked from the supplied models. Within 8 m of the
   camera a tree swaps to its full scan (`trees/uhd/`, ~1.9M triangles), a
-  child entity that crossfades by `VisibilityRange` and sways with it. The
-  scans are not preloaded: `stream_close_trees` loads a tree's scan as the
-  camera nears (16 m from the tree's middle) and drops it 5 m further out.
+  child entity that crossfades by `VisibilityRange` and sways with it.
+  `stream_close_trees` wants a tree's scan from `GpuScans` as the camera nears
+  (16 m from the tree's middle) and shows it once it is on the GPU (the five
+  are pinned there behind the entry curtain). It drops the instance 5 m
+  further out, or if the scan leaves the GPU.
   `src/world/canopy.rs` fits the roots and trunks, limits
   shadows to nearby trees, and sways some living trees without moving their
   colliders. Individual trees can randomly snap and fall while in view
@@ -192,7 +194,10 @@ the stalker stands still.
   with the near model's material out to 66 m (plus the camera's reach), the
   textured `medium/` model within 30 m of the camera, and the full `uhd/` scan
   for the plant nearest the stalker within 8 m (henbane and ragweed have no
-  textured scan). The multipart UHD scans differ in shape from their medium
+  textured scan). `stream_full_plants` asks `GpuScans` for the scans of plants
+  within 40 m (`UPLOAD_LEAD`) and shows one only once it is on the GPU; the
+  plant's own model stays until then, and shows again if the scan leaves the
+  GPU. The multipart UHD scans differ in shape from their medium
   models, so their swap shows. Plants sharing a model draw as one GPU
   instance batch. Each dry-weed seed grows a patch of up to 5 plants, other
   weeds and bushes up to 15 (a third of that in the belts, full patches in

@@ -10,7 +10,7 @@ use bevy::gltf::GltfMaterial;
 use bevy::light::NotShadowCaster;
 use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::prelude::*;
-use bevy::world_serialization::WorldInstanceReady;
+use bevy::world_serialization::{WorldAsset, WorldInstanceReady};
 
 use crate::assets::gpu_scans::GpuScans;
 use crate::assets::{self, PreloadedAssets};
@@ -458,34 +458,37 @@ type StreamedTree<'a> = (
     Option<&'a CloseScan>,
 );
 
-/// Loads a tree's full scan as the camera comes near and drops it once the
-/// camera moves away, so only the scans in view take GPU memory. The scan is
-/// a child, so it sways and falls with the tree.
+/// Shows a tree's full scan as the camera comes near, once the scan is on the
+/// GPU, and drops it once the camera moves away or the scan leaves the GPU,
+/// so only the scans in view hold GPU memory. The scan is a child, so it
+/// sways and falls with the tree.
+///
+/// The trees' scans are pinned, so they wait on the GPU already. The want
+/// keeps the nearest tree's scan fresh, and brings it back should a card too
+/// tight for the pins have left it out.
 pub(super) fn stream_close_trees(
     mut commands: Commands,
-    server: Res<AssetServer>,
+    mut scans: ResMut<GpuScans>,
     camera: Single<&Transform, With<PlayerCamera>>,
     mut trees: Query<StreamedTree, Without<PlayerCamera>>,
 ) {
-    for (tree, visual, pose, mut range, scan) in &mut trees {
+    for (tree, visual, pose, mut range, shown) in &mut trees {
         let distance = scan_distance(pose, camera.translation);
-        match scan {
-            None if distance < UHD_LOAD => {
-                let scan = commands
-                    .spawn((
-                        WorldAssetRoot(
-                            server.load(GltfAssetLabel::Scene(0).from_asset(visual.close)),
-                        ),
-                        close_range(),
-                        Visibility::Hidden,
-                        ChildOf(tree),
-                    ))
-                    .observe(range_scene_meshes)
-                    .observe(reveal_close_tree)
-                    .id();
-                commands.entity(tree).insert(CloseScan(scan));
+        let near = distance < UHD_LOAD;
+        if near {
+            scans.want(visual.close, distance);
+        }
+        match shown {
+            None if near => {
+                if let Some(scene) = scans.scene(visual.close) {
+                    spawn_close_scan(&mut commands, tree, scene);
+                }
             }
-            Some(&CloseScan(scan)) if distance > UHD_DROP => {
+            // Dropping the instance releases its hold on the scan's GPU copy,
+            // which an evicted scan frees only then.
+            Some(&CloseScan(scan))
+                if distance > UHD_DROP || scans.scene(visual.close).is_none() =>
+            {
                 commands.entity(scan).despawn();
                 commands.entity(tree).remove::<CloseScan>();
                 range.start_margin = 0.0..0.0;
@@ -493,6 +496,21 @@ pub(super) fn stream_close_trees(
             _ => {}
         }
     }
+}
+
+/// Spawns the full scan under `tree`, hidden until its instance is ready.
+fn spawn_close_scan(commands: &mut Commands, tree: Entity, scene: Handle<WorldAsset>) {
+    let scan = commands
+        .spawn((
+            WorldAssetRoot(scene),
+            close_range(),
+            Visibility::Hidden,
+            ChildOf(tree),
+        ))
+        .observe(range_scene_meshes)
+        .observe(reveal_close_tree)
+        .id();
+    commands.entity(tree).insert(CloseScan(scan));
 }
 
 /// Shows a loaded full scan and lets the crown-card model fade out where
@@ -541,7 +559,6 @@ pub(super) fn update_canopy_motion(
 #[cfg(test)]
 mod tests {
     use bevy::asset::AssetPlugin;
-    use bevy::world_serialization::WorldAsset;
 
     use super::*;
     use crate::world::terrain::base_tile;
@@ -589,11 +606,13 @@ mod tests {
         assert_eq!(pinned, trees);
     }
 
-    /// An app streaming the scan of a tree at `pose`, viewed from the origin.
-    fn streaming(pose: Transform) -> (App, Entity, Entity) {
+    /// An app streaming the scan of a tree at `pose`, viewed from the origin,
+    /// with `scans` as the GPU's books.
+    fn streaming_with(pose: Transform, scans: GpuScans) -> (App, Entity, Entity) {
         let mut app = App::new();
         app.add_plugins((MinimalPlugins, AssetPlugin::default()))
             .init_asset::<WorldAsset>()
+            .insert_resource(scans)
             .add_systems(Update, stream_close_trees);
         let camera = app
             .world_mut()
@@ -613,6 +632,18 @@ mod tests {
             ))
             .id();
         (app, camera, tree)
+    }
+
+    /// The books of a GPU with the tree's scan resident.
+    fn resident_scans() -> GpuScans {
+        let mut scans = GpuScans::new(1 << 30);
+        scans.insert_resident(assets::TREE_SMALL_UHD, Handle::default());
+        scans
+    }
+
+    /// An app streaming the scan of a tree at `pose`, whose scan is on the GPU.
+    fn streaming(pose: Transform) -> (App, Entity, Entity) {
+        streaming_with(pose, resident_scans())
     }
 
     fn start_margin(app: &App, tree: Entity) -> std::ops::Range<f32> {
@@ -654,6 +685,61 @@ mod tests {
         assert_eq!(scan.get::<ChildOf>().map(ChildOf::parent), Some(tree));
         assert_eq!(scan.get::<Visibility>(), Some(&Visibility::Hidden));
         assert_eq!(start_margin(&app, tree), 0.0..0.0, "crown cards wait");
+    }
+
+    #[test]
+    fn a_tree_waits_for_its_scan_on_the_gpu() {
+        let pose = Transform::from_xyz(3.0, 0.0, 0.0).with_scale(Vec3::splat(12.0));
+        let (mut app, _, tree) = streaming_with(pose, GpuScans::new(1 << 30));
+        app.update();
+        assert!(app.world().entity(tree).get::<CloseScan>().is_none());
+        assert_eq!(start_margin(&app, tree), 0.0..0.0, "the crown stays");
+    }
+
+    #[test]
+    fn a_scan_that_leaves_the_gpu_takes_its_instance_and_shows_the_crown_again() {
+        let pose = Transform::from_xyz(3.0, 0.0, 0.0).with_scale(Vec3::splat(12.0));
+        let (mut app, _, tree) = streaming(pose);
+        app.update();
+        let scan = app.world().entity(tree).get::<CloseScan>().expect("scan").0;
+        // The scan loaded and the crown fades out where it fades in.
+        let mut tree_range = app.world_mut().entity_mut(tree);
+        let mut range = tree_range.get_mut::<VisibilityRange>().expect("range");
+        range.start_margin = close_range().end_margin;
+
+        // Eviction: nothing is on the GPU any more.
+        app.insert_resource(GpuScans::new(1 << 30));
+        app.update();
+
+        assert!(app.world().entity(tree).get::<CloseScan>().is_none());
+        assert!(app.world().get_entity(scan).is_err(), "frees its VRAM");
+        assert_eq!(start_margin(&app, tree), 0.0..0.0, "the crown shows");
+    }
+
+    #[test]
+    fn a_tree_near_the_camera_asks_for_its_scan_and_one_far_away_does_not() {
+        let near = Transform::from_xyz(3.0, 0.0, 0.0).with_scale(Vec3::splat(12.0));
+        let (mut app, camera, _) = streaming_with(near, GpuScans::new(1 << 30));
+        app.update();
+        let plan = app.world_mut().resource_mut::<GpuScans>().plan(0.0);
+        assert_eq!(plan.load, [assets::TREE_SMALL_UHD]);
+
+        app.world_mut()
+            .entity_mut(camera)
+            .insert(Transform::from_xyz(-100.0, 0.0, 0.0));
+        app.update();
+        let plan = app.world_mut().resource_mut::<GpuScans>().plan(1.0);
+        assert!(plan.load.is_empty(), "{:?}", plan.load);
+    }
+
+    #[test]
+    fn a_resident_scan_is_kept_fresh_while_its_tree_is_near() {
+        let pose = Transform::from_xyz(3.0, 0.0, 0.0).with_scale(Vec3::splat(12.0));
+        let (mut app, _, _) = streaming(pose);
+        app.update();
+        let mut scans = app.world_mut().resource_mut::<GpuScans>();
+        assert!(scans.plan(5.0).load.is_empty(), "it is loaded already");
+        assert_eq!(scans.last_used(assets::TREE_SMALL_UHD), Some(5.0));
     }
 
     #[test]
