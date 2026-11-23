@@ -95,13 +95,22 @@ than needed. Once zoomed out, the ranges still run out and things vanish.
    that, thin the distant trees first (e.g. the speck tier draws every other
    tree), then fall back to C. *(Assistant's call.)*
 8. Two best-quality flags (the user's call), independent of each other:
-   - `--vram <GB>` (default 6, the target card): the VRAM budget for UHD
-     scans (see "RAM and GPU").
+   - `--vram <GB>` (optional): a cap on the VRAM the game may use. Without
+     it, the game uses as much as the driver says this process may (see "RAM
+     and GPU").
    - `--detail <x>` (default 1.0): the scale on every vegetation and rock tier
      distance, so stronger GPUs draw the higher tiers farther out.
 
-   wgpu does not report VRAM, so the player states it and there is no
-   automatic detection. The README documents both flags (see "README").
+   The README documents both flags (see "README").
+
+   *Amended 2026-11-23 after the game ran out of memory on the user's T1200
+   laptop (4 GB). The user: "still try to use as much as possible vram without
+   out of memory on other hosts".* The first version said wgpu cannot report
+   VRAM. That was wrong. wgpu 30 enables Vulkan's `VK_EXT_memory_budget`
+   whenever the driver offers it, and the game can read the live budget and
+   usage through `as_hal` and `ash`. So the budget is detected on every host,
+   and `--vram` is only a cap. Hosts that cannot report it (other backends,
+   the web) use 6 GB, or `--vram`.
 
 ## Non-goals
 
@@ -344,12 +353,27 @@ move forth and back", "minimal disk io"). Native builds only: `wasm32` has a
   `RenderAssets` and writes the ids that are ready into a shared set (an `Arc`
   resource present in both worlds). `GpuScans` reads that set to decide when
   a UHD tier may show. *(Assistant's call.)*
-- **A VRAM budget, not a count.** Scan budget = `--vram <GB>` (default 6)
-  minus the game's measured peak VRAM without UHD scans, minus a 0.5 GB
-  margin. Count each scan's bytes as it reaches the GPU (meshes plus images).
-- **Always on the GPU:** the five UHD trees, the stalker (as today), the
-  armored car and the hangar shell. They are seen at every zoom near the
-  stalker, so they go up behind the curtain and never leave.
+- **A VRAM budget, not a count, read live from the driver.** About once a
+  second the game reads the device-local heap's budget and its own usage
+  (`VK_EXT_memory_budget`). Usage minus the resident scans is everything else
+  the game holds. So scan budget = min(driver budget, `--vram`) minus that,
+  minus a 0.5 GB margin. The desktop, other programs and the game's own base
+  are all inside the driver's numbers, so the budget is whatever is really
+  left on this host, with no constants to tune. Where the driver cannot report
+  it, scan budget = (`--vram` or 6) minus the game's measured peak VRAM
+  without UHD scans, minus the desktop's ~0.6 GB, minus the margin. Count
+  each scan's bytes as it reaches the GPU (meshes plus images).
+- **Never past the budget.** If the budget shrinks below what the scans use
+  (another program takes VRAM, or a small card), scans not shown this frame
+  leave, unpinned before pinned, least recently shown first, one per reading,
+  until the scans fit. Staying over the driver's budget is the crash, so this
+  ignores the two-minute rule below.
+- **Always on the GPU when they fit:** the five UHD trees, the stalker (as
+  today), the armored car and the hangar shell. They are seen at every zoom
+  near the stalker, so they go up first behind the curtain and never leave for
+  other scans. A pin that does not fit the budget waits (warn once), and that
+  close-up keeps its medium model. *(Amended: pins used to load even over the
+  budget.)*
 - **Fill behind the curtain.** Then upload the other scans nearest the spawn
   first (hangar props, artifacts, yard vehicles, nearby plants and rocks),
   until the budget is full.
@@ -420,12 +444,14 @@ section to `README.md`, next to the run commands, along these lines:
 > The game is tuned for a 6 GB GPU (RTX 2060). Two flags raise the quality on
 > stronger cards:
 >
-> - `--vram <GB>` (default 6): how much video memory the card has. The game
->   reads every model once at start and keeps it in RAM (about 9 GB; the
->   loading screen takes longer the first time). This flag sets how many of
->   the close-up (UHD) models also stay on the GPU. From about 12 GB up, all
->   of them do. Stating more memory than the card has can crash the game when
->   video memory runs out.
+> - `--vram <GB>` (optional): the most video memory the game may use. The
+>   game reads every model once at start and keeps it in RAM, as much as the
+>   machine has free (the loading screen takes longer the first time). On the
+>   GPU it keeps as many close-up (UHD) models as the driver says fit, and
+>   frees the least recently seen ones when memory runs short. From about
+>   12 GB up, all of them stay. Use the flag to leave video memory for other
+>   programs, or where the driver cannot report it (then the game assumes
+>   6 GB).
 > - `--detail <x>` (default 1.0): how far the higher-detail versions of trees,
 >   plants and rocks draw, as a multiple of the default distances.
 >

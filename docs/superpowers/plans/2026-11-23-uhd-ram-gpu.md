@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Read every UHD scan the game can show into RAM once at load, keep GPU copies of them under a `--vram` budget, and route today's four streamed UHD kinds (tree close-ups, the nearest plant's scan, sites and landmarks, artifact scenes) through that, so nothing is read from `assets/` after the entry curtain.
+**Goal:** Read every UHD scan the game can show into RAM once at load, keep GPU copies of them under the driver's live VRAM budget (`--vram` caps it), and route today's four streamed UHD kinds (tree close-ups, the nearest plant's scan, sites and landmarks, artifact scenes) through that, so nothing is read from `assets/` after the entry curtain.
 
 **Architecture:** `main.rs` registers an in-memory asset source (`ram://`) before `DefaultPlugins`; at startup every listed UHD file is read through Bevy's own reader on the IO pool into its shared `Dir`, and the splash waits for that. A `GpuScans` resource is the only owner of UHD GPU copies: callers `want` a scan when an anchor comes within 40 m, `GpuScans` loads it from `ram://` with render-only usages under a byte budget (`--vram` − the game's own VRAM − 0.5 GB), evicts the least recently used scan only after two idle minutes, and hands out the scene only once a render-world system has seen all its meshes and images prepared.
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- Bevy 0.20, no new crates. Keep `wasm32` compatibility: no threads in game code; no `std::fs` in game code (tests may use it).
+- Bevy 0.20, no new crates. Task 5 adds `ash` 0.38 as a direct dependency (and `wgpu` 30 if Bevy does not re-export `wgpu::hal`), for native targets only. Both are already in `Cargo.lock` at those versions, so nothing new is compiled. Keep `wasm32` compatibility: no threads in game code; no `std::fs` in game code (tests may use it).
 - Native builds only for the RAM level: `wasm32` keeps loading from `assets/` as today (`#[cfg(target_arch = "wasm32")]`).
 - `cargo clippy -- -D warnings` passes; no `unwrap()` in game logic; systems are `verb_noun`, at most 7 parameters and about 60 lines; `use` order std, external, `crate`, `super`.
 - Player-facing text goes through `src/ui/text.rs`; log lines may be plain strings.
@@ -26,10 +26,11 @@
 ## Review Focus
 
 1. **A listed UHD file is missing or unreadable at load.** The splash must show its failed state and log the path, as a failed preload does, not wait forever. (Task 3 test `a_missing_file_fails_the_fill`.)
-2. **`--vram` too small or malformed** (`--vram 2`, `--vram abc`, `--vram` as the last argument, `--vram -3`). A malformed value warns and keeps 6. A budget below the pinned trees still loads the pins, warns once, and every other object keeps its mid tier; nothing crashes. (Task 2 test `a_bad_vram_value_keeps_the_default`; Task 4 test `pinned_scans_load_even_over_the_budget`.)
+2. **`--vram` too small or malformed** (`--vram 2`, `--vram abc`, `--vram` as the last argument, `--vram -3`). A malformed value warns and is ignored (Task 5 makes "no flag" mean the driver's budget). A budget below the pinned trees loads no pin that does not fit and warns once, and those close-ups keep their medium models; nothing crashes. (Task 2 test `a_bad_vram_value_keeps_the_default`; Task 4 test `pinned_scans_load_first_but_only_within_the_budget`.)
 3. **The stalker paces back and forth across the 40 m line or a site's reach.** No scan leaves the GPU and comes back again and again (anti-goal "thrashing"). (Task 4 test `a_scan_used_within_two_minutes_never_leaves`.)
 4. **A scan's mesh has already moved to the render world when it is measured.** `Mesh::attributes()` panics on an extracted mesh, so measuring must not call it; the scan keeps its estimate and a warning is logged. (Task 5 test `scan_bytes_is_unknown_once_a_mesh_has_moved_to_the_gpu`.)
 5. **A scan is shown while its GPU copy is evicted.** An entity still holding the handles would keep the copy alive while the budget counts it free. Every caller wants each scan it shows on every frame, and only idle scans leave. (Task 7 test `a_shown_scan_is_wanted_every_frame`; Task 8 tests that a shown site and a shown artifact keep wanting.)
+6. **The host has less VRAM than the game would like, or loses some while playing** (the user's T1200 laptop, 4 GB, ran out of memory after zooming out, in and out with free roam; another program grabs VRAM). The budget follows the driver's live numbers. Scans not shown this frame leave until the rest fit, and nothing allocates past the budget. (Task 4 tests `a_shrunk_budget_evicts_scans_not_shown_least_recently_used_first` and `the_live_budget_is_what_the_driver_leaves_minus_a_margin`; Task 9 replays the user's steps with `vram-hog` holding the 2060 to 4 GiB.)
 
 ---
 
@@ -209,10 +210,14 @@ Expected: PASS.
 **Interfaces:**
 - Consumes: `LaunchOptions::vram_gb` (Task 2); `GAME_VRAM_GB` (Task 1).
 - Produces (all in `crate::assets::gpu_scans`):
-  - Constants: `KEEP_SECONDS: f32 = 120.0`, `UPLOAD_LEAD: f32 = 40.0`, `MARGIN_GB: f32 = 0.5`, `GAME_VRAM_GB: f32 = <Task 1>`, `GPU_BYTES_PER_FILE_BYTE: f32 = 1.65` (the five trees: about 700 MB on the GPU from 428 MB of files).
-  - `pub fn scan_budget(vram_gb: f32) -> u64`: `max(0, vram_gb − GAME_VRAM_GB − MARGIN_GB)` GiB, in bytes.
+  - Constants: `KEEP_SECONDS: f32 = 120.0`, `UPLOAD_LEAD: f32 = 40.0`, `MARGIN_GB: f32 = 0.5`, `DESKTOP_GB: f32 = 0.6` (fallback only; 0.63 GiB measured on the 2060), `GAME_VRAM_GB: f32 = <Task 1>`, `DEFAULT_VRAM_GB` (6.0, from `crate::launch`), `GPU_BYTES_PER_FILE_BYTE: f32 = 1.65` (the five trees: about 700 MB on the GPU from 428 MB of files).
+  - `pub struct VramReading { pub budget: u64, pub usage: u64 }`: the driver's device-local heap budget for this process and this process's usage, in bytes. Task 5 reads it.
+  - `pub fn live_scan_budget(reading: VramReading, resident_scans: u64, cap: Option<u64>) -> u64`: `max(0, min(reading.budget, cap) − (reading.usage − resident_scans) − MARGIN_GB)`. `usage − resident_scans` (saturating) is everything else the game holds.
+  - `pub fn scan_budget(vram_gb: f32) -> u64`: the fallback when the driver cannot report VRAM: `max(0, vram_gb − GAME_VRAM_GB − DESKTOP_GB − MARGIN_GB)` GiB, in bytes.
   - `#[derive(Resource, Default)] pub struct GpuScans` (the default has a budget of 0) with `new(budget: u64) -> Self` and:
-    - `pin(&mut self, path: &'static str)`: always on the GPU, loads first, never leaves.
+    - `set_budget(&mut self, budget: u64)`: a new live budget; the next `plan` evicts down to it if needed.
+    - `resident_bytes(&self) -> u64`: the bytes of scans loaded and measured (not those still loading).
+    - `pin(&mut self, path: &'static str)`: loads before every unpinned scan and never leaves for one, but only within the budget.
     - `want(&mut self, path: &'static str, distance: f32)`: this frame, keeping the smallest distance when several callers ask.
     - `estimate(&mut self, path: &'static str, file_len: u64)`: sets the size to `file_len × GPU_BYTES_PER_FILE_BYTE` until it is measured.
     - `plan(&mut self, now: f32) -> Admission`: stamps every scan wanted this frame as used at `now` and clears the wants. It decides what to load and what to evict, marks loads as *loading* and evictions as *off*, and counts both in `used` at once.
@@ -230,10 +235,37 @@ Expected: PASS.
 const MB: u64 = 1 << 20;
 
 #[test]
-fn budget_is_vram_minus_the_game_and_a_margin() {
+fn the_fallback_budget_is_vram_minus_the_game_the_desktop_and_a_margin() {
     let gib = |gb: f32| (gb * (1u64 << 30) as f32) as u64;
-    assert_eq!(scan_budget(GAME_VRAM_GB + MARGIN_GB + 2.0), gib(2.0));
+    assert_eq!(scan_budget(GAME_VRAM_GB + DESKTOP_GB + MARGIN_GB + 2.0), gib(2.0));
     assert_eq!(scan_budget(1.0), 0);
+}
+
+#[test]
+fn the_live_budget_is_what_the_driver_leaves_minus_a_margin() {
+    let gib = |gb: f32| (gb * (1u64 << 30) as f32) as u64;
+    // T1200: driver budget 3.9 GiB, game uses 3.0 GiB of which 0.5 GiB are scans
+    let reading = VramReading { budget: gib(3.9), usage: gib(3.0) };
+    assert_eq!(live_scan_budget(reading, gib(0.5), None), gib(3.9 - 2.5 - MARGIN_GB));
+    assert_eq!(live_scan_budget(reading, gib(0.5), Some(gib(3.5))), gib(3.5 - 2.5 - MARGIN_GB));
+    assert_eq!(live_scan_budget(VramReading { budget: gib(2.0), usage: gib(3.0) }, 0, None), 0);
+}
+
+#[test]
+fn a_shrunk_budget_evicts_scans_not_shown_least_recently_used_first() {
+    let mut scans = GpuScans::new(400 * MB);
+    fake_loaded(&mut scans, "old", 100 * MB, 0.0);
+    fake_loaded(&mut scans, "newer", 100 * MB, 10.0);
+    fake_loaded(&mut scans, "shown", 100 * MB, 0.0);
+    fake_loaded(&mut scans, "pinned", 100 * MB, 0.0);
+    scans.pin("pinned");
+    scans.set_budget(250 * MB);              // another program took VRAM at t = 20 s
+    scans.want("shown", 5.0);
+    assert_eq!(scans.plan(20.0).evict, ["old"]);   // one per reading, ignores KEEP_SECONDS
+    scans.want("shown", 5.0);
+    assert_eq!(scans.plan(21.0).evict, ["newer"]); // now 200 MB <= 250 MB
+    scans.want("shown", 5.0);
+    assert!(scans.plan(22.0).evict.is_empty());
 }
 
 #[test]
@@ -245,15 +277,20 @@ fn wanted_scans_load_nearest_first_within_the_budget() {
 }
 
 #[test]
-fn pinned_scans_load_even_over_the_budget() {
-    let mut scans = GpuScans::new(0);
+fn pinned_scans_load_first_but_only_within_the_budget() {
+    let mut scans = GpuScans::new(750 * MB);
     scans.estimate_exact("tree", 700 * MB);
     scans.estimate_exact("site", 100 * MB);
     scans.pin("tree");
     scans.want("site", 5.0);
-    let admission = scans.plan(0.0);
-    assert_eq!(admission.load, ["tree"]);
-    assert!(admission.evict.is_empty());
+    assert_eq!(scans.plan(0.0).load, ["tree"]);   // the site waits for room
+
+    let mut small = GpuScans::new(300 * MB);      // a card too small for the pin
+    small.estimate_exact("tree", 700 * MB);
+    small.estimate_exact("site", 100 * MB);
+    small.pin("tree");
+    small.want("site", 5.0);
+    assert_eq!(small.plan(0.0).load, ["site"]);   // the tree waits (warn once)
 }
 
 #[test]
@@ -312,11 +349,15 @@ Expected: FAIL.
 - [ ] **Step 3: Implement `plan`.** It is the one algorithm the tests leave open:
 
 ```text
+if used > budget:   (the live budget shrank)
+    evict the first loaded scan not wanted this frame, unpinned before pinned,
+    oldest last_used first, ignoring KEEP_SECONDS; one per plan
+    (a reading's numbers lag the GPU frees), and load nothing this plan
 pending = scans not loaded that are pinned or wanted this frame;
           pinned first, then by distance
 for each pending scan:
-    pinned                -> load (warn once if used > budget afterwards)
     fits in budget - used -> load
+    pinned, does not fit  -> waits (warn once per scan); it never evicts others
     otherwise: idle = loaded, not pinned, now - last_used >= KEEP_SECONDS,
                       oldest last_used first
                if freeing all of idle would make it fit:
@@ -338,11 +379,11 @@ Expected: PASS.
 ### Task 5: Loading, residency and the `--vram` wiring
 
 **Files:**
-- Create: `src/assets/gpu_scans/residency.rs`
-- Modify: `src/assets/gpu_scans.rs` (handles, `scene`, `settled`, systems, `GpuScansPlugin`), `src/main.rs` (add `GpuScansPlugin` after the `LaunchOptions` insert), `README.md` ("Graphics quality"), `CLAUDE.md` (Controls)
+- Create: `src/assets/gpu_scans/residency.rs`, `src/assets/gpu_scans/vram.rs`
+- Modify: `src/assets/gpu_scans.rs` (handles, `scene`, `settled`, systems, `GpuScansPlugin`), `src/launch.rs` (`vram_gb` becomes optional), `Cargo.toml` (`ash`, native only), `src/main.rs` (add `GpuScansPlugin` after the `LaunchOptions` insert), `README.md` ("Graphics quality"), `CLAUDE.md` (Controls)
 
 **Interfaces:**
-- Consumes: `GpuScans`, `Admission`, `scan_budget` (Task 4); `uhd`, `UhdFiles`, `RamFill::file_lens` (Task 3); `LaunchOptions` (Task 2).
+- Consumes: `GpuScans` (with `set_budget`, `resident_bytes`), `Admission`, `scan_budget`, `live_scan_budget`, `VramReading` (Task 4); `uhd`, `UhdFiles`, `RamFill::file_lens` (Task 3); `LaunchOptions` (Task 2).
 - Produces:
   - `GpuScans::scene(&self, path: &'static str) -> Option<Handle<WorldAsset>>`: `Some` only once every mesh and image of the scan is prepared in the render world.
   - `GpuScans::settled(&self) -> bool`: no scan loading or waiting to be confirmed, and every pinned scan on the GPU.
@@ -350,7 +391,20 @@ Expected: PASS.
   - `residency::scan_bytes(parts: &ScanParts, meshes: &Assets<Mesh>, images: &Assets<Image>) -> Option<u64>`: `RenderMesh::byte_len` plus `GpuImage::byte_len` (both from `bevy::render::render_asset::RenderAsset`). It returns `None` if any mesh fails `try_attributes()` or any image has `data == None`.
   - `#[derive(Resource, Clone, Default)] residency::ScanResidency(pub Arc<Mutex<Residency>>)`, where `Residency { pub waiting: HashMap<&'static str, ScanParts>, pub ready: HashSet<&'static str> }`. It is inserted into the main and render apps, like the curtain's `PipelineBacklog`.
   - `residency::settle(residency: &mut Residency, mesh_ready: impl Fn(AssetId<Mesh>) -> bool, image_ready: impl Fn(AssetId<Image>) -> bool)`: moves each waiting scan whose parts are all ready into `ready`.
-  - `GpuScansPlugin`: inserts `GpuScans::new(scan_budget(launch.vram_gb))` and `RenderAssetBytesPerFrame::new(32 * 1024 * 1024)`, and adds the systems below.
+  - `GpuScansPlugin`: inserts `GpuScans::new(scan_budget(launch.vram_gb.unwrap_or(DEFAULT_VRAM_GB)))` (the fallback until the first live reading) and `RenderAssetBytesPerFrame::new(32 * 1024 * 1024)`, and adds the systems below.
+  - `LaunchOptions::vram_gb: Option<f32>`: `None` without the flag; a malformed value warns and gives `None`. Update Task 2's tests to match.
+  - `vram::heap_reading(heaps: &[(bool, u64)], budgets: &[u64], usages: &[u64]) -> Option<VramReading>`: pure. `heaps` holds each heap's (device-local, size). It reads the largest device-local heap's budget and usage. It returns `None` when there is no such heap or its budget is 0 (the extension is off).
+  - `vram::read_vram(device: &RenderDevice) -> Option<VramReading>` (native only; `None` on wasm32 and on every backend but Vulkan):
+    - get the hal device with `unsafe { device.wgpu_device().as_hal::<wgpu::hal::api::Vulkan>() }`;
+    - call `shared_instance().raw_instance().get_physical_device_memory_properties2(raw_physical_device(), ..)` with `vk::PhysicalDeviceMemoryBudgetPropertiesEXT` chained (the same call wgpu-hal 30 makes in `vulkan/device.rs` `get_memory_properties`);
+    - pass the result to `heap_reading`.
+
+    Each `unsafe` block gets a `// SAFETY:` comment.
+  - `track_vram_budget(scans: ResMut<GpuScans>, device: Res<RenderDevice>, launch: Res<LaunchOptions>, time: Res<Time<Real>>, next: Local<f32>)` in `First`, run while `AppState::InGame`:
+    - About once a second it calls `read_vram`.
+    - On `Some`, it calls `set_budget(live_scan_budget(reading, scans.resident_bytes(), cap))`, where `cap` is `launch.vram_gb` in bytes.
+    - On `None`, it keeps the fallback.
+    - The first time it logs `info!("VRAM: driver budget {b:.1} GB, game using {u:.1} GB; UHD scans may use {s:.1} GB")`, or `warn!` once that the driver cannot report VRAM and the game assumes `--vram` or 6 GB.
 
 - [ ] **Step 1: Write the failing tests** in `residency.rs`:
 
@@ -371,6 +425,14 @@ fn scan_bytes_counts_vertices_indices_and_texels() {
     let expected = RenderMesh::byte_len(&mesh).unwrap_or(0) + 64;
     // add both to Assets, build ScanParts with their ids
     assert_eq!(scan_bytes(&parts, &meshes, &images), Some(expected as u64));
+}
+
+#[test]
+fn the_largest_device_local_heap_is_read() {
+    // in vram.rs: heaps [(false, 16 GiB host), (true, 4 GiB vram), (true, 256 MiB bar)]
+    // budgets [15, 3.9 GiB, 0.2 GiB], usages [1, 3.0 GiB, 0.1 GiB]
+    // -> Some(VramReading { budget: 3.9 GiB, usage: 3.0 GiB });
+    // the same with the device-local budget 0 -> None; no device-local heap -> None
 }
 
 #[test]
@@ -403,10 +465,11 @@ Expected: PASS.
 - [ ] **Step 5: Document `--vram`.** In `README.md`, next to the run commands, add the spec's "Graphics quality" section with the `--vram` item only:
   - It says the game reads every UHD model once at start and keeps it in RAM, so the first loading screen takes longer.
   - It gives the RAM in GB that Task 9 measures.
-  - It says how many close-up models stay on the GPU, and that stating more memory than the card has can crash the game.
-  - Example: `cargo run --release -- --vram 12`, which combines with `--new`.
+  - It says the game keeps as many close-up models on the GPU as the driver says fit, and frees the least recently seen ones when memory runs short.
+  - It says `--vram <GB>` caps that: use it to leave video memory for other programs, or where the driver cannot report it (then the game assumes 6 GB).
+  - Example: `cargo run --release -- --vram 3`, which combines with `--new`.
 
-  Phase 2 adds `--detail` and the combined example. In `CLAUDE.md` Controls, next to `--new`, add one line: `cargo run --release -- --vram <GB>` (default 6) sets how much of the card the close-up scans may use.
+  Phase 2 adds `--detail` and the combined example. In `CLAUDE.md` Controls, next to `--new`, add one line: `cargo run --release -- --vram <GB>` caps the video memory the game uses (by default, what the driver reports free).
 
 - [ ] **Step 6: Checkpoint:** suggest a commit message (`… load UHD scans render-only from RAM and track their GPU residency`); commit only after the human confirms.
 
@@ -610,12 +673,19 @@ Expected: PASS.
 Expected:
   - The `main app` max is under 33 ms in the walk and drive windows. The garage frame (41 ms at baseline) is lower, with no 1.1 s load before it.
   - No `assets/` path is opened in `walk.strace` or `drive.strace` after the `Entered the Zone` log time. Convert the log's UTC stamp with `date -d … +%s.%N`.
-  - Peak VRAM minus the desktop stays under the 6 GB card.
+  - Peak VRAM minus the desktop stays under the 6 GB card, and the log's `VRAM: driver budget …` line shows the live budget was read (not the fallback).
   - There is no `left the GPU` line followed by the same scan coming back within the run.
+  - **The T1200 replay (Review Focus 6).** Run agentic-tooling `testing/vram-hog`, holding enough of the 2060 that the game's driver budget is about 4 GiB. Replay the user's steps: zoom fully out, in, out again, then free roam over at least three sites under 250 m of zoom. Record nvidia-smi every 500 ms. Expected:
+    - no crash;
+    - the game's usage never rises above its driver budget;
+    - after each zoom-out, the game's VRAM is no higher than after the previous one (no leak);
+    - `left the GPU` lines appear when room runs short.
+
+    Repeat once without the hog, to show the 2060 then keeps more scans.
 
   If a frame is over 33 ms, find its span with `summarize.py --match`. If it is a single upload, note its size: the spec allows splitting only above the 32 MiB own-buffer threshold, so record it for phase 2 and do not widen this phase.
 
-- [ ] **Step 3: Tune the budget.** Find the overview run's `on the GPU … {used} of {budget} GB` line at the VRAM peak. Set `GAME_VRAM_GB` to the peak VRAM minus `used`, rounded up to 0.1 GB, if it differs from Task 1's value by more than 0.2 GB. Then re-run the overview once and confirm.
+- [ ] **Step 3: Tune the fallback budget.** `GAME_VRAM_GB` now only feeds the fallback for hosts whose driver cannot report VRAM. Find the overview run's `on the GPU … {used} of {budget} GB` line at the VRAM peak. Set `GAME_VRAM_GB` to the peak VRAM minus `used`, rounded up to 0.1 GB, if it differs from Task 1's value by more than 0.2 GB. No re-run is needed: the live budget does not use it.
 
 - [ ] **Step 4: Document.**
   - README: the measured RAM figure (peak RSS) and the VRAM size from which every scan stays on the GPU.
