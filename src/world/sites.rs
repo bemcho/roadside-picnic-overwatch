@@ -808,6 +808,17 @@ pub(super) fn uhd_files() -> impl Iterator<Item = &'static str> {
     sites.into_iter().map(|site| site.model().path)
 }
 
+/// How far from the hangar the nearest site showing the scan at `path` stands.
+#[cfg(test)]
+pub(super) fn distance_from_base(path: &str) -> Option<f32> {
+    let hangar = Vec2::from(BASE);
+    LANDMARKS
+        .iter()
+        .filter(|site| site.model().path == path)
+        .map(|site| site.center.distance(hangar))
+        .min_by(f32::total_cmp)
+}
+
 /// Preloads the sites' far stand-ins; their full scans stream in later.
 pub(super) fn preload_sites(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
     for model in &MODELS {

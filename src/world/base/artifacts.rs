@@ -450,11 +450,6 @@ fn spotlight_color(index: usize) -> Color {
     }
 }
 
-/// The showcase artifacts' scenes, for the RAM fill.
-pub(in crate::world) fn uhd_files() -> impl Iterator<Item = &'static str> {
-    ARTIFACT_MODELS.iter().map(|model| model.path)
-}
-
 #[cfg(test)]
 pub(super) fn colliders() -> impl Iterator<Item = (Collider, GlobalTransform)> {
     (0..ARTIFACT_MODELS.len()).map(|index| {

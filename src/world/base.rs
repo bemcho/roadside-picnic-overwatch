@@ -19,7 +19,7 @@ use super::collision::{Collider, Pillar};
 use super::terrain::{BASE, Terrain};
 
 pub(crate) use artifacts::ArtifactDisplay;
-pub(super) use artifacts::{animate_artifacts, stream_full_artifacts, uhd_files};
+pub(super) use artifacts::{animate_artifacts, stream_full_artifacts};
 pub(super) use cutaway::{CutawayMaterial, update_cutaway};
 
 use cutaway::{Cutaway, CutawayShell, RoofFixture};

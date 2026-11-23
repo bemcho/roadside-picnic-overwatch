@@ -2,6 +2,7 @@
 //! `assets/` once behind the splash, so later loads decode from memory and no
 //! file is opened during play. Native only; the web build loads from `assets/`.
 
+use std::collections::VecDeque;
 use std::error::Error;
 use std::io::SeekFrom;
 use std::path::Path;
@@ -20,6 +21,9 @@ use super::UhdFiles;
 
 /// The source's name, as in `ram://models/trees/uhd/tree_big.glb`.
 pub const RAM_SOURCE: &str = "ram";
+
+/// Files read at once: each open file holds an 8 MiB read pipe.
+const READS_IN_FLIGHT: usize = 4;
 
 /// Bytes per GB in the log; GB here are GiB, as in the VRAM budget.
 const GIB: f64 = (1u64 << 30) as f64;
@@ -55,10 +59,11 @@ impl Plugin for RamSourcePlugin {
     }
 }
 
-/// How far the RAM fill has come: the reads still running, the files read
-/// and the first file that could not be read.
+/// How far the RAM fill has come: the files still to read, the reads
+/// running, the files read and the first file that could not be read.
 #[derive(Resource)]
 pub struct RamFill {
+    waiting: VecDeque<&'static str>,
     reads: Vec<Task<FileRead>>,
     file_lens: Vec<(&'static str, u64)>,
     failed: Option<&'static str>,
@@ -66,9 +71,10 @@ pub struct RamFill {
 }
 
 impl RamFill {
-    fn new(reads: Vec<Task<FileRead>>) -> Self {
+    fn new(waiting: VecDeque<&'static str>) -> Self {
         Self {
-            reads,
+            waiting,
+            reads: Vec::new(),
             file_lens: Vec::new(),
             failed: None,
             started: Instant::now(),
@@ -77,7 +83,22 @@ impl RamFill {
 
     /// Every listed file is in RAM.
     pub fn is_full(&self) -> bool {
-        self.reads.is_empty() && self.failed.is_none()
+        self.waiting.is_empty() && self.reads.is_empty() && self.failed.is_none()
+    }
+
+    /// Starts the next files in list order, up to `READS_IN_FLIGHT` at once;
+    /// none after a failure.
+    fn start_reads(&mut self, server: &AssetServer, ram: &Dir) {
+        let pool = IoTaskPool::get();
+        while self.reads.len() < READS_IN_FLIGHT && self.failed.is_none() {
+            let Some(path) = self.waiting.pop_front() else {
+                break;
+            };
+            let server = server.clone();
+            let ram = ram.clone();
+            let read = pool.spawn(async move { read_into_ram(&server, &ram, path).await });
+            self.reads.push(read);
+        }
     }
 
     /// The first file that could not be read.
@@ -94,7 +115,10 @@ impl RamFill {
     #[cfg(test)]
     pub fn test_pending() -> Self {
         let pool = IoTaskPool::get_or_init(bevy::tasks::TaskPool::new);
-        Self::new(vec![pool.spawn(std::future::pending())])
+        Self {
+            reads: vec![pool.spawn(std::future::pending())],
+            ..Self::new(VecDeque::new())
+        }
     }
 
     /// A finished fill, failed on `failed` if given.
@@ -102,33 +126,26 @@ impl RamFill {
     pub fn test_done(failed: Option<&'static str>) -> Self {
         Self {
             failed,
-            ..Self::new(Vec::new())
+            ..Self::new(VecDeque::new())
         }
     }
 }
 
-/// Starts reading every listed UHD file into RAM on the IO pool.
+/// Starts reading the listed UHD files into RAM on the IO pool.
 fn start_ram_fill(
     mut commands: Commands,
     server: Res<AssetServer>,
     files: Res<UhdFiles>,
     ram: Res<RamDir>,
 ) {
-    let pool = IoTaskPool::get();
-    let reads = files
-        .0
-        .iter()
-        .map(|&path| {
-            let server = AssetServer::clone(&server);
-            let ram = ram.0.clone();
-            pool.spawn(async move { read_into_ram(&server, &ram, path).await })
-        })
-        .collect();
-    commands.insert_resource(RamFill::new(reads));
+    let mut fill = RamFill::new(files.0.iter().copied().collect());
+    fill.start_reads(&server, &ram.0);
+    commands.insert_resource(fill);
 }
 
-/// Collects the finished reads and logs the total once every file is in RAM.
-fn collect_ram_files(mut fill: ResMut<RamFill>) {
+/// Collects the finished reads, starts the next files and logs the total once
+/// every file is in RAM.
+fn collect_ram_files(mut fill: ResMut<RamFill>, server: Res<AssetServer>, ram: Res<RamDir>) {
     if fill.reads.is_empty() {
         return;
     }
@@ -150,6 +167,7 @@ fn collect_ram_files(mut fill: ResMut<RamFill>) {
             false
         }
     });
+    fill.start_reads(&server, &ram.0);
     if fill.is_full() {
         let n = fill.file_lens().len();
         let gb = fill.file_lens().iter().map(|(_, len)| len).sum::<u64>() as f64 / GIB;
@@ -294,6 +312,32 @@ mod tests {
         );
         let read = block_on(read_ram(&app, "models/b/uhd/two.glb"));
         assert_eq!(read, b"two");
+    }
+
+    #[test]
+    fn the_fill_reads_a_few_files_at_a_time_in_list_order() {
+        let names: Vec<String> = (0..10).map(|i| format!("models/n/uhd/{i}.glb")).collect();
+        let listed: Vec<&'static str> = names
+            .into_iter()
+            .map(|name| &*Box::leak(name.into_boxed_str()))
+            .collect();
+        let on_disk: Vec<(&str, &[u8])> = listed.iter().map(|&path| (path, &b"x"[..])).collect();
+        let (mut app, _) = filling_app(&on_disk, &listed);
+        update_until(&mut app, |app| {
+            let fill = app.world().resource::<RamFill>();
+            assert!(
+                fill.reads.len() <= READS_IN_FLIGHT,
+                "too many reads at once"
+            );
+            assert!(
+                fill.waiting
+                    .iter()
+                    .eq(&listed[listed.len() - fill.waiting.len()..]),
+                "files start out of list order"
+            );
+            fill.is_full()
+        });
+        assert_eq!(app.world().resource::<RamFill>().file_lens().len(), 10);
     }
 
     #[test]

@@ -285,11 +285,11 @@ fn anchor_distance(tile: IVec2, anchors: &[IVec2]) -> i32 {
 }
 
 /// Every UHD file the game can show, each once, in RAM fill order: the trees,
-/// the hangar's artifacts, the plants, then the sites nearest the hangar first.
+/// the plants, then the sites nearest the hangar first. The hangar's artifacts
+/// keep their preloaded handles until their 4K scans arrive.
 pub(crate) fn uhd_files() -> Vec<&'static str> {
     let mut files = Vec::new();
     let all = canopy::uhd_files()
-        .chain(base::uhd_files())
         .chain(plants::uhd_files())
         .chain(sites::uhd_files());
     for path in all {
@@ -467,6 +467,29 @@ mod tests {
                 crate::assets::TREE_BIRCH_UHD,
                 crate::assets::TREE_DEAD_UHD,
             ]
+        );
+        // Artifacts keep their preloaded handles until their 4K scans arrive.
+        assert!(
+            !files
+                .iter()
+                .any(|path| path.starts_with("models/artifacts/"))
+        );
+    }
+
+    #[test]
+    fn uhd_files_end_with_the_sites_nearest_the_hangar_first() {
+        let files = uhd_files();
+        let first_site = files
+            .iter()
+            .position(|path| sites::distance_from_base(path).is_some())
+            .expect("the sites' scans are listed");
+        let distances: Vec<f32> = files[first_site..]
+            .iter()
+            .map(|path| sites::distance_from_base(path).expect("only sites follow the first"))
+            .collect();
+        assert!(
+            distances.is_sorted(),
+            "sites out of order by distance: {distances:?}"
         );
     }
 
