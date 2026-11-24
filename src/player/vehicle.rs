@@ -466,8 +466,9 @@ struct DriveInput {
 
 /// Slower progress than this counts as blocked for a point-and-click order.
 const AUTOPILOT_MIN_SPEED: f32 = 3.0;
-/// Throttle the autopilot backs away from an obstacle with.
-const AUTOPILOT_REVERSE: f32 = 0.6;
+/// Throttle the autopilot backs away from an obstacle with: full, so the car
+/// clears its back-off distance in about two seconds.
+const AUTOPILOT_REVERSE: f32 = 1.0;
 /// Deceleration assumed when planning the stop at the target, in m/s².
 const AUTOPILOT_BRAKING: f32 = 8.0;
 
@@ -1243,6 +1244,68 @@ mod tests {
         );
         let mut order = app.world_mut().get_mut::<MoveOrder>(player).expect("order");
         assert_eq!(order.steer(at.xz()), None, "arrival clears the order");
+    }
+
+    #[test]
+    fn a_car_finds_its_way_through_three_unplanned_boulders() {
+        use crate::player::orders::{VEHICLE_ARRIVAL, replan_order};
+        use crate::world::{Collider, Pillar};
+
+        static BOULDER: [Pillar; 1] = [Pillar {
+            x: 0.0,
+            z: 0.0,
+            radius: 2.5,
+            bottom: -2.0,
+            top: 3.0,
+        }];
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .insert_resource(Terrain::new())
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, (replan_order, drive_vehicle).chain());
+        let terrain = Terrain::new();
+        let (x, z) = (40.0, -40.0);
+        let vehicle = app
+            .world_mut()
+            .spawn((
+                Vehicle::default(),
+                Transform::from_xyz(x, terrain.height_at(x, z), z),
+            ))
+            .id();
+        // Staggered across the way: dead ahead, then off either side of it.
+        for (dx, dz) in [(0.0, 10.0), (-5.0, 20.0), (5.0, 30.0)] {
+            let (bx, bz) = (x + dx, z + dz);
+            let boulder = Transform::from_xyz(bx, terrain.height_at(bx, bz), bz);
+            app.world_mut()
+                .spawn((Collider(&BOULDER), boulder, GlobalTransform::from(boulder)));
+        }
+        let player = app
+            .world_mut()
+            .spawn((Player::default(), Transform::default(), Driving(vehicle)))
+            .id();
+        // Planned straight through them, as for a leg whose scenery had not
+        // streamed in yet. The hull faces +Z, at the first boulder.
+        let target = Vec2::new(x, z + 45.0);
+        app.world_mut()
+            .get_mut::<MoveOrder>(player)
+            .expect("order")
+            .give(vec![target], Vec2::new(x, z), false, VEHICLE_ARRIVAL);
+        for _ in 0..1200 {
+            app.update();
+        }
+        let at = app
+            .world()
+            .get::<Transform>(vehicle)
+            .expect("car")
+            .translation;
+        assert!(
+            at.xz().distance(target) < VEHICLE_ARRIVAL + 2.0,
+            "car stopped at {at}, target {target}"
+        );
     }
 
     #[test]
