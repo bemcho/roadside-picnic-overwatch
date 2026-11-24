@@ -20,8 +20,11 @@ use crate::world::{
 };
 
 use super::{
-    GRAVITY, Locomotion, Player, STALKER, STANDING, camera::OrbitCamera, freefall,
-    orders::MoveOrder, response,
+    GRAVITY, Locomotion, Player, STALKER, STANDING,
+    camera::OrbitCamera,
+    freefall,
+    orders::{MoveOrder, Turning},
+    response,
 };
 
 const MODEL_SCALE: f32 = 5.2;
@@ -443,6 +446,7 @@ pub(crate) fn drive_vehicle(
                 at.translation.xz().distance(from),
                 AUTOPILOT_MIN_SPEED * dt,
                 dt,
+                Turning::Reversing,
             );
         }
         if occupied && let Some((_, player, _)) = &mut driver {
@@ -511,7 +515,7 @@ fn drive_step(
     terrain: &Terrain,
     input: DriveInput,
     dt: f32,
-    collides: impl FnOnce(&Transform) -> bool,
+    collides: impl Fn(&Transform) -> bool,
 ) -> f32 {
     let from = at.translation.xz();
     let yaw = contact::heading(at.rotation);
@@ -529,58 +533,61 @@ fn drive_step(
             dt,
         );
     }
-    let mut turn = if grounded {
+    let turn = if grounded {
         vehicle.steer.tan() * vehicle.speed * dt / WHEELBASE
     } else {
         0.0
     };
-    let next_yaw = Quat::from_rotation_y(turn) * yaw;
-    let delta = ((next_yaw * FORWARD).xz() * vehicle.speed + vehicle.slide) * dt;
-    let mut next = *at;
-    let mut support = contact;
-    if delta.length_squared() > 0.0 {
+    let pushing = vehicle.speed != 0.0 || vehicle.slide != Vec2::ZERO;
+    // The hull after a step turning it by `turn`, unless a bank too steep to
+    // grip, the map's edge, deep water or a solid stops it there.
+    let step = |turn: f32| {
+        let heading = Quat::from_rotation_y(turn) * yaw;
+        let delta = ((heading * FORWARD).xz() * vehicle.speed + vehicle.slide) * dt;
         let to = from + delta;
-        let destination = sample(to, next_yaw);
+        let destination = sample(to, heading);
         let climbs_bank =
-            grounded && destination.height - support.height > MAX_GRIP_GRADE * delta.length();
-        if !climbs_bank
-            && to.abs().max_element() <= TERRAIN_HALF_SIZE - HALF_EXTENTS.length()
-            && terrain.can_wade(from, to, FORD_DEPTH)
+            grounded && destination.height - contact.height > MAX_GRIP_GRADE * delta.length();
+        if !pushing
+            || climbs_bank
+            || to.abs().max_element() > TERRAIN_HALF_SIZE - HALF_EXTENTS.length()
+            || !terrain.can_wade(from, to, FORD_DEPTH)
         {
-            next.translation.x = to.x;
-            next.translation.z = to.y;
-            support = destination;
+            return None;
         }
-    }
-    let mut moved = next.translation.xz() != from;
-    if !moved {
-        turn = 0.0;
-    }
-    let (mut vy, mut landed) = settle(
-        &mut next,
-        at,
-        &support,
-        vehicle.vertical_speed,
-        grounded,
-        turn,
-        dt,
-    );
-    if moved && collides(&next) {
-        next = *at;
-        support = contact;
-        (vy, landed) = settle(
+        let mut next = *at;
+        next.translation.x = to.x;
+        next.translation.z = to.y;
+        let settled = settle(
             &mut next,
             at,
-            &support,
+            &destination,
+            vehicle.vertical_speed,
+            grounded,
+            turn,
+            dt,
+        );
+        (!collides(&next)).then_some((next, destination, settled, turn))
+    };
+    // A turning hull can swing a corner into a rock (or up a bank) it could
+    // still back or pull straight away from: then the step goes without the
+    // turn.
+    let stepped = step(turn).or_else(|| (turn != 0.0).then(|| step(0.0)).flatten());
+    let moved = stepped.is_some();
+    let (next, support, (vy, landed), turn) = stepped.unwrap_or_else(|| {
+        let mut next = *at;
+        let settled = settle(
+            &mut next,
+            at,
+            &contact,
             vehicle.vertical_speed,
             grounded,
             0.0,
             dt,
         );
-        moved = false;
-        turn = 0.0;
-    }
-    if !moved && delta.length_squared() > 0.0 {
+        (next, contact, settled, 0.0)
+    });
+    if !moved && pushing {
         vehicle.speed = 0.0;
         vehicle.slide = Vec2::ZERO;
     }
@@ -1244,6 +1251,94 @@ mod tests {
         );
         let mut order = app.world_mut().get_mut::<MoveOrder>(player).expect("order");
         assert_eq!(order.steer(at.xz()), None, "arrival clears the order");
+    }
+
+    #[test]
+    fn a_boxed_in_car_backs_and_fills_its_way_out() {
+        use crate::player::orders::{VEHICLE_ARRIVAL, replan_order};
+        use crate::world::{Collider, Pillar};
+
+        static BOULDER: [Pillar; 1] = [Pillar {
+            x: 0.0,
+            z: 0.0,
+            radius: 2.5,
+            bottom: -2.0,
+            top: 3.0,
+        }];
+        const fn post(x: f32) -> Pillar {
+            Pillar {
+                x,
+                z: 0.0,
+                radius: 0.6,
+                bottom: -2.0,
+                top: 3.0,
+            }
+        }
+        static WALL: [Pillar; 13] = [
+            post(-6.0),
+            post(-5.0),
+            post(-4.0),
+            post(-3.0),
+            post(-2.0),
+            post(-1.0),
+            post(0.0),
+            post(1.0),
+            post(2.0),
+            post(3.0),
+            post(4.0),
+            post(5.0),
+            post(6.0),
+        ];
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .insert_resource(Terrain::new())
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, (replan_order, drive_vehicle).chain());
+        let terrain = Terrain::new();
+        let (x, z) = (40.0, -40.0);
+        let vehicle = app
+            .world_mut()
+            .spawn((
+                Vehicle::default(),
+                Transform::from_xyz(x, terrain.height_at(x, z), z),
+            ))
+            .id();
+        // A boulder 0.3 m off the nose and a wall about a meter behind the tail.
+        let half_length = HALF_EXTENTS.y;
+        for (collider, dz) in [
+            (&BOULDER[..], half_length + 0.3 + 2.5),
+            (&WALL[..], -(half_length + 1.0 + 0.6)),
+        ] {
+            let place = Transform::from_xyz(x, terrain.height_at(x, z + dz), z + dz);
+            app.world_mut()
+                .spawn((Collider(collider), place, GlobalTransform::from(place)));
+        }
+        let player = app
+            .world_mut()
+            .spawn((Player::default(), Transform::default(), Driving(vehicle)))
+            .id();
+        // Planned straight through the boulder, as if it had not streamed in.
+        let target = Vec2::new(x, z + 25.0);
+        app.world_mut()
+            .get_mut::<MoveOrder>(player)
+            .expect("order")
+            .give(vec![target], Vec2::new(x, z), false, VEHICLE_ARRIVAL);
+        for _ in 0..2400 {
+            app.update();
+        }
+        let at = app
+            .world()
+            .get::<Transform>(vehicle)
+            .expect("car")
+            .translation;
+        assert!(
+            at.xz().distance(target) < VEHICLE_ARRIVAL + 2.0,
+            "car stopped at {at}, target {target}"
+        );
     }
 
     #[test]

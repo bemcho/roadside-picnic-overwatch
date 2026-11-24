@@ -44,8 +44,12 @@ the mover stands each time a stop is reached, and when the mover stalls (no
 progress for 0.8 s). After a stall the mover backs away 6 m first (stopping
 sooner if it backs into something, and after 4 s at most): the car reverses at
 full throttle, swinging its nose toward the new leg, since it cannot turn in
-place against a rock. An order makes three such attempts; a fourth stall drops
-it. The stop
+place against a rock. The attempts share 18 m of back-off travel: three full
+6 m ones, or, as a car's heading turns with the distance it travels (about
+0.19 rad a meter at full lock), proportionally more shorter ones where less room
+is left behind it: 18 with 1 m, at most 60 (each charged at least 0.3 m). The
+stalker turns on the spot, so each of their attempts costs the full 6 m. A
+stall with the travel spent drops the order. The stop
 rings pulse (1.4 s, swelling 25%). A thin line (`player/route.rs`: a gizmo group 2 px wide with a
 small depth bias, in the rings' colour) traces the exact route from the stalker, or
 the car they drive, through every pathfound waypoint still ahead to the last ring:
@@ -460,6 +464,9 @@ the stalker stands still.
   Throttle and steering ease in, steering gets gentler at speed, and the chase
   camera damps vehicle movement and zoom without delaying mouse orbit.
   When throttle is held while blocked, the tires spin without moving the hull.
+  A step whose turn would swing a corner into a solid or up a bank goes
+  straight instead, if that is free, so a car nosed against a rock can still
+  back out at full lock.
   Slopes beyond tire grip cause downhill sliding; the car and stalker fall at 9.81 m/s².
   `tools/prepare_vehicle_asset.py` bakes the GLB's 3072 × 2048 PBR atlases from
   four texture sheets, with matte paint, dark trim, louver and lamp details,
