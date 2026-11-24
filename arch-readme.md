@@ -658,7 +658,7 @@ Useful query relationships:
   `water_depth_at` around the `Player` (wider while `Driving`), widens it to
   a minimum size in screen pixels, and pulses it while the player's ground
   position stays put. Its material's `depth_bias` is relative to depth on the
-  float depth buffer, so it shows over road slabs at every zoom.
+  float depth buffer, so it shows over the road surface at every zoom.
 
 ## Audio
 

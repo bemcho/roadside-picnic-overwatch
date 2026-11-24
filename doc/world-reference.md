@@ -40,7 +40,7 @@ in `drive_vehicle`. Shift-clicks append legs pathfound from the last stop
 with an `InstitutePass` through the Institute gate's; each lifts as it arrives. A yellow ring (`ui/locator.rs`) lies on the ground around
 the stalker, or the car they drive, at every zoom: its vertices follow the
 rendered terrain (or the water when wading), it never shrinks under 34 px wide,
-a relative depth bias keeps it over road slabs and stones, and it pulses while
+a relative depth bias keeps it over the road surface and stones, and it pulses while
 the stalker stands still.
 
 ## Procedural content

@@ -149,7 +149,9 @@ fn stochastic(
     return mean + (blend - mean) / sqrt(energy);
 }
 
-// The averages of the grain maps, from the last mip level.
+// The averages of the grain maps, from the last mip level. They are not computed here: the shipped KTX2
+// maps already carry each average as their 1 x 1 mip (baked once by `ctt`), so this is one texel fetch,
+// and no per-map constant has to be kept in step with the bake (Precalculate once).
 fn map_mean(tex: texture_2d<f32>) -> vec4<f32> {
     return textureSampleLevel(tex, ground_sampler, vec2<f32>(0.5), 16.0);
 }
