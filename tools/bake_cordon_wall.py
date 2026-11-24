@@ -1,19 +1,20 @@
 """Bake the cordon wall: a box plus razor-wire strips that carry the UHD scan's detail (headless Blender).
 
-The Perimeter repeats one wall panel thousands of times, so the 2,875-triangle scanned panel is
-replaced by an 84-vertex box and two wire strips whose maps are baked from the UHD scan. Run it
+The Perimeter repeats one wall panel thousands of times, so the 2,875-triangle scanned panel it used to
+repeat is replaced by an 84-vertex box and two wire strips whose maps are baked from the UHD scan. Run it
 from the repository root (Blender 4.5; `ctt`, `node` and the glb-bake-tangents tool must exist;
 about 3 minutes with a GPU):
 
     BLENDER=~/.cache/blender/blender-4.5.16-linux-x64/blender
     "$BLENDER" -b --factory-startup --python-exit-code 1 --python tools/bake_cordon_wall.py -- \
         ~/Projects/agentic/RoadSide-Picnic/models/sites/uhd/site-cordon-wall.glb \
-        assets/models/sites/medium/site-cordon-wall.glb assets/models/sites/medium assets/textures/cordon \
+        assets/models/sites/medium assets/textures/cordon \
         [--sources ~/Projects/agentic/RoadSide-Picnic/textures/cordon-wall] [--span-px 2048]
 
-Arguments: the UHD scan, the current medium panel (it only defines the panel frame: its lowest
-point and centre), the folder for the two GLBs and the folder for the depth map. Every
-intermediate PNG goes to --sources (the assets workspace, not the game repo).
+Arguments: the UHD scan, the folder for the two GLBs and the folder for the depth map. Every
+intermediate PNG goes to --sources (the assets workspace, not the game repo). The panel frame is the
+old medium panel's (archived, `assets/models/sites/medium/site-cordon-wall.glb`): its lowest point is
+y = 0 and its centre x = z = 0.
 
 Outputs
   site-cordon-wall-box.glb   one primitive, one material (base colour + normal map, baked tangents).
@@ -551,16 +552,16 @@ def import_glb(path):
     return imported[0]
 
 
-def stand_scan_on_panel_frame(scan, panel):
-    """Turn the scan along x, measure its wall body, and shift it onto the panel's foot and centre."""
-    panel_points = to_panel(vertex_coordinates(panel.data))
-    panel_foot = panel_points[:, 1].min()
-    panel_centre = (panel_points.min(axis=0) + panel_points.max(axis=0)) / 2
+def scan_shift(wall):
+    """The move onto the panel frame: the scan's lowest point to y = 0 and its wall body's centre to x = z = 0."""
+    return (-wall.centre_x, -wall.min_y, -wall.centre_z)
+
+
+def stand_scan_on_panel_frame(scan):
+    """Turn the scan along x, measure its wall body, and stand it on the panel frame."""
     scan.data.transform(Matrix.Rotation(math.radians(90), 4, "Z"))  # (x, y) -> (-y, x): length onto x
     wall = measure_wall(to_panel(vertex_coordinates(scan.data)))
-    shift = (panel_centre[0] - wall.centre_x, panel_foot - wall.min_y, panel_centre[2] - wall.centre_z)
-    scan.data.transform(Matrix.Translation(to_blender(shift)))
-    bpy.data.objects.remove(panel)
+    scan.data.transform(Matrix.Translation(to_blender(scan_shift(wall))))
     return wall
 
 
@@ -929,7 +930,6 @@ def finish_glbs(box_glb, wire_glb):
 def parse_args():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("scan", type=Path, help="the UHD cordon wall scan")
-    parser.add_argument("panel", type=Path, help="the current medium panel, for the panel frame")
     parser.add_argument("models", type=Path, help="folder for the box and wire GLBs")
     parser.add_argument("textures", type=Path, help="folder for wall_depth.ktx2")
     parser.add_argument("--sources", type=Path, default=DEFAULT_SOURCES, help="folder for the intermediate PNGs")
@@ -964,8 +964,8 @@ def main():
     scene.cycles.use_denoising = False
     device = use_gpu(scene)
 
-    scan, panel = import_glb(args.scan), import_glb(args.panel)
-    wall = stand_scan_on_panel_frame(scan, panel)
+    scan = import_glb(args.scan)
+    wall = stand_scan_on_panel_frame(scan)
     shape = wire_shape(wall)
 
     size, islands = box_layout(wall, args.span_px)

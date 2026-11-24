@@ -79,9 +79,12 @@ pub const VEHICLE_CRAWLER: &str = "models/vehicles/medium/vehicle-crawler.glb";
 pub const VEHICLE_QUARRY: &str = "models/vehicles/medium/vehicle-quarry.glb";
 pub const VEHICLE_SEDAN: &str = "models/vehicles/medium/vehicle-sedan.glb";
 pub const VEHICLE_TRAIN: &str = "models/vehicles/medium/vehicle-train.glb";
-/// The long walls repeat one panel thousands of times, so they keep the medium
-/// model; every standalone site uses its UHD scan.
-pub const SITE_CORDON_WALL: &str = "models/sites/medium/site-cordon-wall.glb";
+/// The long walls repeat one baked box thousands of times: its colour and normal
+/// carry the UHD scan's relief, `CORDON_WALL_DEPTH` shifts it with the view, and
+/// the razor wire is a separate cut-out strip (`tools/bake_cordon_wall.py`).
+pub const CORDON_WALL_BOX: &str = "models/sites/medium/site-cordon-wall-box.glb";
+pub const CORDON_WALL_WIRE: &str = "models/sites/medium/site-cordon-wall-wire.glb";
+pub const CORDON_WALL_DEPTH: &str = "textures/cordon/wall_depth.ktx2";
 pub const SITE_CHECKPOINT: &str = "models/sites/uhd/site-checkpoint.glb";
 pub const HANGAR_LAB: &str = "models/props/medium/lab.glb";
 pub const HANGAR_MAP_BOARD: &str = "models/props/medium/mapboard.glb";

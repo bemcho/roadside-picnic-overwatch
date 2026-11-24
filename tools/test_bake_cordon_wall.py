@@ -73,6 +73,16 @@ class MeasureTests(unittest.TestCase):
         found = wall_tool.plateau_heights(x, y, outer > 0.6 * HALF, TOP)
         self.assertLess(np.abs(found - y).max(), 0.002)
 
+    def test_the_scan_is_shifted_onto_the_panel_frame(self):
+        """The panel frame has the foot at y = 0 and the wall body at x = z = 0 (the old panel's own)."""
+        scan = synthetic_scan()
+        wall = wall_tool.measure_wall(scan)
+        shifted = scan + np.array(wall_tool.scan_shift(wall), dtype=np.float32)
+        self.assertAlmostEqual(float(shifted[:, 1].min()), 0.0, places=6)
+        again = wall_tool.measure_wall(shifted)
+        self.assertAlmostEqual(again.centre_x, 0.0, places=5)
+        self.assertAlmostEqual(again.centre_z, 0.0, places=5)
+
 
 class LayoutTests(unittest.TestCase):
     wall = wall_tool.Wall(

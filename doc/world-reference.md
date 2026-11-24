@@ -197,11 +197,37 @@ the stalker stands still.
   follow the rendered terrain and stay above the water. Wall meshes and solid collision stream in nearby terrain tiles.
   Keep the staging area and driveway clear; the tree and bush shelterbelt is
   concentrated behind the hangar and along the sides.
-  The wall repeats one panel thousands of times, so it keeps its medium model:
-  simplify with glTF Transform `simplify --ratio 0.24 --error 0.016`, resize to
-  1536 px, bake tangents with `--vertex-layout separate`, then ground with
-  `tools/prepare_plant_asset.py`. Both checkpoints use the UHD scan; re-measure
-  `src/world/pillars/uhd_checkpoint.rs` with `tools/sample_landmark_ground.py`.
+  The wall repeats one baked box thousands of times: an 84-vertex box
+  (`site-cordon-wall-box.glb`: scan colour and normal map, baked tangents, no
+  bottom), a depth map (`textures/cordon/wall_depth.ktx2`, linear BC7) and a
+  razor-wire strip (`site-cordon-wall-wire.glb`, cut-out and double-sided), all
+  baked from the UHD scan by `tools/bake_cordon_wall.py` (Blender 4.5, about 3
+  minutes; its docstring has the options and the measurements it prints):
+
+  ```bash
+  "$BLENDER" -b --factory-startup --python-exit-code 1 --python tools/bake_cordon_wall.py -- \
+    ~/Projects/agentic/RoadSide-Picnic/models/sites/uhd/site-cordon-wall.glb \
+    assets/models/sites/medium assets/textures/cordon
+  ```
+
+  The box is 0.147 model units either side of its line (`WALL_HALF_THICKNESS`,
+  1.09 m at `WALL_HEIGHT_SCALE` 7.4: a wall 2.2 m thick and 3.04 m high, the
+  Perimeter three times that high) and its top is `WALL_TOP`; remeasure both
+  when the bake changes. `WallModel::batch` stretches each copy along its run,
+  shears it onto the ground and shears its tangents with it, so the box's
+  relief mapping (`ParallaxMappingMethod::Relief`, `PARALLAX_DEPTH_SCALE`) does
+  not swim on sloped ground. Panels in a run meet end to end; where two runs
+  meet in a corner (`end_lap`) the earlier one laps `CORNER_LAP` (the half
+  thickness) past the other's line and the later one stops that far short, so the
+  outer corner closes and no two faces share a plane. A gate's or the checkpoint
+  gap's end, and a run ending against the middle of another (the Perimeter on the
+  map-edge wall), stops where it is. A post every 0.77 m (`WALL_PILLAR`, radius
+  1.15 m, up to the box's top) fences the wall so a body stops at its visible
+  face; the crawl hole's floor (2 m across) is wider than the wall. Scenery keeps
+  `WALL_HALF_WIDTH` plus its clearance from the wall's line. Both checkpoints use
+  the UHD scan; re-measure `src/world/pillars/uhd_checkpoint.rs` with
+  `tools/sample_landmark_ground.py`. The old 2,875-triangle panel is in the
+  assets archive zip.
 - **Sites** (`src/world/sites.rs`): the Harmont map from `doc/` (map, layout
   notes and landmark CSV) as one registry of 32 placements of the UHD landmark
   and site scans. `src/world/map.rs` lays `doc/Roadside_map.jpg` over the world
