@@ -293,7 +293,16 @@ the stalker stands still.
   Where the mask's alpha is set, the shader paints four maps baked from one
   photo by `tools/prepare_asphalt_textures.py` (`assets/textures/terrain/asphalt_{albedo,normal,surface,crack}.ktx2`,
   bindings 110-113: 184 px native crops, BC7 with mip chains) over the tar.
-  The mips are the distance versions; there is no second set.
+  The mips are the distance versions; there is no second set. Rebuild the maps
+  from the photo kept in the assets workspace (needs Pillow, numpy and the `ctt`
+  CLI; the PNGs they are encoded from go to `--sources`):
+
+  ```bash
+  python3 tools/prepare_asphalt_textures.py \
+    ~/Projects/agentic/RoadSide-Picnic/textures/asphalt/image_5b974df1.jpg \
+    assets/textures/terrain --sources ~/Projects/agentic/RoadSide-Picnic/textures/asphalt
+  ```
+
   - *Grain:* tiled every `ASPHALT_TILE` (1.2 m). Each lattice point of the
     tiling gets a hashed offset into the map and the four around a pixel blend
     bilinearly, rescaled to the map's average (`map_mean`) so that neither a
@@ -494,6 +503,12 @@ the stalker stands still.
   1M-vertex scan): after a re-export, bake them with
   `python3 ~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py <glb>...`
   (it works on the compressed file and keeps its KTX2 images byte-identical).
+  The standalone maps that are not in a GLB (the four asphalt maps,
+  `assets/textures/terrain/asphalt_*.ktx2`, from `tools/prepare_asphalt_textures.py`,
+  and the wall's depth map, `assets/textures/cordon/wall_depth.ktx2`, from
+  `tools/bake_cordon_wall.py`) are encoded with the same `ctt` presets: sRGB BC7 for
+  the colour, linear BC7 for the data maps, full mip chains; their PNG sources stay
+  in the assets workspace.
 - **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
   behind the splash the `ram://` asset source reads every streamed UHD scan
   (the 40 in `world::uhd_files`: the three trees, the plants, then the sites

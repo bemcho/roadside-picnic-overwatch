@@ -6,7 +6,8 @@ upsampled, so MAP_SIZE x MAP_SIZE texels, one photographed pixel or more each) a
 as KTX2 with a full mip chain (`ctt` presets from compress_glb_textures.py); the PNGs they
 were encoded from stay in the assets workspace.
 
-    python3 tools/prepare_asphalt_textures.py ~/Downloads/image_5b974df1.jpg \
+    python3 tools/prepare_asphalt_textures.py \
+        ~/Projects/agentic/RoadSide-Picnic/textures/asphalt/image_5b974df1.jpg \
         assets/textures/terrain --sources ~/Projects/agentic/RoadSide-Picnic/textures/asphalt
 
 Output maps. Tangent x runs along u (right) and y UP the texture, against the image rows
