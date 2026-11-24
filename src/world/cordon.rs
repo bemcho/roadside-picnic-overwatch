@@ -110,6 +110,8 @@ const WALL_HALF_WIDTH: f32 = WALL_HALF_THICKNESS * WALL_HEIGHT_SCALE;
 const CORNER_LAP: f32 = WALL_HALF_WIDTH;
 /// How close two runs' ends are to meet in a corner.
 const CORNER_REACH: f32 = 0.5;
+/// What a ground patch reaches past the model's farthest vertices, in meters.
+const PATCH_MARGIN: f32 = 0.05;
 /// How far the depth map shifts the box's texture, in UV units (the atlas spans
 /// about one panel per u). The scan's relief is only millimetres deep, so this
 /// exaggerates it to a few centimetres at 45 degrees; tuned by eye: 0.02 smeared
@@ -878,6 +880,8 @@ struct WallModel {
     tangents: Vec<[f32; 4]>,
     uv: Vec<[f32; 2]>,
     indices: Vec<u32>,
+    /// How far the model reaches along x and across z of its line, in model units.
+    half_size: Vec2,
 }
 
 impl WallModel {
@@ -901,10 +905,14 @@ impl WallModel {
             None => Vec::new(),
             Some(_) => unreachable!("the wall GLBs have float tangents"),
         };
+        let half_size = positions.iter().fold(Vec2::ZERO, |reach, &[x, _, z]| {
+            reach.max(Vec2::new(x, z).abs())
+        });
         Self {
             positions: positions.clone(),
             normals: normals.clone(),
             tangents,
+            half_size,
             uv: uv.clone(),
             indices: mesh
                 .indices()
@@ -933,8 +941,10 @@ impl WallModel {
             let total = panel.length + panel.laps[0] + panel.laps[1];
             let scale_x = total / PANEL_SPAN;
             let shift = (panel.laps[1] - panel.laps[0]) * 0.5;
-            let reach = panel.along.abs() * (0.5 * total + shift.abs() + 0.05)
-                + panel.across().abs() * (WALL_HALF_WIDTH + 0.05);
+            // The ground under every vertex, whatever this model's width.
+            let reach = panel.along.abs()
+                * (self.half_size.x * scale_x + shift.abs() + PATCH_MARGIN)
+                + panel.across().abs() * (self.half_size.y * WALL_HEIGHT_SCALE + PATCH_MARGIN);
             let floor = GroundPatch::new(terrain, panel.center - reach, panel.center + reach);
             let rise = WALL_HEIGHT_SCALE * panel.rise;
             let offset = positions.len() as u32;
@@ -1040,6 +1050,14 @@ impl GroundPatch {
     fn sample(&self, at: Vec2) -> GroundSample {
         let grid = at / SPACING - self.corner;
         let cell = grid.floor().as_uvec2();
+        // Past the patch's low side the cell saturates to 0, and past its high side along x
+        // the next row's vertices are read: both silently wrong.
+        debug_assert!(
+            grid.cmpge(Vec2::ZERO).all()
+                && cell.x as usize + 1 < self.width
+                && (cell.y as usize + 1) * self.width < self.vertices.len(),
+            "{at} lies outside its ground patch"
+        );
         let uv = grid - cell.as_vec2();
         let i = cell.y as usize * self.width + cell.x as usize;
         let (b, c) = (self.vertices[i + 1], self.vertices[i + self.width]);
@@ -1103,13 +1121,19 @@ mod tests {
             .collect()
     }
 
-    /// A stand-in for the baked box: the panel's width, the wall's thickness, 0.4 high, with tangents.
-    fn test_wall() -> WallModel {
-        let mesh = Mesh::from(Cuboid::new(PANEL_SPAN, 0.4, 2.0 * WALL_HALF_THICKNESS))
+    /// A stand-in for a baked model: the panel's width, `half_thickness` either side of the
+    /// line, 0.4 high, with tangents.
+    fn test_model(half_thickness: f32) -> WallModel {
+        let mesh = Mesh::from(Cuboid::new(PANEL_SPAN, 0.4, 2.0 * half_thickness))
             .translated_by(Vec3::Y * 0.2)
             .with_generated_tangents()
             .expect("a cuboid has normals and UVs");
         WallModel::new(&mesh)
+    }
+
+    /// A stand-in for the baked box.
+    fn test_wall() -> WallModel {
+        test_model(WALL_HALF_THICKNESS)
     }
 
     fn float3(mesh: &Mesh, attribute: MeshVertexAttribute) -> Vec<Vec3> {
@@ -1229,6 +1253,30 @@ mod tests {
             float3(&mesh, Mesh::ATTRIBUTE_POSITION).len(),
             wire.positions.len() * panels.len()
         );
+    }
+
+    #[test]
+    fn a_model_wider_than_the_box_stays_inside_its_ground_patch() {
+        let terrain = Terrain::new();
+        // The razor wire's flat strip reaches 0.16246 either side of the line, past the box's 0.147.
+        let wire = test_model(0.16246);
+        let reach = 0.16246 * WALL_HEIGHT_SCALE;
+        // Each panel puts one outer vertex of the strip 3 cm outside a line of the ground's grid
+        // (on its low or high side), which a patch sized for the box (1.138 m) stops short of.
+        let past = |side: f32| 30.0 * SPACING + side * (0.03 - reach);
+        for along in [Vec2::X, Vec2::Y] {
+            for side in [-1.0, 1.0] {
+                let panel = Panel {
+                    center: along.abs() * 100.0 + along.perp().abs() * past(side),
+                    along,
+                    length: 7.4,
+                    rise: 1.0,
+                    laps: [0.0; 2],
+                };
+                // Sampling outside the patch panics or reads another cell.
+                wire.batch(&terrain, Vec2::ZERO, &[panel]);
+            }
+        }
     }
 
     /// The panel of `run` that ends at `point`, and which end that is (0 the start, 1 the end).
@@ -1663,6 +1711,7 @@ mod tests {
                 tangents,
                 uv: vec![[0.0, 0.0]; 3],
                 indices: vec![0, 1, 2],
+                half_size: Vec2::new(0.4, 0.0),
             },
             paint: Handle::default(),
         };
