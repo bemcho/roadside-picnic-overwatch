@@ -1,9 +1,10 @@
 """Bake the old-asphalt maps from one oblique photo (requires Pillow, numpy and the ctt CLI).
 
 The terrain shader paints every `Surface::Asphalt` road with a tiling grain set plus
-scattered crack decals. Each map is 512 x 512 and ships as KTX2 with a full mip chain
-(`ctt` presets from compress_glb_textures.py); the PNGs they were encoded from stay in
-the assets workspace.
+scattered crack decals. Every map is a native crop of the photo (Ruling A9: nothing is
+upsampled, so MAP_SIZE x MAP_SIZE texels, one photographed pixel or more each) and ships
+as KTX2 with a full mip chain (`ctt` presets from compress_glb_textures.py); the PNGs they
+were encoded from stay in the assets workspace.
 
     python3 tools/prepare_asphalt_textures.py ~/Downloads/image_5b974df1.jpg \
         assets/textures/terrain --sources ~/Projects/agentic/RoadSide-Picnic/textures/asphalt
@@ -30,32 +31,44 @@ from compress_glb_textures import ctt_arguments
 from prepare_terrain_textures import tileable
 
 # Photo pixel coordinates (image_5b974df1.jpg, 1408 x 768: sharp in its lower half).
-# The ground quad that is flattened, clockwise from the top left. Its sides converge
-# upward because the road recedes from the camera.
-SHARP_QUAD = ((211, 340), (1197, 340), (1408, 768), (0, 768))
-RECTIFIED_SIZE = (1408, 1000)
+# The road is seen obliquely, so a photo row covers about 1.5 to 2 times more ground than a
+# photo column here, and the farther rows hold less detail still. The strip flattened here
+# is the nearest ground that is still wide enough for the gravel and the long thin crack:
+# photo rows 533-762, columns 600-1397 at the bottom (a few pixels inside the photo, where
+# resampling needs neighbours), clockwise from the top left. Its sides converge upward.
+SHARP_QUAD = ((617, 533), (1286, 533), (1397, 762), (600, 762))
+# 0.42 output pixels per ground unit of the earlier 1408 x 1000 flattening of rows 340-768,
+# which made pebbles round. At that scale the strip's far edge (the worst row) steps 1.02
+# photo pixels per output pixel along the rows (2 along the columns), so rectify never
+# upsamples; test_prepare_asphalt_textures.py measures it.
+RECTIFIED_SIZE = (336, 189)
+MAP_SIZE = 184  # px: the native crop of every map, a multiple of 4 for BC7 blocks
 # Boxes in the rectified image, (left, top, right, bottom).
-GRAIN_BOX = (1008, 596, 1408, 996)  # crack-free gravel at the bottom right (about native resolution)
-CRACK_BOX = (780, 0, 1180, 400)  # the long thin crack that runs down from the top edge
+GRAIN_BOX = (152, 3, 152 + MAP_SIZE, 3 + MAP_SIZE)  # crack-free gravel at the bottom right
+CRACK_BOX = (36, 2, 36 + MAP_SIZE, 2 + MAP_SIZE)  # the long thin crack, running down through it
 
-MAP_SIZE = 512
+# The pixel constants below are the values tuned at the first 512 px maps (1.28 output
+# pixels per ground unit) times 0.33, the ratio to the 0.42 of the native strip, so each
+# keeps its width in real size: the old value is in the comment.
 LIGHTING_BLUR = 0.15  # sigma of the wide blur that is divided out, as a fraction of the width
 ALBEDO_LUMINANCE = 0.085  # mean linear luminance: weathered, dark asphalt
 ALBEDO_CHROMA = 0.5  # share of the photo's colour kept; the tan pebbles would repeat like landmarks
-HEIGHT_BLUR = 10  # px (Gaussian sigma); the grain relief is what stays above this blur
+HEIGHT_BLUR = 3.3  # px (Gaussian sigma); the grain relief is what stays above this blur (was 10)
 HEIGHT_SIGMAS = 3.0  # luminance deviations that span the height range
-CAVITY_BLUR = 3
+CAVITY_BLUR = 1.0  # (was 3)
 AO_STRENGTH = 0.65
 ROUGHNESS = (0.6, 0.95)  # tar binder .. dusty stone
-NORMAL_STRENGTH = 6.0  # normal slope per unit of height change per pixel
-CRACK_SMOOTH = 3  # px (sigma); blurs away the narrow gaps between stones, so only a wide dark line is left
-CRACK_DARK = 22  # luminance (0..255) below which smoothed pixels belong to a crack
-CRACK_GROW = 3  # px; width of the dilation filter (3 grows the kept crack 1 px each side)
-DEPTH_BLUR = 3  # px (sigma); the depth is the mask blurred
+NORMAL_STRENGTH = 2.0  # normal slope per unit of height change per pixel (was 6)
+CRACK_SMOOTH = 1.5  # px (sigma); blurs away the narrow gaps between stones, so only a wide dark line is left (was 3;
+# the rescaled 1.0 no longer blurs a 2 px gap away at this density)
+CRACK_DARK = 24  # luminance (0..255) below which smoothed pixels belong to a crack
+CRACK_JOIN = 7  # px; width of the dilation filter that joins the crack's broken pieces (3 px each side); the mask
+# is shrunk back by CRACK_JOIN - 2, so it keeps the old net growth of 1 px each side (was a 3 px dilation)
+DEPTH_BLUR = 1.0  # px (sigma); the depth is the mask blurred (was 3)
 DEPTH_ALPHA = 0.5  # depth at which the mask is fully opaque
-CRACK_NORMAL_STRENGTH = 10.0
-DECAL_MARGIN = 12  # px kept fully transparent at the decal's border
-DECAL_FADE = 36  # px over which the crack fades in from the margin
+CRACK_NORMAL_STRENGTH = 3.3  # (was 10)
+DECAL_MARGIN = 4  # px kept fully transparent at the decal's border: one BC7 block (was 12)
+DECAL_FADE = 12  # px over which the crack fades in from the margin (was 36)
 
 KTX2_QUALITY = "slow"
 LUMINANCE = np.array([0.2126, 0.7152, 0.0722], np.float32)
@@ -186,6 +199,11 @@ def dilate(mask, size):
     return np.asarray(image.filter(ImageFilter.MaxFilter(size | 1))) > 0
 
 
+def erode(mask, size):
+    image = Image.fromarray(mask.astype(np.uint8) * 255, "L")
+    return np.asarray(image.filter(ImageFilter.MinFilter(size | 1))) > 0
+
+
 def border_window(size):
     """0 within DECAL_MARGIN px of the border, easing to 1 DECAL_FADE px further in."""
     edge = np.minimum(np.arange(size), np.arange(size)[::-1]).astype(np.float32)
@@ -194,18 +212,20 @@ def border_window(size):
     return t * t * (3 - 2 * t)
 
 
-def crack_decal(image, box):
-    """RGBA decal of the longest dark, thin crack inside `box` (left, top, right, bottom).
+def crack_decal(image):
+    """RGBA decal, the size of `image` (a native crop), of the longest dark, thin crack in it.
 
     Smoothing leaves a crack (dark over several pixels) darker than the gaps between
-    stones, so the threshold keeps the crack and the longest blob of it is the one crack.
+    stones, so the threshold keeps the crack. It still breaks in places, so the pieces are
+    joined by growing the mask first, and the longest blob of that is the one crack.
     """
-    patch = flatten_lighting(image.crop(box).resize((MAP_SIZE, MAP_SIZE), Image.Resampling.LANCZOS))
+    patch = flatten_lighting(image)
     smooth = blur(np.asarray(patch.convert("L"), np.float32), CRACK_SMOOTH)
-    mask = dilate(largest_component(smooth < CRACK_DARK), CRACK_GROW)
+    joined = largest_component(dilate(smooth < CRACK_DARK, CRACK_JOIN))
+    mask = erode(joined, CRACK_JOIN - 2)
 
     blurred = blur(mask.astype(np.float32), DEPTH_BLUR)
-    depth = blurred / max(blurred.max(), 1e-6) * border_window(MAP_SIZE)
+    depth = blurred / max(blurred.max(), 1e-6) * border_window(image.width)
     alpha = np.clip(depth / DEPTH_ALPHA, 0, 1)
     # The same frame as asphalt_normal, from the height 1 - depth: the crack is a dip.
     normal = np.asarray(normal_from_height(Image.fromarray(1 - depth, "F"), CRACK_NORMAL_STRENGTH))
@@ -237,13 +257,12 @@ def main():
         rectified = rectify(photo.convert("RGB"))
     rectified.save(args.sources / "rectified.png")
 
-    patch = rectified.crop(GRAIN_BOX).resize((MAP_SIZE, MAP_SIZE), Image.Resampling.LANCZOS)
-    albedo, normal, surface = grain_maps(patch)
+    albedo, normal, surface = grain_maps(rectified.crop(GRAIN_BOX))
     maps = {
         "albedo": (albedo, "color"),
         "normal": (normal, "data"),
         "surface": (surface, "data"),
-        "crack": (crack_decal(rectified, CRACK_BOX), "data"),
+        "crack": (crack_decal(rectified.crop(CRACK_BOX)), "data"),
     }
     for name, (image, role) in maps.items():
         png = args.sources / f"asphalt_{name}.png"

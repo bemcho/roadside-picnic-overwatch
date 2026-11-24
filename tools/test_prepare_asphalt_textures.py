@@ -98,6 +98,51 @@ class Rectify(unittest.TestCase):
             self.assertLess(np.abs(near - colour).max(), 60, (x, y, near, colour))
 
 
+PHOTO_SIZE = (1408, 768)  # image_5b974df1.jpg
+
+
+def photo_pixels_per_output_pixel(box):
+    """Photo pixels stepped per output pixel along u and along v, at every pixel of `box`.
+
+    The photo's own coordinates are rectified as two float images (its column and its row
+    at each pixel), cropped like the real maps, and differentiated: where the step is
+    under 1 photo pixel the map is made of interpolated, not photographed, pixels.
+    """
+    width, height = PHOTO_SIZE
+    columns = np.tile(np.arange(width, dtype=np.float32), (height, 1))
+    rows = np.tile(np.arange(height, dtype=np.float32)[:, None], (1, width))
+    where_x, where_y = (
+        np.asarray(asphalt.rectify(Image.fromarray(plane, "F")).crop(box), np.float64) for plane in (columns, rows)
+    )
+    along_u = np.hypot(np.diff(where_x, axis=1), np.diff(where_y, axis=1))
+    along_v = np.hypot(np.diff(where_x, axis=0), np.diff(where_y, axis=0))
+    return along_u.min(), along_v.min()
+
+
+class NativeResolution(unittest.TestCase):
+    """Ruling A9: no step may upsample the photo; every map is made of its own pixels."""
+
+    def test_the_grain_crop_is_not_upsampled(self):
+        for axis, step in zip("uv", photo_pixels_per_output_pixel(asphalt.GRAIN_BOX)):
+            self.assertGreaterEqual(step, 1.0, f"grain box: {step:.2f} photo px per output px along {axis}")
+
+    def test_the_crack_crop_is_not_upsampled(self):
+        for axis, step in zip("uv", photo_pixels_per_output_pixel(asphalt.CRACK_BOX)):
+            self.assertGreaterEqual(step, 1.0, f"crack box: {step:.2f} photo px per output px along {axis}")
+
+    def test_maps_are_native_crops_in_whole_bc7_blocks(self):
+        self.assertEqual(asphalt.MAP_SIZE % 4, 0)
+        for box in (asphalt.GRAIN_BOX, asphalt.CRACK_BOX):
+            left, top, right, bottom = box
+            self.assertEqual((right - left, bottom - top), (asphalt.MAP_SIZE, asphalt.MAP_SIZE))
+            width, height = asphalt.RECTIFIED_SIZE
+            self.assertTrue(0 <= left and right <= width and 0 <= top and bottom <= height, box)
+
+    def test_the_grain_maps_keep_the_size_of_the_crop(self):
+        for map_ in asphalt.grain_maps(synthetic_photo(asphalt.MAP_SIZE, 70)):
+            self.assertEqual(map_.size, (asphalt.MAP_SIZE, asphalt.MAP_SIZE))
+
+
 class GrainMaps(unittest.TestCase):
     def test_grain_tiles_without_a_seam(self):
         albedo = np.asarray(asphalt.grain_maps(synthetic_photo(256, 70))[0], dtype=np.float64)
@@ -131,34 +176,45 @@ class GrainMaps(unittest.TestCase):
         self.assertGreater(ao.mean(), 0.7)
 
 
-def crack_photo(size=400):
-    """Grey noisy asphalt with one dark crack running across and out through the right edge."""
+def crack_photo(size=192):
+    """Grey noisy asphalt with one dark crack running across and out through the right edge.
+
+    Native density: the real crack is about 4 px wide, its stones 3 to 8 px.
+    """
     photo = np.full((size, size), 90.0)
-    photo += 8 * smooth_noise(size, 1.2, 5)
+    photo += 8 * smooth_noise(size, 0.6, 5)
     columns = np.arange(size)
-    rows = (size * 0.45 + 0.12 * (columns - size / 2) + 14 * np.sin(columns / 23)).astype(int)
-    for width in range(10):  # as wide as the real crack, so it survives the smoothing
+    rows = (size * 0.45 + 0.12 * (columns - size / 2) + 5 * np.sin(columns / 8)).astype(int)
+    for width in range(4):  # as wide as the real crack, so it survives the smoothing
         photo[np.clip(rows + width, 0, size - 1), columns] = 6
-    photo[30:44, 40:54] = 8  # a dark pit apart from the crack
+    photo[14:20, 20:26] = 8  # a dark pit apart from the crack
     return Image.fromarray(photo.astype(np.uint8), "L").convert("RGB")
 
 
+def border_mask(size, margin):
+    """Mask of the pixels within `margin` px of the border of a size x size image."""
+    border = np.ones((size, size), bool)
+    border[margin:-margin, margin:-margin] = False
+    return border
+
+
 class CrackDecal(unittest.TestCase):
+    def test_crack_decal_is_cut_at_the_size_of_its_crop(self):
+        for size in (144, 192):
+            self.assertEqual(asphalt.crack_decal(crack_photo(size)).size, (size, size))
+
     def test_crack_border_is_transparent(self):
-        decal = np.asarray(asphalt.crack_decal(crack_photo(), (0, 0, 400, 400)))
-        alpha = decal[..., 3]
+        alpha = np.asarray(asphalt.crack_decal(crack_photo()))[..., 3]
         self.assertGreater(alpha.max(), 200)  # a crack was found
-        border = np.ones(alpha.shape, bool)
-        border[8:-8, 8:-8] = False
-        self.assertEqual(int(alpha[border].max()), 0)
+        self.assertEqual(int(alpha[border_mask(alpha.shape[0], asphalt.DECAL_MARGIN)].max()), 0)
 
     def test_crack_is_one_connected_crack_without_the_pit(self):
-        decal = np.asarray(asphalt.crack_decal(crack_photo(), (0, 0, 400, 400)))
+        decal = np.asarray(asphalt.crack_decal(crack_photo()))
         mask = decal[..., 3] > 0
         self.assertEqual(asphalt.label_components(mask)[1], 1)
 
     def test_crack_packs_flat_normal_depth_and_mask(self):
-        decal = np.asarray(asphalt.crack_decal(crack_photo(), (0, 0, 400, 400))).astype(np.float64)
+        decal = np.asarray(asphalt.crack_decal(crack_photo())).astype(np.float64)
         outside = decal[..., 3] == 0
         # Off the crack the normal is flat, give or take the faint slope (under 2 degrees)
         # of the depth's blurred tail next to the mask.
@@ -197,6 +253,39 @@ class EncodeKtx2(unittest.TestCase):
         pixels = decode_base_level(self.encode(Image.fromarray(decal, "RGBA"), "data"))
         self.assertTrue(np.all(np.abs(pixels[:10, :10, :2].astype(int) - 128) <= 2), pixels[0, 0])
         self.assertLessEqual(abs(int(pixels[30, 30, 2]) - 220), 12)
+
+    def test_crack_decal_is_transparent_at_the_border_and_opaque_on_the_crack_after_encoding(self):
+        decal = asphalt.crack_decal(crack_photo())
+        pixels = decode_base_level(self.encode(decal, "data"))
+        assert_decal_alpha(self, pixels[..., 3], np.asarray(decal)[..., 3])
+
+
+def assert_decal_alpha(test, decoded, source):
+    """In the `decoded` alpha: the border (DECAL_MARGIN px) is 0 and the crack's core, the pixels
+    that were opaque in `source`, is opaque (BC7 is lossy: its mean and its worst pixel are bounded)."""
+    test.assertEqual(int(decoded[border_mask(decoded.shape[0], asphalt.DECAL_MARGIN)].max()), 0)
+    core = source == 255
+    test.assertTrue(core.any(), "the source decal has no opaque crack")
+    test.assertGreaterEqual(decoded[core].mean(), 245)
+    test.assertGreaterEqual(int(decoded[core].min()), 200)
+
+
+class ShippedMaps(unittest.TestCase):
+    CRACK = Path(__file__).resolve().parent.parent / "assets/textures/terrain/asphalt_crack.ktx2"
+
+    def test_the_shipped_crack_decal_decodes_transparent_at_the_border_and_opaque_on_the_crack(self):
+        try:
+            import zstandard  # noqa: F401
+        except ImportError:
+            self.skipTest("needs the zstandard module to read the maps back")
+        if not self.CRACK.exists():
+            self.skipTest("the maps have not been baked yet")
+        pixels = decode_base_level(self.CRACK)
+        self.assertEqual(pixels.shape[:2], (asphalt.MAP_SIZE, asphalt.MAP_SIZE))
+        alpha = pixels[..., 3]
+        self.assertEqual(int(alpha[border_mask(alpha.shape[0], asphalt.DECAL_MARGIN)].max()), 0)
+        self.assertGreaterEqual(int(alpha.max()), 250)  # the crack is opaque somewhere
+        self.assertGreater(int((alpha > 128).sum()), 300)  # and is a real crack, not a speck
 
 
 if __name__ == "__main__":
