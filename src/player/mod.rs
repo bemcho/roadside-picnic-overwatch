@@ -402,7 +402,7 @@ fn move_player(
     if dt > 0.0 && ground.xz().distance_squared(target.xz()) > 1e-8 {
         locomotion.planar_velocity = (ground.xz() - from).clamp_length_max(step.length()) / dt;
     }
-    order.track_progress(ground.xz().distance(from), speed * dt, dt);
+    order.track_progress(ground.xz(), ground.xz().distance(from), speed * dt, dt);
 
     if locomotion.grounded && !crawling && keys.just_pressed(KeyCode::Space) {
         locomotion.vertical_speed = player.jump_speed;

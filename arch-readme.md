@@ -468,7 +468,8 @@ Shift held it plans from the last stop and appends the leg
 (`MoveOrder::hold`) until Shift is released. `replan_order` pathfinds the leg to
 the next stop again from the mover's position when a stop is reached or the mover
 stalls (`MoveOrder::wants_replan`), because scenery colliders stream in only
-near the stalker. Planning ignores a `Boom` that opens for the mover
+near the stalker; after a stall `drive_vehicle`'s autopilot first reverses
+while `MoveOrder::backing_off` holds. Planning ignores a `Boom` that opens for the mover
 (`Boom::opens_for`): the yard's always, the Institute's for a driven car with
 an `InstitutePass`. `sync_order_markers` keeps one ground ring per stop,
 spawning more from `OrderMarkerLook` as needed, and `route::draw_order_route`

@@ -439,6 +439,7 @@ pub(crate) fn drive_vehicle(
         }
         if let Some(order) = order.as_mut() {
             order.track_progress(
+                at.translation.xz(),
                 at.translation.xz().distance(from),
                 AUTOPILOT_MIN_SPEED * dt,
                 dt,
@@ -465,11 +466,14 @@ struct DriveInput {
 
 /// Slower progress than this counts as blocked for a point-and-click order.
 const AUTOPILOT_MIN_SPEED: f32 = 3.0;
+/// Throttle the autopilot backs away from an obstacle with.
+const AUTOPILOT_REVERSE: f32 = 0.6;
 /// Deceleration assumed when planning the stop at the target, in m/s².
 const AUTOPILOT_BRAKING: f32 = 8.0;
 
 /// Steers toward the next waypoint of a point-and-click order, easing off for
-/// sharp turns and braking in time to stop at the target.
+/// sharp turns and braking in time to stop at the target. After a stall it
+/// first backs away, swinging the nose toward the new leg.
 fn autopilot(order: &mut MoveOrder, at: &Transform, speed: f32) -> Option<DriveInput> {
     let position = at.translation.xz();
     let toward = order.steer(position)?;
@@ -477,6 +481,14 @@ fn autopilot(order: &mut MoveOrder, at: &Transform, speed: f32) -> Option<DriveI
         .xz()
         .normalize_or_zero();
     let angle = (forward.y * toward.x - forward.x * toward.y).atan2(forward.dot(toward));
+    if order.backing_off() {
+        // Reversing turns the hull the other way for the same wheel angle.
+        return Some(DriveInput {
+            throttle: -AUTOPILOT_REVERSE,
+            steering: (-angle * 2.2).clamp(-1.0, 1.0),
+            brake: false,
+        });
+    }
     let remaining = order.remaining(position);
     let stopping = speed * speed / (2.0 * AUTOPILOT_BRAKING);
     let brake = remaining < stopping + 1.0;
@@ -1231,6 +1243,82 @@ mod tests {
         );
         let mut order = app.world_mut().get_mut::<MoveOrder>(player).expect("order");
         assert_eq!(order.steer(at.xz()), None, "arrival clears the order");
+    }
+
+    #[test]
+    fn a_car_blocked_by_an_unplanned_wall_backs_off_and_drives_around_it() {
+        use crate::player::orders::{VEHICLE_ARRIVAL, replan_order};
+        use crate::world::{Collider, Pillar};
+
+        const fn post(x: f32) -> Pillar {
+            Pillar {
+                x,
+                z: 0.0,
+                radius: 0.6,
+                bottom: -2.0,
+                top: 3.0,
+            }
+        }
+        // Twelve meters of wall across the car's way, posts a meter apart.
+        static WALL: [Pillar; 13] = [
+            post(-6.0),
+            post(-5.0),
+            post(-4.0),
+            post(-3.0),
+            post(-2.0),
+            post(-1.0),
+            post(0.0),
+            post(1.0),
+            post(2.0),
+            post(3.0),
+            post(4.0),
+            post(5.0),
+            post(6.0),
+        ];
+
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .insert_resource(Terrain::new())
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, (replan_order, drive_vehicle).chain());
+        let terrain = Terrain::new();
+        let (x, z) = (40.0, -40.0);
+        let vehicle = app
+            .world_mut()
+            .spawn((
+                Vehicle::default(),
+                Transform::from_xyz(x, terrain.height_at(x, z), z),
+            ))
+            .id();
+        let wall = Transform::from_xyz(x, terrain.height_at(x, z + 9.0), z + 9.0);
+        app.world_mut()
+            .spawn((Collider(&WALL), wall, GlobalTransform::from(wall)));
+        let player = app
+            .world_mut()
+            .spawn((Player::default(), Transform::default(), Driving(vehicle)))
+            .id();
+        // Planned straight through the wall, as for a leg whose scenery had
+        // not streamed in yet. The hull faces +Z, at the wall.
+        let target = Vec2::new(x, z + 25.0);
+        app.world_mut()
+            .get_mut::<MoveOrder>(player)
+            .expect("order")
+            .give(vec![target], Vec2::new(x, z), false, VEHICLE_ARRIVAL);
+        for _ in 0..1200 {
+            app.update();
+        }
+        let at = app
+            .world()
+            .get::<Transform>(vehicle)
+            .expect("car")
+            .translation;
+        assert!(
+            at.xz().distance(target) < VEHICLE_ARRIVAL + 2.0,
+            "car stopped at {at}, target {target}"
+        );
     }
 
     /// The deepest pool of the marsh, and dry land due south of it.
