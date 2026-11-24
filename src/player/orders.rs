@@ -38,14 +38,16 @@ const STALL_SECONDS: f32 = 0.8;
 const CLICK_REACH: f32 = 12_000.0;
 /// The colour of the stop rings and the route line.
 pub(super) const ORDER_COLOR: Color = Color::srgb(0.95, 0.78, 0.35);
-/// How often a blocked leg is pathfound again before the order is dropped.
-const STALL_REPLANS: u8 = 2;
-/// A stall this much nearer the target than the last one meets a new
-/// obstacle, so it gets the full count of replans again, in meters.
-const FRESH_STALL: f32 = 5.0;
-/// How long a blocked mover backs away before taking the new leg: a car
-/// pressed nose-first against a rock cannot turn onto it in place.
-const BACKOFF_SECONDS: f32 = 1.2;
+/// How many times a blocked order backs off and pathfinds again before it is
+/// dropped.
+const STALL_REPLANS: u8 = 3;
+/// How far a blocked mover backs away before taking the new leg, in meters: a
+/// car pressed nose-first against a rock cannot turn onto it in place, and
+/// needs more than its own length of room to swing round.
+const BACKOFF_DISTANCE: f32 = 6.0;
+/// The longest a back-off lasts, in seconds, should it neither get that far
+/// nor stall against something behind.
+const BACKOFF_SECONDS: f32 = 4.0;
 /// One pulse of the waypoint rings, in seconds, and how far they swell.
 const RING_PULSE_PERIOD: f32 = 1.4;
 const RING_PULSE_SWELL: f32 = 0.25;
@@ -66,10 +68,10 @@ pub struct MoveOrder {
     /// far leg was planned without them.
     replan: bool,
     replans: u8,
-    /// Distance left at the last stall that asked for a replan.
-    stall_mark: f32,
     /// Seconds left backing away from the obstacle that blocked the mover.
     backoff: f32,
+    /// Where the mover stalled, to measure how far it has backed away.
+    stalled_at: Vec2,
 }
 
 impl MoveOrder {
@@ -157,7 +159,6 @@ impl MoveOrder {
                 self.stops.remove(0);
                 // The next leg was planned from afar: plan it again from here.
                 self.replan = !self.stops.is_empty();
-                self.replans = 0;
             }
         }
         self.cancel();
@@ -173,15 +174,11 @@ impl MoveOrder {
         self.backoff > 0.0
     }
 
-    /// Pathfinds the leg again (after a short back-off) when the mover at `at`
-    /// keeps pushing against an obstacle, and drops the order when that does
-    /// not help.
+    /// Pathfinds the leg again (after backing away) when the mover at `at`
+    /// keeps pushing against an obstacle, and drops the order after
+    /// [`STALL_REPLANS`] such attempts.
     pub(super) fn track_progress(&mut self, at: Vec2, moved: f32, intended: f32, dt: f32) {
         if self.waypoints.is_empty() || self.held || intended <= 0.0 {
-            return;
-        }
-        if self.backing_off() {
-            self.backoff -= dt;
             return;
         }
         self.stalled = if moved < intended * STALL_RATIO {
@@ -189,16 +186,21 @@ impl MoveOrder {
         } else {
             0.0
         };
-        if self.stalled > STALL_SECONDS {
-            let left = self.remaining(at);
-            if left < self.stall_mark - FRESH_STALL {
-                self.replans = 0;
+        if self.backing_off() {
+            self.backoff -= dt;
+            // Far enough back, or backed into something too.
+            if at.distance(self.stalled_at) >= BACKOFF_DISTANCE || self.stalled > STALL_SECONDS {
+                self.backoff = 0.0;
+                self.stalled = 0.0;
             }
+            return;
+        }
+        if self.stalled > STALL_SECONDS {
             if self.replans < STALL_REPLANS {
                 self.replans += 1;
                 self.replan = true;
                 self.stalled = 0.0;
-                self.stall_mark = left;
+                self.stalled_at = at;
                 self.backoff = BACKOFF_SECONDS;
             } else {
                 self.cancel();
@@ -502,8 +504,8 @@ mod tests {
             );
             order.replace_leg(vec![Vec2::new(0.0, 5.0), Vec2::new(30.0, 0.0)]);
             assert!(order.backing_off(), "backs away first");
-            order.track_progress(stuck, 0.0, 0.2, BACKOFF_SECONDS);
-            assert!(!order.backing_off());
+            order.track_progress(stuck, 0.0, 0.2, STALL_SECONDS + 0.1);
+            assert!(!order.backing_off(), "nothing to back into: stop");
         }
         order.track_progress(stuck, 0.0, 0.2, 0.5);
         order.track_progress(stuck, 0.0, 0.2, 0.5);
@@ -514,30 +516,56 @@ mod tests {
     }
 
     #[test]
-    fn a_stall_well_past_the_last_one_meets_a_new_obstacle() {
+    fn a_blocked_mover_backs_off_six_meters_unless_blocked_behind() {
+        let mut order = MoveOrder::default();
+        order.give(
+            vec![Vec2::new(60.0, 0.0)],
+            Vec2::ZERO,
+            false,
+            STALKER_ARRIVAL,
+        );
+        order.track_progress(Vec2::ZERO, 0.0, 0.2, STALL_SECONDS + 0.1);
+        assert!(order.backing_off());
+        // Backing freely: a short way back is not enough room to turn.
+        let mut at = Vec2::ZERO;
+        for _ in 0..10 {
+            at.x -= 0.4;
+            order.track_progress(at, 0.4, 0.2, 0.1);
+        }
+        assert!(order.backing_off(), "only {} m back", -at.x);
+        while order.backing_off() {
+            at.x -= 0.4;
+            order.track_progress(at, 0.4, 0.2, 0.1);
+        }
+        assert!(
+            (BACKOFF_DISTANCE..BACKOFF_DISTANCE + 0.4).contains(&-at.x),
+            "stopped {} m back",
+            -at.x
+        );
+        // The next stall finds something behind too: it stops backing there.
+        order.track_progress(at, 0.0, 0.2, STALL_SECONDS + 0.1);
+        assert!(order.backing_off());
+        order.track_progress(at, 0.0, 0.2, 0.5);
+        assert!(order.backing_off(), "a moment's stillness is not a wall");
+        order.track_progress(at, 0.0, 0.2, 0.5);
+        assert!(!order.backing_off(), "backed into something");
+    }
+
+    #[test]
+    fn an_order_makes_three_attempts_to_get_unstuck() {
         let mut order = MoveOrder::default();
         let target = Vec2::new(60.0, 0.0);
         order.give(vec![target], Vec2::ZERO, false, STALKER_ARRIVAL);
-        let stall = |order: &mut MoveOrder, at: Vec2| {
+        // Each attempt gets past one obstacle, only to meet another.
+        for attempt in 0..3 {
+            let at = Vec2::new(15.0 * attempt as f32, 0.0);
             order.track_progress(at, 0.0, 0.2, STALL_SECONDS + 0.1);
-            if let Some(stop) = order.wants_replan() {
-                order.replace_leg(vec![stop]);
-            }
+            assert_eq!(order.wants_replan(), Some(target), "attempt {attempt}");
+            order.replace_leg(vec![target]);
             order.track_progress(at, 0.0, 0.2, BACKOFF_SECONDS);
-        };
-        for _ in 0..STALL_REPLANS {
-            stall(&mut order, Vec2::ZERO);
         }
-        // Twenty meters on, a tree that was not loaded at the start blocks the way.
-        stall(&mut order, Vec2::new(20.0, 0.0));
-        assert_eq!(order.target(), Some(target), "kept for the new obstacle");
-        stall(&mut order, Vec2::new(20.0, 0.0));
-        stall(&mut order, Vec2::new(20.0, 0.0));
-        assert_eq!(
-            order.target(),
-            None,
-            "the same obstacle twice more drops it"
-        );
+        order.track_progress(Vec2::new(45.0, 0.0), 0.0, 0.2, STALL_SECONDS + 0.1);
+        assert_eq!(order.target(), None, "a fourth stall drops the order");
     }
 
     #[test]
