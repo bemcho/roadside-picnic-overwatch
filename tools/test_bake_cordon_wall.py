@@ -158,6 +158,66 @@ class LayoutTests(unittest.TestCase):
         self.assertGreater(shape.floor, TOP)
 
 
+class DetrendAndEndsTests(unittest.TestCase):
+    def test_detrend_removes_a_lean_and_a_step_but_keeps_relief(self):
+        rows, columns = 200, 300
+        height = np.arange(rows)[:, None] / rows
+        lean = 0.008 * height + np.where(height > 0.75, -0.02, 0.0)  # a ramp and a step at the cap, along x
+        joints = np.zeros((rows, columns))
+        joints[:, 100] = 0.004  # a vertical joint, recessed
+        joints[40, :] = 0.003  # a horizontal one
+        ribs = np.zeros((rows, columns))
+        ribs[:, 20:60] = -0.03  # proud of the face
+        depth = lean + joints + ribs
+        flat = wall_tool.detrend_rows(depth, slice(0, columns))
+        self.assertLess(float(flat[60:, 150:].max()), 0.0045)  # nothing left but the joints
+        self.assertEqual(float(flat[:, 20:60].max()), 0.0)  # the ribs clamp to 0
+        self.assertAlmostEqual(float(flat[100, 100]), 0.004, places=6)  # the joint survives
+        self.assertAlmostEqual(float(flat[100, 200]), 0.0, places=6)  # the ramp does not
+        self.assertAlmostEqual(float(flat[190, 200]), 0.0, places=6)  # nor the step
+
+    def test_both_ends_agree_after_sealing(self):
+        rng = np.random.default_rng(5)
+        pad, band, width = 6, 10, 120
+        albedo = rng.uniform(0.1, 0.5, (20, width + 2 * pad, 4)).astype(np.float32)
+        normal = rng.uniform(0, 1, albedo.shape).astype(np.float32)
+        depth = rng.uniform(0, 0.01, albedo.shape).astype(np.float32)
+        inside = albedo[:, pad + band : pad + 2 * band].copy()
+        wall_tool.seal_ends(albedo, normal, depth, pad, band)
+        left, right = albedo[:, pad], albedo[:, pad + width - 1]
+        self.assertTrue(np.allclose(left, right))  # the outermost columns meet
+        self.assertTrue(np.allclose(albedo[:, pad], albedo[:, pad - 3]))  # and the margin carries on
+        self.assertTrue(np.allclose(normal[:, pad : pad + band, :3], [0.5, 0.5, 1.0]))
+        self.assertTrue(np.allclose(normal[:, pad + width - band : pad + width, :3], [0.5, 0.5, 1.0]))
+        self.assertEqual(float(depth[:, pad : pad + band, 0].max()), 0.0)
+        self.assertEqual(float(depth[:, pad + width - band : pad + width, 0].max()), 0.0)
+        inner_left = albedo[:, pad + band - 1]  # the band's inner edge continues the reflected concrete
+        self.assertTrue(np.allclose(inner_left, inside[:, 0], atol=0.03))
+
+    def test_contact_marks_find_dark_and_tilted_blobs_but_not_joints(self):
+        colour = np.full((120, 200, 3), 0.3, np.float32)
+        colour[:, 150] = 0.05  # a one-pixel joint, the whole height
+        colour[60, :] = 0.05  # and a horizontal one
+        colour[40:52, 60:72] = 0.04  # a leg's foot: a 12 px dark blob
+        normal = np.full(colour.shape, [0.5, 0.5, 1.0], np.float32)
+        normal[80:90, 100:120] = [0.9, 0.5, 0.7]  # a dimple the foot left: tilted
+        normal[10:20, 30:60] = [0.9, 0.5, 0.7]  # a tilted blob on the shoulder rows, outside the middle
+        normal[:, 150] = [0.9, 0.5, 0.7]  # a tilted joint line
+        middle = np.zeros(120, bool)
+        middle[30:100] = True
+        marks = wall_tool.contact_marks(colour, normal, middle)
+        self.assertTrue(marks[46, 66])  # the dark foot
+        self.assertTrue(marks[85, 110])  # the dimple
+        self.assertFalse(marks[15, 45])  # tilt only counts on the middle rows
+        self.assertFalse(marks[20, 150] or marks[60, 20] or marks[110, 100])  # joints and concrete are left alone
+        self.assertTrue(marks[46, 66 + 12 // 2 + wall_tool.MARK_GROW - 1])  # the mask is grown past the blob
+
+    def test_box_blur_is_a_local_mean(self):
+        values = np.arange(36, dtype=np.float32).reshape(6, 6)
+        blurred = wall_tool.box_blur(values, 3)
+        self.assertAlmostEqual(float(blurred[2, 2]), float(values[1:4, 1:4].mean()), places=5)
+
+
 class ImageTests(unittest.TestCase):
     def test_depth_is_white_at_the_percentile_and_clamped(self):
         depth = np.linspace(0, 1, 1000).reshape(10, 100)
@@ -178,7 +238,7 @@ class ImageTests(unittest.TestCase):
         self.assertTrue(np.allclose(colour[8:10, 8:10, :3], [0.4, 0.2, 0.1], atol=1e-5))
         self.assertTrue(np.allclose(colour[2, 9, :3], [0.4, 0.2, 0.1], atol=1e-5))
 
-    def test_unusable_texels_are_inside_stained_low_or_at_the_ends(self):
+    def test_unusable_texels_are_inside_or_stained_low(self):
         density = 100.0
         concrete = np.full((60, 80, 3), [0.07, 0.09, 0.10], np.float32)  # blue-grey, 0.7 red over blue
         concrete[30, 40] = 0  # an inside face
@@ -186,14 +246,10 @@ class ImageTests(unittest.TestCase):
         concrete[50, 41] = [0.12, 0.10, 0.08]  # warm, but above the ground zone: left alone
         flat = np.full(concrete.shape, [0.5, 0.5, 1.0], np.float32)  # tangent normals pointing straight out
         flat[20, 40] = [1.0, 0.5, 0.5]  # facing sideways
-        bad = wall_tool.unusable_texels(concrete, flat, density, trim_ends=True)
-        trim = wall_tool.GUTTER // 2 + round(wall_tool.END_TRIM * density)
+        bad = wall_tool.unusable_texels(concrete, flat, density)
         self.assertTrue(bad[30, 40] and bad[5, 40] and bad[20, 40])
         self.assertFalse(bad[50, 41])
-        self.assertTrue(bad[50, :trim].all() and bad[50, -trim:].all())
-        self.assertEqual(int(bad[50, trim:-trim].sum()), 0)
-        untrimmed = wall_tool.unusable_texels(concrete, flat, density, trim_ends=False)
-        self.assertFalse(untrimmed[50, 0])
+        self.assertEqual(int(bad[50].sum()), 0)
 
     def test_wire_colour_is_unpremultiplied_and_filled_flat(self):
         colour = np.zeros((2, 2, 3), np.float32)

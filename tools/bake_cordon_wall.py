@@ -24,7 +24,7 @@ The GLBs and the depth map are KTX2 (tools/compress_glb_textures.py presets); th
 Frame. The scan lies along z, so it is turned a quarter about the vertical, stood on its lowest
 point and centred on the wall body (not on the base lip or the sandbags): x runs along the panel,
 y up from the foot, z across the thickness. The box spans exactly +-PANEL_SPAN / 2 in x; the scan's
-body is 0.85 long, so its rounded ends fall inside the last END_TRIM of the box.
+body is 0.85 long, so its rounded ends fall inside the END_BAND the box seals at each end.
 The box has no bottom; front is +z, back -z, plus the top and the two ends. Its vertical faces
 sit at the median |z| of the scan's faces; the scan itself leans a centimetre and its pilaster ribs
 stand 3 cm proud of that, so the depth map is 0 on them (it cannot show relief outside the box).
@@ -46,16 +46,26 @@ by it and flat-filled where there is no wire, so mips show no dark halo.
 
 Concrete source. Rays are cast at a copy of the scan from which the wire, the tower and the
 sandbags are cut: what is above the flat top (measured in 4 cm columns: it wanders by a few mm),
-and the warm (sandbag, tape) vertices low and beside the wall. Rays that still miss, or that hit
-an inside face or the scan's own brownish stains, take the colour, normal and depth of the hits
-around them. The faces' vertex counts cannot find the concrete top (the cap steps out, the coils
-touch the faces), so TOP is the busiest height of the plateau the coils stand on, printed with
-its histogram; a few dark contact marks the scan's texture has there (coil and tower feet) stay.
-The last END_TRIM of each long face (the ragged, rounded ends of the body) is filled from inside.
+and the warm (sandbag, tape) vertices low and beside the wall. Rays that still miss, hit an
+inside face, hit the scan's own brownish stains, or (on the top) land on a contact mark of the
+tower's legs or the coils (contact_marks: dark blobs, and dimples in the middle of the deck, wider
+than a joint), take the colour, normal and depth of the hits around them. The faces' vertex counts cannot find the concrete top (the cap
+steps out, the coils touch the faces), so TOP is the busiest height of the plateau the coils stand
+on along both edges, printed with its histogram; DECK, a few mm lower, is the middle of the top.
 
-Depth. Emission whose strength is the depth below the box's face (0 where the scan stands proud
-of it), scaled so DEPTH_RANGE model units are white. The tool prints the measurements Task 5's
-constants need (HALF_THICKNESS, TOP, the wire's extent, DEPTH_RANGE).
+Depth. Emission whose strength is the signed depth below the box's face (plus a bias that numpy
+takes off), per face. The scan's lean, the cap's step and the foundation are bands along the wall,
+so each row's median is subtracted (detrend_rows) and only the relief on them is kept (0 where the
+surface is proud of its row); the end island is flat, and so are the top's shoulders (the outer
+fifths along each edge, where the coils stood): only the deck's slab joints carry relief. The
+result is scaled so DEPTH_RANGE model units are white.
+
+Ends. The last END_BAND at both ends of the front, back and top faces is the body's ragged, rounded
+end (and a ladder at one): there the normal is flat, the depth 0 and the albedo reflects the concrete
+inside each end, blended toward the other end's mirror image so panels join without a seam (seal_ends).
+
+The tool prints the measurements Task 5's constants need (HALF_THICKNESS, TOP, the wire's extent,
+DEPTH_RANGE).
 """
 
 import argparse
@@ -100,7 +110,13 @@ SETTLE_STEPS = 150  # px a hit spreads into the misses around it (the rib feet l
 GROUND_ZONE = 0.2  # sandbags and tape lie below this height
 END_ZONE = 0.07  # sandbags are also piled against the wall's ends: this much of each end
 SIDEWAYS = 0.15  # a baked normal whose tangent-space z is below this share of its length faces away: an inside face
-END_TRIM = 0.012  # the body's ends are ragged and rounded (and a ladder stands at one): not baked, filled from inside
+END_BAND = 0.03  # the body's ends are ragged and rounded (and a ladder stands at one): this much is not baked
+MARK_WINDOW = 41  # px; a dark mark is darker than MARK_SHARE of the mean this wide around it ...
+MARK_SHARE = 0.7
+MARK_OPEN = 2  # ... and wider than 2 x this many px, which the joints between slabs are not
+MARK_GROW = 10  # px the mark's mask is grown by: past the dark halo painted round a foot
+MARK_TILT = 0.08  # in the middle of the top, a normal tilted more than this (1 - z) is a dimple, not the flat deck
+MARK_TILT_GROW = 12  # px a dimple's mask is grown by: a foot's thin arms reach far past its core
 WIRE_MARGIN = 0.003  # padding of the strips around the measured wire
 
 RIB_MARGIN = 0.004  # side rays start this far outside the pilaster ribs that stand proud of the faces
@@ -110,7 +126,8 @@ WIRE_CAGE = 0.012  # the wire strips' rays start this far outside the coil rows
 SAMPLES = 32  # antialiases the 8K scan texture down to the atlas density
 ROUGHNESS = 0.9  # as the panel it replaces
 KTX2_QUALITY = "slow"
-DEPTH_PERCENTILE = 95  # share of the long faces' depth below white (the rest is island edges and rib feet)
+DEPTH_BIAS = 0.1  # the depth shader emits depth + this (it cannot emit less than 0); numpy takes it off again
+DEPTH_PERCENTILE = 99  # share of the long faces' detrended depth below white
 VALIDATE_IGNORE = "TEXTURE_INVALID_IMAGE_MIME_TYPE,VALUE_NOT_IN_LIST,IMAGE_UNRECOGNIZED_FORMAT"  # KTX2 in a GLB
 TANGENT_BAKER = Path("~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py").expanduser()
 DEFAULT_SOURCES = Path("~/Projects/agentic/RoadSide-Picnic/textures/cordon-wall").expanduser()
@@ -376,6 +393,77 @@ def depth_image(depth, mask, percentile=DEPTH_PERCENTILE):
     return np.clip(depth / white, 0, 1), white
 
 
+def detrend_rows(depth, columns):
+    """`depth` below each row's median over `columns` (0 where the surface stands proud of its row).
+
+    The scan's lean, the cap's step and the foundation are bands along the wall, so a row's median
+    is the surface at that height and only the relief on it is left (the ribs stand proud: 0).
+    """
+    return np.maximum(depth - np.median(depth[:, columns], axis=1, keepdims=True), 0)
+
+
+def seal_ends(albedo, normal, depth, pad, band):
+    """Make both ends of a long face agree where panels abut, in place (each map has `pad` px margin each side).
+
+    The normal is flat and the depth 0 in the last `band` columns. The albedo there reflects the
+    concrete just inside each end, then each end is blended toward the other's mirror image (half way
+    at the outer edge, not at all at the inner one), so the two edges are equal and the join is seamless.
+    """
+    width = albedo.shape[1]
+    left, right = slice(pad, pad + band), slice(width - pad - band, width - pad)
+    albedo[:, left] = albedo[:, pad + band : pad + 2 * band][:, ::-1]
+    albedo[:, right] = albedo[:, width - pad - 2 * band : width - pad - band][:, ::-1]
+    weight = (0.5 * (1 - np.arange(band) / band))[None, :, None]  # from the outer edge inward
+    outer_left, outer_right = albedo[:, left].copy(), albedo[:, right][:, ::-1].copy()
+    albedo[:, left] = (1 - weight) * outer_left + weight * outer_right
+    albedo[:, right] = ((1 - weight) * outer_right + weight * outer_left)[:, ::-1]
+    normal[:, left, :3] = normal[:, right, :3] = (0.5, 0.5, 1.0)
+    depth[:, left, 0] = depth[:, right, 0] = 0
+    for pixels in (albedo, normal, depth):  # the margin carries on from the sealed edges
+        pixels[:, :pad] = pixels[:, pad : pad + 1]
+        pixels[:, width - pad :] = pixels[:, width - pad - 1 : width - pad]
+
+
+def box_blur(values, size):
+    """Mean of `values` over a `size` x `size` window (odd `size`; the edges repeat)."""
+    pad = size // 2
+    integral = np.pad(
+        np.pad(values, pad, mode="edge").astype(np.float64).cumsum(axis=0).cumsum(axis=1), ((1, 0), (1, 0))
+    )
+    rows, columns = values.shape
+    window = (
+        integral[size : size + rows, size : size + columns]
+        - integral[:rows, size : size + columns]
+        - integral[size : size + rows, :columns]
+        + integral[:rows, :columns]
+    )
+    return window / size**2
+
+
+def dilate(mask, radius):
+    """`mask` grown by `radius` px (a diamond)."""
+    for _ in range(radius):
+        mask = mask | shifted(mask, 0, 1) | shifted(mask, 0, -1) | shifted(mask, 1, 1) | shifted(mask, 1, -1)
+    return mask
+
+
+def contact_marks(colour, normal, middle):
+    """Mask of the scan's contact marks in a baked top face (rows x columns x RGB `colour` and `normal`).
+
+    The tower's legs and the coils leave dark paint on the concrete, and the legs dimples in it. A mark is
+    a blob that is darker than its surroundings, or (on the `middle` rows, where the legs stood) whose normal
+    is tilted off the flat deck, and wider than the joints between slabs (an opening removes those thin lines).
+    """
+    luminance = colour @ np.array([0.2126, 0.7152, 0.0722])
+    vectors = normal * 2 - 1
+    tilted = (vectors[..., 2] < (1 - MARK_TILT) * np.linalg.norm(vectors, axis=2)) & middle[:, None]
+
+    def blobs(mask, grow):
+        return dilate(~dilate(~mask, MARK_OPEN), MARK_OPEN + grow)
+
+    return blobs(luminance < MARK_SHARE * box_blur(luminance, MARK_WINDOW), MARK_GROW) | blobs(tilted, MARK_TILT_GROW)
+
+
 def shifted(array, axis, step):
     """`array` moved `step` pixels along `axis`, zeros coming in."""
     moved = np.zeros_like(array)
@@ -524,11 +612,12 @@ def emission_material(name, strength=None):
 
 
 def depth_strength(face, wall):
-    """Strength = depth below the box's `face`: its plane's offset minus the hit point's, along the face's normal.
+    """Strength = depth below the box's `face` plus DEPTH_BIAS: the plane's offset minus the hit point's, along the normal.
 
-    The depth is 0 where the scan stands proud of the face (the ribs, the cap).
+    The depth is signed (negative where the scan stands proud of the face, as the ribs do); the bias keeps
+    the emission above 0 and numpy takes it off again.
     """
-    normal, offset = to_blender(FACING[face]), plane_offset(face, wall)
+    normal, offset = to_blender(FACING[face]), plane_offset(face, wall) + DEPTH_BIAS
 
     def build(nodes, links):
         position = nodes.new("ShaderNodeNewGeometry")
@@ -540,11 +629,7 @@ def depth_strength(face, wall):
         behind.operation = "SUBTRACT"
         behind.inputs[0].default_value = offset
         links.new(along.outputs["Value"], behind.inputs[1])
-        proud = nodes.new("ShaderNodeMath")
-        proud.operation = "MAXIMUM"
-        links.new(behind.outputs["Value"], proud.inputs[0])
-        proud.inputs[1].default_value = 0
-        return proud.outputs["Value"]
+        return behind.outputs["Value"]
 
     return build
 
@@ -602,20 +687,16 @@ def face_rays(wall):
     return {face: top if face == "top" else side for face in FACING}
 
 
-def unusable_texels(colour, normal, density, trim_ends):
+def unusable_texels(colour, normal, density):
     """Mask of the baked `colour` and `normal` (an island and its padding, rows from the bottom) that is not concrete.
 
     Black, or a normal facing away, is an inside face seen through a hole; a warm texel low on the
-    wall is the scan's brownish stain; and with `trim_ends` the last END_TRIM at both ends of a long
-    face is the body's rough end.
+    wall is the scan's brownish stain.
     """
     vectors = normal * 2 - 1
     unusable = (colour.max(axis=2) < BLACK) | (vectors[..., 2] < SIDEWAYS * np.linalg.norm(vectors, axis=2))
     low = slice(0, round(GROUND_ZONE * density) + GUTTER)
     unusable[low] |= colour[low, :, 0] > STAINED * colour[low, :, 2] + 0.002
-    if trim_ends:
-        trim = GUTTER // 2 + round(END_TRIM * density)
-        unusable[:, :trim] = unusable[:, -trim:] = True
     return unusable
 
 
@@ -633,13 +714,27 @@ def bake_box(source, box, size, islands, wall):
             maps[kind_name][where] = bake(box, source, size, kind, rays[face], material)[where]
     albedo, normal, depth = maps["albedo"], maps["normal"], maps["depth"]
     density = islands["front"].height / wall.top  # px per unit
+    pad, band = GUTTER // 2, round(END_BAND * density)
     for name, island in islands.items():
         where = island.pixels()
         alpha = albedo[where][..., 3].copy()
+        if name == "top":  # only the deck's slab joints carry relief: the shoulders along the edges are flat
+            rows = np.arange(alpha.shape[0]) - (alpha.shape[0] - 1) / 2
+            middle = np.abs(rows) < MIDDLE_SHARE * island.height / 2
+            normal[where][~middle, :, :3] = np.array([0.5, 0.5, 1.0]) * alpha[~middle][..., None]
+            depth[where][~middle, :, 0] = DEPTH_BIAS * alpha[~middle]
         colour = albedo[where][..., :3] / np.maximum(alpha, 1e-6)[..., None]
         direction = normal[where][..., :3] / np.maximum(alpha, 1e-6)[..., None]
-        unusable = unusable_texels(colour, direction, density, trim_ends=name != "end")
+        unusable = unusable_texels(colour, direction, density)
+        if name == "top":  # the contact marks under the tower's legs and the coils
+            unusable |= contact_marks(colour, direction, middle)
         settle([albedo[where], normal[where], depth[where]], alpha, unusable)
+
+        crop = depth[where]
+        inner = slice(pad + band, crop.shape[1] - pad - band)
+        crop[..., 0] = 0 if name == "end" else detrend_rows(crop[..., 0] - DEPTH_BIAS, inner)
+        if name != "end":
+            seal_ends(albedo[where], normal[where], crop, pad, band)
     vectors = normal[..., :3] * 2 - 1
     unit = vectors / np.maximum(np.linalg.norm(vectors, axis=2, keepdims=True), 1e-6)
     return albedo[..., :3], unit * 0.5 + 0.5, depth[..., 0]
@@ -790,11 +885,11 @@ def set_alpha_cutoff(path, cutoff=0.5):
     write_glb(path, gltf, binary)
 
 
-def glb_bounds(path):
-    gltf, _ = read_glb(path)
-    attributes = gltf["meshes"][0]["primitives"][0]["attributes"]
-    accessor = gltf["accessors"][attributes["POSITION"]]
-    return np.array(accessor["min"]), np.array(accessor["max"])
+def check_box_extent(box):
+    """Fail before anything is written unless the box spans exactly +-PANEL_SPAN / 2 in x (within 1e-4)."""
+    x = to_panel(vertex_coordinates(box.data))[:, 0]
+    if abs(x.min() + PANEL_SPAN / 2) > 1e-4 or abs(x.max() - PANEL_SPAN / 2) > 1e-4:
+        raise SystemExit(f"box x extent is {x.min():.5f}..{x.max():.5f}, not +-{PANEL_SPAN / 2}")
 
 
 def encode_depth(png, ktx2):
@@ -826,9 +921,6 @@ def finish_glbs(box_glb, wire_glb):
     subprocess.run(["python3", str(TANGENT_BAKER), str(box_glb), str(wire_glb)], check=True)
     for path in (box_glb, wire_glb):
         validate(path)
-    low, high = glb_bounds(box_glb)
-    if abs(low[0] + PANEL_SPAN / 2) > 1e-4 or abs(high[0] - PANEL_SPAN / 2) > 1e-4:
-        raise SystemExit(f"box x extent is {low[0]:.5f}..{high[0]:.5f}, not +-{PANEL_SPAN / 2}")
 
 
 # ---------------------------------------------------------------- main
@@ -857,9 +949,7 @@ def print_measurements(wall, shape, depth_range, spread, device):
     print(f"  DECK = {wall.deck:.4f}  (the middle of the top, below TOP: the tower stands on it)")
     print(f"  WIRE_FLOOR = {shape.floor:.4f}  WIRE_TOP = {shape.top:.4f}  WIRE_MIDDLE = {shape.middle:.4f}")
     print(f"  WIRE_HALF_WIDTH = {shape.half_width:.4f}")
-    print(
-        f"  DEPTH_RANGE = {depth_range:.4f}  (white in wall_depth.ktx2; long faces' depth at 50/90/95/99 %: {spread})"
-    )
+    print(f"  DEPTH_RANGE = {depth_range:.4f}  (white; detrended long faces' depth at 50/90/99/99.9 %: {spread})")
     print(f"  box x extent = +-{PANEL_SPAN / 2}, y 0..{wall.top:.4f}, z +-{wall.half_thickness:.4f}")
 
 
@@ -880,12 +970,13 @@ def main():
 
     size, islands = box_layout(wall, args.span_px)
     box = mesh_object("site-cordon-wall-box", box_geometry(wall, islands))
+    check_box_extent(box)
     albedo, normal, depth = bake_box(concrete_source(scan, wall), box, size, islands, wall)
     long_faces = np.zeros(depth.shape, bool)
     for face in ("front", "back", "top"):  # the ends are mostly hidden and would set the scale
         long_faces[islands[face].pixels(0)] = True
     depth_map, depth_range = depth_image(depth, long_faces)
-    spread = " / ".join(f"{v:.4f}" for v in np.percentile(depth[long_faces], [50, 90, 95, 99]))
+    spread = " / ".join(f"{v:.4f}" for v in np.percentile(depth[long_faces], [50, 90, 99, 99.9]))
 
     wire_size, wire_islands = wire_layout(shape, args.span_px)
     wire = mesh_object("site-cordon-wall-wire", wire_geometry(shape, wire_islands))
