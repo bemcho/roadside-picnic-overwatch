@@ -81,6 +81,9 @@ def ctt_arguments(role):
         return ["-f", "bc7", "--ic", "srgb", "--mipmap", "--mipmap-filter", "lanczos3"]
     if role == "normal":
         return ["-f", "bc5", "--ic", "linear", "--mipmap", "--allow-discarding-alpha"]
+    if role == "depth":
+        # One channel (a relief map's red): BC4 is half BC7's size and more precise.
+        return ["-f", "bc4", "--ic", "linear", "--mipmap", "--mipmap-filter", "lanczos3"]
     return [
         "-f", "bc7", "--ic", "linear", "--mipmap", "--mipmap-filter", "lanczos3",
         "--bc7e-opts", "perceptual=false",

@@ -210,12 +210,14 @@ the stalker stands still.
   track and the gate; along the patrolled stretch it grows thicker, mostly
   bushes (`bushy`), with trees on both sides (`tree_belt`,
   `canopy::belt_trees`). A separate continuous wall marks the map's edge; the panels
-  follow the rendered terrain and stay above the water. Wall meshes and solid collision stream in nearby terrain tiles.
+  follow the rendered terrain and stay above the water. Wall meshes and solid
+  collision stream in nearby terrain tiles, one chunk per frame, nearest an
+  anchor first (a chunk takes up to ~4 ms to build).
   Keep the staging area and driveway clear; the tree and bush shelterbelt is
   concentrated behind the hangar and along the sides.
   The wall repeats one baked box thousands of times: an 84-vertex box
   (`site-cordon-wall-box.glb`: scan colour and normal map, baked tangents, no
-  bottom), a depth map (`textures/cordon/wall_depth.ktx2`, linear BC7) and a
+  bottom), a depth map (`textures/cordon/wall_depth.ktx2`, linear BC4) and a
   razor-wire strip (`site-cordon-wall-wire.glb`, cut-out and double-sided), all
   baked from the UHD scan by `tools/bake_cordon_wall.py` (Blender 4.5, about 3
   minutes; its docstring has the options and the measurements it prints):
@@ -523,8 +525,9 @@ the stalker stands still.
   `assets/textures/terrain/asphalt_*.ktx2`, from `tools/prepare_asphalt_textures.py`,
   and the wall's depth map, `assets/textures/cordon/wall_depth.ktx2`, from
   `tools/bake_cordon_wall.py`) are encoded with the same `ctt` presets: sRGB BC7 for
-  the colour, linear BC7 for the data maps, full mip chains; their PNG sources stay
-  in the assets workspace.
+  the colour, linear BC7 for the data maps and BC4 for the one-channel wall depth
+  (`ctt_arguments("depth")`), full mip chains; their PNG sources stay in the
+  assets workspace.
 - **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
   behind the splash the `ram://` asset source reads every streamed UHD scan
   (the 40 in `world::uhd_files`: the three trees, the plants, then the sites

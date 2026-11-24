@@ -274,7 +274,8 @@ system caps its work per frame, so crossing into a new tile never stalls one:
 first, and marks tiles that left `Unloading`; `unload_stale_tiles` despawns
 300 of their children per frame, then the tile. `stream_ground_detail`
 switches one tile to its 2 m mesh per frame (back to the distant mesh at
-once). Colliders spawn with the tile; each tile's plant sites are grown by a
+once). `stream_cordon` builds one wall chunk per frame (its three sheared
+meshes and its posts, up to ~4 ms), nearest an anchor first. Colliders spawn with the tile; each tile's plant sites are grown by a
 `plants::PendingPlants` task on the async compute pool, `finish_growing_plants`
 turns a finished task into `GrownPlants`, and `spawn_grown_plants` spawns at
 most `PLANTS_PER_FRAME` of them per frame, nearest an anchor first.
