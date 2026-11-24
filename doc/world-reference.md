@@ -239,8 +239,9 @@ the stalker stands still.
   stops at its visible face: a disc of 1.15 m radius up to the box's top
   (`WALL_DISC`) and one of 1.53 m up to the sandbags' top, which lies on the ground
   (`BAG_DISC`, 0.39 m, 1.16 m on the Perimeter); both fence at any height, so a
-  stalker cannot step onto the bags. The crawl hole's floor (2 m across) is wider
-  than the wall, and a crawler passes under the bags' discs as under the wall's.
+  stalker cannot step onto the bags. The crawl hole's floor reaches 2 m either
+  side of the wall's line (`HOLE_FLOOR.x`), wider than the wall, and a crawler
+  passes under the bags' discs as under the wall's.
   Scenery keeps `FOOT_REACH` (the sandbags' front) plus its clearance from the
   wall's line. Both checkpoints use
   the UHD scan; re-measure `src/world/pillars/uhd_checkpoint.rs` with
