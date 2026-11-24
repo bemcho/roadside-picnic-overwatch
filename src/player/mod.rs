@@ -37,7 +37,7 @@ use camera::{
 };
 pub(crate) use orders::cast_to_ground;
 use orders::{
-    MoveOrder, issue_move_order, prepare_order_markers, replan_order, sync_order_markers,
+    MoveOrder, Turning, issue_move_order, prepare_order_markers, replan_order, sync_order_markers,
 };
 use vehicle::{
     Driver, Driving, Patrol, Vehicle, drive_patrol, drive_traffic, drive_vehicle, interact_vehicle,
@@ -402,7 +402,13 @@ fn move_player(
     if dt > 0.0 && ground.xz().distance_squared(target.xz()) > 1e-8 {
         locomotion.planar_velocity = (ground.xz() - from).clamp_length_max(step.length()) / dt;
     }
-    order.track_progress(ground.xz(), ground.xz().distance(from), speed * dt, dt);
+    order.track_progress(
+        ground.xz(),
+        ground.xz().distance(from),
+        speed * dt,
+        dt,
+        Turning::InPlace,
+    );
 
     if locomotion.grounded && !crawling && keys.just_pressed(KeyCode::Space) {
         locomotion.vertical_speed = player.jump_speed;
