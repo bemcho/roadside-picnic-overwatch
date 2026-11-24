@@ -12,6 +12,7 @@ use std::f32::consts::PI;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::gltf::GltfMaterial;
+use bevy::image::ImageLoaderSettings;
 use bevy::light::NotShadowCaster;
 use bevy::mesh::{Indices, PrimitiveTopology, VertexAttributeValues};
 use bevy::pbr::gltf::standard_material_from_gltf_material;
@@ -99,24 +100,71 @@ const WALL_HEIGHT_SCALE: f32 = 7.4;
 const PERIMETER_RISE: f32 = 3.0;
 const PANEL_SPAN: f32 = 0.86;
 const SINK: f32 = 0.09;
+/// The sandbag row's reach out from the wall's line and its height in model units, as
+/// `tools/bake_cordon_wall.py` prints them. It lies on the ground rather than standing in it.
+const BAG_REACH: f32 = 0.1989;
+const BAG_TOP: f32 = 0.0532;
+const BAG_SINK: f32 = 0.02;
+/// How far the wall's foot reaches either side of its line, in meters: the sandbags' front.
+const FOOT_REACH: f32 = BAG_REACH * WALL_HEIGHT_SCALE;
+/// The baked box's height and half thickness in model units, as
+/// `tools/bake_cordon_wall.py` prints them.
+const WALL_TOP: f32 = 0.4104;
+const WALL_HALF_THICKNESS: f32 = 0.147;
+/// How far the wall reaches either side of its line, in meters.
+const WALL_HALF_WIDTH: f32 = WALL_HALF_THICKNESS * WALL_HEIGHT_SCALE;
+/// How far a run laps past the one it meets at a corner, or stops short of it.
+const CORNER_LAP: f32 = WALL_HALF_WIDTH;
+/// How close two runs' ends are to meet in a corner.
+const CORNER_REACH: f32 = 0.5;
+/// What a ground patch reaches past the model's farthest vertices, in meters.
+const PATCH_MARGIN: f32 = 0.05;
+/// How far the depth map shifts the box's texture, in UV units (the atlas spans
+/// about one panel per u). The scan's relief is only millimetres deep, so this
+/// exaggerates it to a few centimetres at 45 degrees; tuned by eye: 0.02 smeared
+/// the wall seen along its length.
+const PARALLAX_DEPTH_SCALE: f32 = 0.01;
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
 const CHECKPOINT_PILLARS: &[Pillar] = include!("pillars/uhd_checkpoint.rs");
-const WALL_PILLAR: &[Pillar] = &[Pillar {
+/// The wall's posts stand at most this far apart along it.
+const PILLAR_SPACING: f32 = 0.77;
+/// The radius reaches the box's face even between two posts:
+/// sqrt(1.15^2 - 0.385^2) = 1.084 m of the 1.088 m half width.
+const WALL_DISC: Pillar = Pillar {
     x: 0.0,
     z: 0.0,
-    radius: 0.47,
+    radius: 1.15,
     bottom: -0.65,
-    top: 2.48,
-}];
-const PERIMETER_PILLAR: &[Pillar] = &[Pillar {
-    top: 2.48 * PERIMETER_RISE,
-    ..WALL_PILLAR[0]
-}];
-/// Over the crawl hole the wall's foot stands on the undug ground.
-const HOLE_PILLAR: &[Pillar] = &[Pillar {
+    top: WALL_TOP * WALL_HEIGHT_SCALE - SINK,
+};
+/// The sandbags along the foot reach farther out, lower, and lie on the ground:
+/// sqrt(1.53^2 - 0.385^2) = 1.48 m of the row's 1.47 m.
+const BAG_DISC: Pillar = Pillar {
+    radius: 1.53,
     bottom: -0.05,
-    ..PERIMETER_PILLAR[0]
-}];
+    top: BAG_TOP * WALL_HEIGHT_SCALE - BAG_SINK,
+    ..WALL_DISC
+};
+const WALL_PILLAR: &[Pillar] = &[WALL_DISC, BAG_DISC];
+/// The rows rise with the wall, so the Perimeter's sandbags are three times as high.
+const PERIMETER_PILLAR: &[Pillar] = &[
+    Pillar {
+        top: WALL_TOP * WALL_HEIGHT_SCALE * PERIMETER_RISE - SINK,
+        ..WALL_DISC
+    },
+    Pillar {
+        top: BAG_TOP * WALL_HEIGHT_SCALE * PERIMETER_RISE - BAG_SINK,
+        ..BAG_DISC
+    },
+];
+/// Over the crawl hole the wall's foot stands on the undug ground.
+const HOLE_PILLAR: &[Pillar] = &[
+    Pillar {
+        bottom: -0.05,
+        ..PERIMETER_PILLAR[0]
+    },
+    PERIMETER_PILLAR[1],
+];
 /// A gate's boom spans its road, `BOOM_LENGTH` long, from a post at one side.
 const BOOM_LENGTH: f32 = 2.0 * PERIMETER_GATE_HALF;
 const BOOM_HINGE: f32 = 1.0;
@@ -311,7 +359,7 @@ fn near_checkpoint(at: Vec2, checkpoint: Vec2, clearance: f32) -> bool {
 }
 
 pub(super) fn near_wall_or_checkpoint(at: Vec2, clearance: f32) -> bool {
-    if (at.x - PERIMETER_X).abs() < 0.65 + clearance
+    if (at.x - PERIMETER_X).abs() < FOOT_REACH + clearance
         || near_checkpoint(at, PERIMETER_CHECKPOINT, clearance)
     {
         return true;
@@ -323,7 +371,7 @@ pub(super) fn near_wall_or_checkpoint(at: Vec2, clearance: f32) -> bool {
         || YARD_RUNS.into_iter().any(|(start, end)| {
             let line = end - start;
             let fraction = ((at - start).dot(line) / line.length_squared()).clamp(0.0, 1.0);
-            at.distance_squared(start + line * fraction) < (0.65 + clearance).powi(2)
+            at.distance_squared(start + line * fraction) < (FOOT_REACH + clearance).powi(2)
         })
 }
 
@@ -425,13 +473,28 @@ fn hole_thicket(at: Vec2) -> f32 {
 }
 
 pub(super) fn preload_cordon(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
-    let (mesh, paint) = assets::load_single_primitive(&server, assets::SITE_CORDON_WALL);
-    preloaded.0.extend([mesh.untyped(), paint.untyped()]);
+    for path in [
+        assets::CORDON_WALL_BOX,
+        assets::CORDON_WALL_WIRE,
+        assets::CORDON_WALL_SANDBAGS,
+    ] {
+        let (mesh, paint) = assets::load_single_primitive(&server, path);
+        preloaded.0.extend([mesh.untyped(), paint.untyped()]);
+    }
+    preloaded.0.push(load_wall_depth(&server).untyped());
     preloaded.0.push(
         server
             .load::<WorldAsset>(GltfAssetLabel::Scene(0).from_asset(assets::SITE_CHECKPOINT))
             .untyped(),
     );
+}
+
+/// The box's depth map: data, not colour, filtered but clamped to its atlas.
+fn load_wall_depth(server: &AssetServer) -> Handle<Image> {
+    server
+        .load_builder()
+        .with_settings(|settings: &mut ImageLoaderSettings| settings.is_srgb = false)
+        .load(assets::CORDON_WALL_DEPTH)
 }
 
 /// A checkpoint on level ground, turned `yaw` from facing along +X.
@@ -453,11 +516,6 @@ pub(super) fn prepare_cordon(
     gltf_materials: Res<Assets<GltfMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let (mesh, paint) = assets::load_single_primitive(&server, assets::SITE_CORDON_WALL);
-    let mesh = meshes.get(&mesh).expect("preloaded cordon mesh");
-    let paint = gltf_materials
-        .get(&paint)
-        .expect("preloaded cordon material");
     let root = commands
         .spawn((WorldRoot, Transform::IDENTITY, Visibility::default()))
         .id();
@@ -477,14 +535,57 @@ pub(super) fn prepare_cordon(
             detail_range(400.0, 40.0),
         ));
     }
+    let (wall, mut concrete) =
+        wall_part(&server, &meshes, &gltf_materials, assets::CORDON_WALL_BOX);
+    // Relief mapping shifts the blocks and joints with the view, along the baked tangents.
+    assert!(!wall.tangents.is_empty(), "the wall box has baked tangents");
+    concrete.depth_map = Some(load_wall_depth(&server));
+    concrete.parallax_mapping_method = ParallaxMappingMethod::Relief { max_steps: 4 };
+    concrete.max_parallax_layer_count = 16.0;
+    concrete.parallax_depth_scale = PARALLAX_DEPTH_SCALE;
+    let (wire, steel) = wall_part(&server, &meshes, &gltf_materials, assets::CORDON_WALL_WIRE);
+    let (bags, cloth) = wall_part(
+        &server,
+        &meshes,
+        &gltf_materials,
+        assets::CORDON_WALL_SANDBAGS,
+    );
     commands.insert_resource(Cordon {
         root,
         chunks: wall_chunks(),
         active: HashMap::default(),
         centers: Vec::new(),
-        wall: WallModel::new(mesh),
-        paint: materials.add(standard_material_from_gltf_material(paint)),
+        wall: WallPart {
+            model: wall,
+            paint: materials.add(concrete),
+        },
+        wire: WallPart {
+            model: wire,
+            paint: materials.add(steel),
+        },
+        sandbags: WallPart {
+            model: bags.sandbags(),
+            paint: materials.add(cloth),
+        },
     });
+}
+
+/// The preloaded model and paint of one of the wall's GLBs.
+fn wall_part(
+    server: &AssetServer,
+    meshes: &Assets<Mesh>,
+    gltf_materials: &Assets<GltfMaterial>,
+    path: &'static str,
+) -> (WallModel, StandardMaterial) {
+    let (mesh, paint) = assets::load_single_primitive(server, path);
+    let mesh = meshes.get(&mesh).expect("preloaded cordon mesh");
+    let paint = gltf_materials
+        .get(&paint)
+        .expect("preloaded cordon material");
+    (
+        WallModel::new(mesh),
+        standard_material_from_gltf_material(paint),
+    )
 }
 
 /// Paints the booms across the yard's and the Institute's gates: a post, and an
@@ -586,6 +687,9 @@ struct Panel {
     length: f32,
     /// How many times as high as the standard cordon it stands.
     rise: f32,
+    /// Meters its box reaches past `center` +- `length` / 2 at its start and end, or
+    /// stops short of them if negative: rendering only, colliders ignore them.
+    laps: [f32; 2],
 }
 
 impl Panel {
@@ -605,7 +709,7 @@ impl Panel {
     }
 
     fn pillars(self) -> impl Iterator<Item = Vec2> {
-        let count = (self.length / 0.77).ceil() as u32;
+        let count = (self.length / PILLAR_SPACING).ceil() as u32;
         (0..count).map(move |i| {
             self.center + self.along * self.length * ((i as f32 + 0.5) / count as f32 - 0.5)
         })
@@ -616,7 +720,17 @@ fn tile_at(point: Vec2) -> IVec2 {
     (point / TILE_SIZE).floor().as_ivec2()
 }
 
-fn wall_chunks() -> HashMap<IVec2, Vec<Panel>> {
+/// A straight stretch of wall.
+#[derive(Clone, Copy)]
+struct Run {
+    from: Vec2,
+    to: Vec2,
+    /// How many times as high as the standard cordon it stands.
+    rise: f32,
+}
+
+/// Every run of wall: the yard's, the map's edge and the Perimeter's.
+fn wall_runs() -> Vec<Run> {
     let a = Vec2::splat(-EDGE);
     let b = Vec2::new(EDGE, -EDGE);
     let c = Vec2::splat(EDGE);
@@ -632,24 +746,68 @@ fn wall_chunks() -> HashMap<IVec2, Vec<Panel>> {
             perimeter(EDGE),
         ),
     ];
-    let mut chunks: HashMap<_, Vec<_>> = HashMap::default();
-    for (from, to, rise) in YARD_RUNS
+    YARD_RUNS
         .into_iter()
         .chain([(a, b), (b, c), (c, d), (d, a)])
-        .map(|(from, to)| (from, to, 1.0))
-        .chain(perimeter_runs.map(|(from, to)| (from, to, PERIMETER_RISE)))
-    {
-        let span = from.distance(to);
-        let along = (to - from) / span;
+        .map(|(from, to)| Run {
+            from,
+            to,
+            rise: 1.0,
+        })
+        .chain(perimeter_runs.map(|(from, to)| Run {
+            from,
+            to,
+            rise: PERIMETER_RISE,
+        }))
+        .collect()
+}
+
+/// How far the end of run `index` at `end` laps. Where another run ends too, they
+/// meet in a corner: the earlier one laps past the other's line, so its end cap
+/// closes the outer corner, and the later one stops short of it, so no two faces
+/// share a plane. An end beside a gate, or against the middle of another run (a
+/// T-junction), stops where it is.
+fn end_lap(runs: &[Run], index: usize, end: Vec2) -> f32 {
+    let meets = |run: &Run| {
+        [run.from, run.to]
+            .iter()
+            .any(|at| at.distance(end) < CORNER_REACH)
+    };
+    runs.iter()
+        .enumerate()
+        .find_map(|(other, run)| (other != index && meets(run)).then_some(other))
+        .map_or(0.0, |other| {
+            if index < other {
+                CORNER_LAP
+            } else {
+                -CORNER_LAP
+            }
+        })
+}
+
+fn wall_chunks() -> HashMap<IVec2, Vec<Panel>> {
+    let runs = wall_runs();
+    let mut chunks: HashMap<_, Vec<_>> = HashMap::default();
+    for (index, run) in runs.iter().enumerate() {
+        let span = run.from.distance(run.to);
+        let along = (run.to - run.from) / span;
         let count = (span / 7.4).round().max(1.0) as u32;
         let length = span / count as f32;
+        let (start, end) = (
+            end_lap(&runs, index, run.from),
+            end_lap(&runs, index, run.to),
+        );
         for i in 0..count {
-            let center = from + (i as f32 + 0.5) * length * along;
+            let center = run.from + (i as f32 + 0.5) * length * along;
             chunks.entry(tile_at(center)).or_default().push(Panel {
                 center,
                 along,
                 length,
-                rise,
+                rise: run.rise,
+                laps: [
+                    if i == 0 { start } else { 0.0 },
+                    if i + 1 == count { end } else { 0.0 },
+                ],
             });
         }
     }
@@ -662,7 +820,15 @@ pub(super) struct Cordon {
     chunks: HashMap<IVec2, Vec<Panel>>,
     active: HashMap<IVec2, Entity>,
     centers: Vec<IVec2>,
-    wall: WallModel,
+    /// The concrete box, the razor wire on top of it and the sandbags along its foot.
+    wall: WallPart,
+    wire: WallPart,
+    sandbags: WallPart,
+}
+
+/// One of the wall's meshes and the paint it wears.
+struct WallPart {
+    model: WallModel,
     paint: Handle<StandardMaterial>,
 }
 
@@ -706,19 +872,34 @@ fn spawn_wall_chunk(
     panels: &[Panel],
 ) -> Entity {
     let origin = tile.as_vec2() * TILE_SIZE;
-    let mesh = meshes.add(cordon.wall.batch(terrain, origin, panels));
+    let mut batched = |part: &WallPart| {
+        (
+            Mesh3d(meshes.add(part.model.batch(terrain, origin, panels))),
+            MeshMaterial3d(part.paint.clone()),
+            detail_range(205.0, 25.0),
+        )
+    };
     let mut root = commands.spawn((
         ChildOf(cordon.root),
         Name::new("Concrete cordon"),
         Transform::from_xyz(origin.x, 0.0, origin.y),
-        Mesh3d(mesh),
-        MeshMaterial3d(cordon.paint.clone()),
-        detail_range(205.0, 25.0),
+        batched(&cordon.wall),
     ));
-    if panels[0].center.abs().max_element() >= EDGE {
+    let overlays = [
+        ("Razor wire", batched(&cordon.wire)),
+        ("Sandbags", batched(&cordon.sandbags)),
+    ];
+    let at_edge = panels[0].center.abs().max_element() >= EDGE;
+    if at_edge {
         root.insert(NotShadowCaster);
     }
     root.with_children(|wall| {
+        for (name, overlay) in overlays {
+            let mut part = wall.spawn((Name::new(name), overlay));
+            if at_edge {
+                part.insert(NotShadowCaster);
+            }
+        }
         for &panel in panels {
             for at in panel.pillars() {
                 wall.spawn((
@@ -737,32 +918,64 @@ fn wall_pillar_pose(terrain: &Terrain, at: Vec2, origin: Vec2) -> Transform {
     Transform::from_xyz(at.x - origin.x, floor.x + floor.y, at.y - origin.y)
 }
 
+/// A wall GLB's single primitive, to be sheared onto the ground under each panel.
 struct WallModel {
     positions: Vec<[f32; 3]>,
     normals: Vec<[f32; 3]>,
+    /// Empty where the material has no normal map (the razor wire).
+    tangents: Vec<[f32; 4]>,
     uv: Vec<[f32; 2]>,
     indices: Vec<u32>,
+    /// How far the model reaches along x and across z of its line, in model units.
+    half_size: Vec2,
+    /// How far the model's foot is sunk below the ground, in meters.
+    sink: f32,
+    /// Whether a run that stops short of a corner (a negative lap) shortens this model too. The box does; the
+    /// sandbags run on to the outer corner instead, since no wall's cap stands over their foot.
+    insets: bool,
 }
 
 impl WallModel {
+    /// The sandbag row: it lies on the ground rather than standing in it, and every run's row reaches the
+    /// corner, so the foot of a lapping run's end cap is not left bare.
+    fn sandbags(self) -> Self {
+        Self {
+            sink: BAG_SINK,
+            insets: false,
+            ..self
+        }
+    }
+
     fn new(mesh: &Mesh) -> Self {
         let Some(VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
         else {
-            unreachable!("the wall GLB has float positions");
+            unreachable!("the wall GLBs have float positions");
         };
         let Some(VertexAttributeValues::Float32x3(normals)) =
             mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
         else {
-            unreachable!("the wall GLB has float normals");
+            unreachable!("the wall GLBs have float normals");
         };
         let Some(VertexAttributeValues::Float32x2(uv)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
         else {
-            unreachable!("the wall GLB has float UVs");
+            unreachable!("the wall GLBs have float UVs");
         };
+        let tangents = match mesh.attribute(Mesh::ATTRIBUTE_TANGENT) {
+            Some(VertexAttributeValues::Float32x4(tangents)) => tangents.clone(),
+            None => Vec::new(),
+            Some(_) => unreachable!("the wall GLBs have float tangents"),
+        };
+        let half_size = positions.iter().fold(Vec2::ZERO, |reach, &[x, _, z]| {
+            reach.max(Vec2::new(x, z).abs())
+        });
         Self {
             positions: positions.clone(),
             normals: normals.clone(),
+            tangents,
+            half_size,
+            sink: SINK,
+            insets: true,
             uv: uv.clone(),
             indices: mesh
                 .indices()
@@ -773,57 +986,91 @@ impl WallModel {
         }
     }
 
+    /// The panels' copies of the model in one mesh relative to `origin`. Each copy
+    /// is stretched along its run (over its laps), set on the ground under it, and
+    /// sheared by the ground's slope, with its normals and tangents.
+    ///
+    /// The shear depends on each panel's ground, so it stays at runtime: the baked
+    /// tangents would no longer follow the sheared faces, and the relief map would swim.
     fn batch(&self, terrain: &Terrain, origin: Vec2, panels: &[Panel]) -> Mesh {
-        let mut positions = Vec::with_capacity(self.positions.len() * panels.len());
-        let mut normals = Vec::with_capacity(positions.capacity());
-        let mut uv = Vec::with_capacity(positions.capacity());
+        let capacity = self.positions.len() * panels.len();
+        let mut positions = Vec::with_capacity(capacity);
+        let mut normals = Vec::with_capacity(capacity);
+        let mut tangents = Vec::with_capacity(self.tangents.len() * panels.len());
+        let mut uv = Vec::with_capacity(capacity);
         let mut indices = Vec::with_capacity(self.indices.len() * panels.len());
         for &panel in panels {
-            let scale_x = panel.length / PANEL_SPAN;
-            let extents = panel.along.abs() * (0.51 * scale_x) + panel.across().abs() * 0.70;
-            let floor = GroundPatch::new(terrain, panel.center - extents, panel.center + extents);
+            // Model x = 0 stands `shift` along the run from the center.
+            let laps = if self.insets {
+                panel.laps
+            } else {
+                panel.laps.map(f32::abs)
+            };
+            let total = panel.length + laps[0] + laps[1];
+            let scale_x = total / PANEL_SPAN;
+            let shift = (laps[1] - laps[0]) * 0.5;
+            // The ground under every vertex, whatever this model's width.
+            let reach = panel.along.abs()
+                * (self.half_size.x * scale_x + shift.abs() + PATCH_MARGIN)
+                + panel.across().abs() * (self.half_size.y * WALL_HEIGHT_SCALE + PATCH_MARGIN);
+            let floor = GroundPatch::new(terrain, panel.center - reach, panel.center + reach);
             let rise = WALL_HEIGHT_SCALE * panel.rise;
             let offset = positions.len() as u32;
-            for (&[x, y, z], &[nx, ny, nz]) in self.positions.iter().zip(&self.normals) {
+            for (i, (&[x, y, z], &[nx, ny, nz])) in
+                self.positions.iter().zip(&self.normals).enumerate()
+            {
                 let at = panel.center
-                    + panel.along * (x * scale_x)
+                    + panel.along * (shift + x * scale_x)
                     + panel.across() * (z * WALL_HEIGHT_SCALE);
                 let base = floor.sample(at);
                 // Continue over lakes and rivers on a concrete foundation, not a floating row of panels.
                 let stretch = (y / 0.15).min(1.0);
-                let height = y * rise + base.value.x + stretch * base.value.y - SINK;
+                let height = y * rise + base.value.x + stretch * base.value.y - self.sink;
+                // How fast the height grows with the model's y.
+                let dheight_dy = rise
+                    + if stretch < 1.0 {
+                        base.value.y / 0.15
+                    } else {
+                        0.0
+                    };
                 let horizontal =
                     panel.along * (nx / scale_x) + panel.across() * (nz / WALL_HEIGHT_SCALE);
-                let vertical = ny
-                    / (rise
-                        + if stretch < 1.0 {
-                            base.value.y / 0.15
-                        } else {
-                            0.0
-                        });
+                let vertical = ny / dheight_dy;
                 let slope = Vec2::new(
                     base.dx.x + stretch * base.dx.y,
                     base.dz.x + stretch * base.dz.y,
                 );
                 let normal = horizontal - slope * vertical;
+                let normal = Vec3::new(normal.x, vertical, normal.y).normalize();
                 positions.push([at.x - origin.x, height, at.y - origin.y]);
-                normals.push(
-                    Vec3::new(normal.x, vertical, normal.y)
-                        .normalize()
-                        .to_array(),
-                );
+                normals.push(normal.to_array());
+                if let Some(&[tx, ty, tz, w]) = self.tangents.get(i) {
+                    let along_run =
+                        panel.along * (tx * scale_x) + panel.across() * (tz * WALL_HEIGHT_SCALE);
+                    let tangent = Vec3::new(
+                        along_run.x,
+                        ty * dheight_dy + slope.dot(along_run),
+                        along_run.y,
+                    );
+                    let tangent = (tangent - normal * normal.dot(tangent)).normalize_or_zero();
+                    tangents.push([tangent.x, tangent.y, tangent.z, w]);
+                }
             }
             uv.extend_from_slice(&self.uv);
             indices.extend(self.indices.iter().map(|&index| index + offset));
         }
-        Mesh::new(
+        let mut mesh = Mesh::new(
             PrimitiveTopology::TriangleList,
             RenderAssetUsages::RENDER_WORLD,
         )
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
         .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, uv)
-        .with_inserted_indices(Indices::U32(indices))
+        .with_inserted_indices(Indices::U32(indices));
+        if !tangents.is_empty() {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_TANGENT, tangents);
+        }
+        mesh
     }
 }
 
@@ -871,6 +1118,14 @@ impl GroundPatch {
     fn sample(&self, at: Vec2) -> GroundSample {
         let grid = at / SPACING - self.corner;
         let cell = grid.floor().as_uvec2();
+        // Past the patch's low side the cell saturates to 0, and past its high side along x
+        // the next row's vertices are read: both silently wrong.
+        debug_assert!(
+            grid.cmpge(Vec2::ZERO).all()
+                && cell.x as usize + 1 < self.width
+                && (cell.y as usize + 1) * self.width < self.vertices.len(),
+            "{at} lies outside its ground patch"
+        );
         let uv = grid - cell.as_vec2();
         let i = cell.y as usize * self.width + cell.x as usize;
         let (b, c) = (self.vertices[i + 1], self.vertices[i + self.width]);
@@ -895,8 +1150,10 @@ impl GroundPatch {
 
 #[cfg(test)]
 mod tests {
+    use std::f32::consts::FRAC_1_SQRT_2;
     use std::time::Duration;
 
+    use bevy::mesh::MeshVertexAttribute;
     use bevy::time::TimeUpdateStrategy;
 
     use super::*;
@@ -930,6 +1187,370 @@ mod tests {
                 )
             })
             .collect()
+    }
+
+    /// A stand-in for a baked model: the panel's width, `half_thickness` either side of the
+    /// line, 0.4 high, with tangents.
+    fn test_model(half_thickness: f32) -> WallModel {
+        let mesh = Mesh::from(Cuboid::new(PANEL_SPAN, 0.4, 2.0 * half_thickness))
+            .translated_by(Vec3::Y * 0.2)
+            .with_generated_tangents()
+            .expect("a cuboid has normals and UVs");
+        WallModel::new(&mesh)
+    }
+
+    /// A stand-in for the baked box.
+    fn test_wall() -> WallModel {
+        test_model(WALL_HALF_THICKNESS)
+    }
+
+    fn float3(mesh: &Mesh, attribute: MeshVertexAttribute) -> Vec<Vec3> {
+        let values = mesh
+            .attribute(attribute)
+            .and_then(VertexAttributeValues::as_float3);
+        values
+            .expect("the batch has the attribute")
+            .iter()
+            .map(|&v| Vec3::from(v))
+            .collect()
+    }
+
+    fn tangents(mesh: &Mesh) -> Vec<Vec4> {
+        let Some(VertexAttributeValues::Float32x4(values)) =
+            mesh.attribute(Mesh::ATTRIBUTE_TANGENT)
+        else {
+            panic!("the batch has tangents");
+        };
+        values.iter().map(|&v| Vec4::from(v)).collect()
+    }
+
+    /// The lowest and highest coordinate of the batched mesh's vertices along `axis`, seen from above.
+    fn extent_along(mesh: &Mesh, axis: Vec2) -> (f32, f32) {
+        float3(mesh, Mesh::ATTRIBUTE_POSITION)
+            .iter()
+            .map(|v| v.xz().dot(axis))
+            .fold((f32::MAX, f32::MIN), |(low, high), v| {
+                (low.min(v), high.max(v))
+            })
+    }
+
+    /// Four consecutive panels of the west edge where the ground varies the most.
+    fn sloped_stretch(terrain: &Terrain) -> Vec<Panel> {
+        let mut west = wall_chunks()
+            .into_values()
+            .flatten()
+            .filter(|panel| (panel.center.x + EDGE).abs() < 1e-3)
+            .collect::<Vec<_>>();
+        west.sort_unstable_by(|a, b| a.center.y.total_cmp(&b.center.y));
+        let range = |panels: &[Panel]| {
+            let ground = panels
+                .iter()
+                .map(|panel| floor_point(terrain, panel.center).x);
+            ground.clone().fold(f32::MIN, f32::max) - ground.fold(f32::MAX, f32::min)
+        };
+        west.windows(4)
+            .max_by(|a, b| range(a).total_cmp(&range(b)))
+            .expect("the west edge has panels")
+            .to_vec()
+    }
+
+    #[test]
+    fn wall_chunk_tangents_run_along_the_panel_and_square_to_the_normals() {
+        let terrain = Terrain::new();
+        let panels = sloped_stretch(&terrain);
+        let ground = panels
+            .iter()
+            .map(|panel| floor_point(&terrain, panel.center).x);
+        assert!(
+            ground.clone().fold(f32::MIN, f32::max) - ground.fold(f32::MAX, f32::min) > 1.0,
+            "the stretch is flat"
+        );
+        let mesh = test_wall().batch(&terrain, Vec2::ZERO, &panels);
+        let normals = float3(&mesh, Mesh::ATTRIBUTE_NORMAL);
+        let tangents = tangents(&mesh);
+        assert_eq!(normals.len(), tangents.len());
+        let (along, across) = (panels[0].along, panels[0].across());
+        let mut leaning = 0;
+        for (&n, tangent) in normals.iter().zip(&tangents) {
+            let t = tangent.truncate();
+            assert!(n.dot(t).abs() < 1e-3, "tangent {t} leans into normal {n}");
+            assert_eq!(tangent.w.abs(), 1.0);
+            let faces_across = n.xz().dot(across).abs() > FRAC_1_SQRT_2;
+            if faces_across || n.y > FRAC_1_SQRT_2 {
+                assert!(
+                    t.xz().dot(along).abs() > 0.9 * t.xz().length(),
+                    "tangent {t} off the run"
+                );
+                leaning += usize::from(t.y.abs() > 0.01);
+            }
+        }
+        assert!(leaning > 0, "no tangent follows the slope");
+        // On the sheared mesh itself, each triangle's own direction of growing u is its vertices' tangent.
+        let Some(VertexAttributeValues::Float32x2(uv)) = mesh.attribute(Mesh::ATTRIBUTE_UV_0)
+        else {
+            panic!("the batch has UVs");
+        };
+        let positions = float3(&mesh, Mesh::ATTRIBUTE_POSITION);
+        let indices = mesh.indices().expect("the batch is indexed");
+        let corners = indices.iter().collect::<Vec<_>>();
+        for triangle in corners.as_chunks::<3>().0 {
+            let [p0, p1, p2] = [0, 1, 2].map(|i| positions[triangle[i]]);
+            let [uv0, uv1, uv2] = [0, 1, 2].map(|i| Vec2::from(uv[triangle[i]]));
+            let (du1, du2) = (uv1 - uv0, uv2 - uv0);
+            let det = du1.x * du2.y - du2.x * du1.y;
+            let grows = ((p1 - p0) * du2.y - (p2 - p0) * du1.y) / det;
+            for &corner in triangle {
+                let t = tangents[corner].truncate();
+                assert!(
+                    grows.normalize().dot(t) > 0.99,
+                    "tangent {t} swims off u {grows}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_model_without_tangents_batches_without_them() {
+        let terrain = Terrain::new();
+        let mut wire = test_wall();
+        wire.tangents.clear();
+        let panels = sloped_stretch(&terrain);
+        let mesh = wire.batch(&terrain, Vec2::ZERO, &panels);
+        assert!(mesh.attribute(Mesh::ATTRIBUTE_TANGENT).is_none());
+        assert_eq!(
+            float3(&mesh, Mesh::ATTRIBUTE_POSITION).len(),
+            wire.positions.len() * panels.len()
+        );
+    }
+
+    #[test]
+    fn a_model_wider_than_the_box_stays_inside_its_ground_patch() {
+        let terrain = Terrain::new();
+        // The razor wire's flat strip reaches 0.16246 either side of the line, past the box's 0.147.
+        let wire = test_model(0.16246);
+        let reach = 0.16246 * WALL_HEIGHT_SCALE;
+        // Each panel puts one outer vertex of the strip 3 cm outside a line of the ground's grid
+        // (on its low or high side), which a patch sized for the box (1.138 m) stops short of.
+        let past = |side: f32| 30.0 * SPACING + side * (0.03 - reach);
+        for along in [Vec2::X, Vec2::Y] {
+            for side in [-1.0, 1.0] {
+                let panel = Panel {
+                    center: along.abs() * 100.0 + along.perp().abs() * past(side),
+                    along,
+                    length: 7.4,
+                    rise: 1.0,
+                    laps: [0.0; 2],
+                };
+                // Sampling outside the patch panics or reads another cell.
+                wire.batch(&terrain, Vec2::ZERO, &[panel]);
+            }
+        }
+    }
+
+    /// The panel of `run` that ends at `point`, and which end that is (0 the start, 1 the end).
+    fn end_panel(panels: &[Panel], run: &Run, point: Vec2) -> (Panel, usize) {
+        let along = (run.to - run.from).normalize();
+        let end = usize::from(run.to.distance(point) < 1e-3);
+        panels
+            .iter()
+            .copied()
+            .find(|panel| {
+                let tip = panel.center + panel.along * panel.length * (end as f32 - 0.5);
+                panel.along.abs_diff_eq(along, 1e-4) && tip.distance(point) < 1e-3
+            })
+            .map(|panel| (panel, end))
+            .expect("the run has a panel at its end")
+    }
+
+    /// Each corner of the walls with the panel of the earlier run that ends there and the later run's, each
+    /// with the end that meets the corner.
+    fn corner_panels(
+        runs: &[Run],
+        panels: &[Panel],
+    ) -> Vec<(Vec2, (Panel, usize), (Panel, usize))> {
+        let (a, b) = (Vec2::splat(-EDGE), Vec2::new(EDGE, -EDGE));
+        let (c, d) = (Vec2::splat(EDGE), Vec2::new(-EDGE, EDGE));
+        [a, b, c, d, SOUTHWEST, SOUTHEAST, NORTHEAST, NORTHWEST]
+            .into_iter()
+            .map(|corner| {
+                let meeting = runs
+                    .iter()
+                    .filter(|run| run.from == corner || run.to == corner)
+                    .collect::<Vec<_>>();
+                assert_eq!(meeting.len(), 2, "corner {corner}");
+                let (first, second) = (meeting[0], meeting[1]);
+                (
+                    corner,
+                    end_panel(panels, first, corner),
+                    end_panel(panels, second, corner),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn straight_runs_meet_end_to_end_and_corners_lap() {
+        let terrain = Terrain::new();
+        let wall = test_wall();
+        let runs = wall_runs();
+        let panels = wall_chunks().into_values().flatten().collect::<Vec<_>>();
+        let extent = |panel: Panel, axis: Vec2| {
+            extent_along(&wall.batch(&terrain, Vec2::ZERO, &[panel]), axis)
+        };
+        // Along a straight run the boxes end where the next begins.
+        let mut south = panels
+            .iter()
+            .copied()
+            .filter(|panel| panel.center.x == PERIMETER_X && panel.center.y < PERIMETER_GATE.y)
+            .collect::<Vec<_>>();
+        south.sort_unstable_by(|a, b| a.center.y.total_cmp(&b.center.y));
+        let (first, second) = (south[1], south[2]);
+        assert_eq!((first.laps, second.laps), ([0.0; 2], [0.0; 2]));
+        assert!((extent(first, first.along).1 - extent(second, first.along).0).abs() < 1e-3);
+
+        // Where two runs meet in a corner the earlier one laps past the other's line, closing the
+        // outer corner, and the later one stops against it.
+        for (corner, (first, first_end), (second, second_end)) in corner_panels(&runs, &panels) {
+            assert_eq!(first.laps[first_end], CORNER_LAP, "corner {corner}");
+            assert_eq!(second.laps[second_end], -CORNER_LAP, "corner {corner}");
+            // The later run's end touches the earlier run's near face, without overlapping it.
+            let out = |panel: Panel, end: usize| panel.along * (2.0 * end as f32 - 1.0);
+            let toward = out(second, second_end);
+            assert!(
+                (extent(second, toward).1 - extent(first, toward).0).abs() < 1e-3,
+                "corner {corner}: the boxes do not touch"
+            );
+            // The earlier run's end cap is flush with the later run's outer face.
+            let outer = out(first, first_end);
+            assert!(
+                (extent(first, outer).1 - extent(second, outer).1).abs() < 1e-3,
+                "corner {corner}: the outer corner is notched"
+            );
+        }
+
+        // A T-junction, a gate and the yard's gap end where they are.
+        let perimeter = |z: f32| Vec2::new(PERIMETER_X, z);
+        for end in [
+            perimeter(-EDGE),
+            perimeter(EDGE),
+            perimeter(PERIMETER_GATE.y - PERIMETER_GATE_HALF),
+            perimeter(PERIMETER_GATE.y + PERIMETER_GATE_HALF),
+            WEST_JAMB,
+            EAST_JAMB,
+        ] {
+            let run = runs
+                .iter()
+                .find(|run| run.from == end || run.to == end)
+                .expect("a run ends here");
+            let (panel, end) = end_panel(&panels, run, end);
+            assert_eq!(panel.laps[end], 0.0);
+        }
+    }
+
+    #[test]
+    fn the_sandbag_rows_of_both_runs_run_on_to_the_outer_corner() {
+        let terrain = Terrain::new();
+        let (wall, bags) = (test_wall(), test_bags());
+        let panels = wall_chunks().into_values().flatten().collect::<Vec<_>>();
+        let extent = |model: &WallModel, panel: Panel, axis: Vec2| {
+            extent_along(&model.batch(&terrain, Vec2::ZERO, &[panel]), axis)
+        };
+        for (corner, (first, first_end), (second, second_end)) in
+            corner_panels(&wall_runs(), &panels)
+        {
+            // The earlier run's cap stands in the plane of the later run's outer face: the plane the later
+            // box is inset from, and where each run's row of bags ends, so no bare foot is left under the cap.
+            for (panel, end) in [(first, first_end), (second, second_end)] {
+                let toward = panel.along * (2.0 * end as f32 - 1.0);
+                let outer = extent(&wall, first, toward).1;
+                let rows = extent(&bags, panel, toward).1;
+                assert!(
+                    (rows - outer).abs() < 1e-3,
+                    "corner {corner}: a row stops {} short",
+                    outer - rows
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_wall_colliders_stop_a_body_at_the_visible_face() {
+        let [wall, bags] = WALL_PILLAR else {
+            panic!("a disc for the wall and one for the sandbags along its foot");
+        };
+        let spacing = wall_chunks()
+            .into_values()
+            .flatten()
+            .map(|panel| panel.length / (panel.length / PILLAR_SPACING).ceil())
+            .fold(0.0, f32::max);
+        // The dip between two neighbouring posts still reaches the box's face and the sandbags' front.
+        let dip = |disc: &Pillar| (disc.radius.powi(2) - (spacing / 2.0).powi(2)).sqrt();
+        for (disc, reach) in [(wall, CORNER_LAP), (bags, FOOT_REACH)] {
+            assert!(
+                (reach - 0.02..reach + 0.1).contains(&dip(disc)),
+                "dip {}",
+                dip(disc)
+            );
+            assert!(disc.radius < reach + 0.1, "radius {}", disc.radius);
+        }
+        assert!(wall.top >= WALL_TOP * WALL_HEIGHT_SCALE - SINK - 0.01);
+        // The sandbags lie on the ground: a crawler under a raised wall still passes below them.
+        assert!(bags.top >= BAG_TOP * WALL_HEIGHT_SCALE - BAG_SINK - 0.01);
+        assert!(bags.top < wall.top && bags.bottom > -0.1);
+    }
+
+    /// A stand-in for the sandbag row: the panel's width, from just inside the box's face to the sandbags' front
+    /// on one side, as high as the sandbags.
+    fn test_bags() -> WallModel {
+        let inner = WALL_HALF_THICKNESS - 0.004;
+        let mesh = Mesh::from(Cuboid::new(PANEL_SPAN, BAG_TOP, BAG_REACH - inner))
+            .translated_by(Vec3::new(0.0, BAG_TOP / 2.0, (inner + BAG_REACH) / 2.0))
+            .with_generated_tangents()
+            .expect("a cuboid has normals and UVs");
+        WallModel::new(&mesh).sandbags()
+    }
+
+    #[test]
+    fn the_sandbags_lie_on_the_ground_inside_their_ground_patch() {
+        let terrain = Terrain::new();
+        let bags = test_bags();
+        // Panels with the row's front 3 cm outside a line of the ground's grid, on either side of the
+        // run and along both axes, then a stretch of sloping ground.
+        let reach = BAG_REACH * WALL_HEIGHT_SCALE;
+        let past = |side: f32| 30.0 * SPACING + side * (0.03 - reach);
+        let mut panels = Vec::new();
+        for along in [Vec2::X, Vec2::Y] {
+            for side in [-1.0, 1.0] {
+                panels.push(Panel {
+                    center: along.abs() * 100.0 + along.perp().abs() * past(side),
+                    along,
+                    length: 7.4,
+                    rise: 1.0,
+                    laps: [0.0; 2],
+                });
+            }
+        }
+        panels.extend(sloped_stretch(&terrain));
+        for panel in panels {
+            let mesh = bags.batch(&terrain, Vec2::ZERO, &[panel]);
+            for (model, vertex) in bags
+                .positions
+                .iter()
+                .zip(float3(&mesh, Mesh::ATTRIBUTE_POSITION))
+            {
+                let ground = floor_point(&terrain, vertex.xz()).x;
+                let lowest = vertex.y + BAG_SINK - ground;
+                if model[1] == 0.0 {
+                    assert!(
+                        lowest.abs() < 0.03,
+                        "a foot {lowest} m off the ground at {vertex}"
+                    );
+                } else {
+                    // The crown of the row stands its height above the ground, whatever the slope.
+                    assert!((lowest - model[1] * WALL_HEIGHT_SCALE).abs() < 0.03);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1111,6 +1732,36 @@ mod tests {
     }
 
     #[test]
+    fn a_crawler_gets_under_the_thick_wall_along_the_middle_of_the_hole() {
+        let terrain = Terrain::new();
+        let solids = solids_near(&terrain, CRAWL_HOLE, 14.0);
+        let obstacles = || solids.iter().map(|(solid, pose)| (solid, pose));
+        let passes = |along: f32| {
+            (-60..=60).all(|i| {
+                let at = CRAWL_HOLE + Vec2::new(i as f32 * 0.1, along);
+                let feet = terrain.mesh_height_at(at);
+                fence_out(at, feet, PRONE, obstacles()) == at
+                    && push_out(at, feet, PRONE, obstacles()) == at
+            })
+        };
+        // The wall's whole thickness stands over the hole's floor, and the posts there
+        // start below the ground only beyond it.
+        const { assert!(WALL_HALF_WIDTH < HOLE_FLOOR.x) };
+        for along in [-1.0, 0.0, 1.0] {
+            assert!(
+                passes(along),
+                "a crawler is stuck under the wall {along} m along the hole"
+            );
+        }
+        for along in [-HOLE_RIM.y, HOLE_RIM.y] {
+            assert!(
+                !passes(along),
+                "the wall's foot is missing {along} m along the hole"
+            );
+        }
+    }
+
+    #[test]
     fn the_gate_boom_lifts_for_institute_business_and_lowers_after() {
         let terrain = Terrain::new();
         let mut app = App::new();
@@ -1222,18 +1873,27 @@ mod tests {
         let player = world
             .spawn((Player::default(), Transform::from_xyz(BASE.0, 0.0, BASE.1)))
             .id();
+        let triangle = |tangents| WallPart {
+            model: WallModel {
+                positions: vec![[-0.4, 0.0, 0.0], [0.4, 0.0, 0.0], [0.0, 0.3, 0.0]],
+                normals: vec![[0.0, 0.0, 1.0]; 3],
+                tangents,
+                uv: vec![[0.0, 0.0]; 3],
+                indices: vec![0, 1, 2],
+                half_size: Vec2::new(0.4, 0.0),
+                sink: SINK,
+                insets: true,
+            },
+            paint: Handle::default(),
+        };
         world.insert_resource(Cordon {
             root,
             chunks: wall_chunks(),
             active: HashMap::default(),
             centers: Vec::new(),
-            wall: WallModel {
-                positions: vec![[-0.4, 0.0, 0.0], [0.4, 0.0, 0.0], [0.0, 0.3, 0.0]],
-                normals: vec![[0.0, 0.0, 1.0]; 3],
-                uv: vec![[0.0, 0.0]; 3],
-                indices: vec![0, 1, 2],
-            },
-            paint: Handle::default(),
+            wall: triangle(vec![[1.0, 0.0, 0.0, 1.0]; 3]),
+            wire: triangle(Vec::new()),
+            sandbags: triangle(Vec::new()),
         });
         app.update();
         let original = app.world().resource::<Cordon>().active.clone();
@@ -1259,11 +1919,16 @@ mod tests {
         );
         for &entity in cordon.active.values() {
             assert!(app.world().get::<Mesh3d>(entity).is_some());
+            // The razor wire and the sandbags, and a collider for every post.
             let children = app.world().get::<Children>(entity).unwrap();
+            let (overlays, posts): (Vec<_>, Vec<_>) = children
+                .iter()
+                .partition(|&child| app.world().get::<Mesh3d>(child).is_some());
+            assert_eq!(overlays.len(), 2);
             assert!(
-                children
+                posts
                     .iter()
-                    .all(|child| app.world().get::<Collider>(child).is_some())
+                    .all(|&child| app.world().get::<Collider>(child).is_some())
             );
         }
     }

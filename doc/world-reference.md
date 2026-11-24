@@ -36,11 +36,18 @@ marker, opaque near-black smoke over unsurveyed cells and a few birds wheeling o
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
 in `drive_vehicle`. Shift-clicks append legs pathfound from the last stop
-(`MoveOrder::append`). Routes pass through the yard gate's boom, and a car
+(`MoveOrder::append`). A thin line (`player/route.rs`: a gizmo group 2 px wide with a
+small depth bias, in the rings' colour) traces the exact route from the stalker, or
+the car they drive, through every pathfound waypoint still ahead to the last ring:
+points every 2 m (at most 64 steps a leg) laid on the ground, or on the water where
+the stalker wades. It shrinks as waypoints are reached and goes with the order (WASD,
+arrival, a stall, boarding or leaving the car). The draped line through the waypoints
+is rebuilt only when they change; only the leg to the next one is laid each frame.
+Routes pass through the yard gate's boom, and a car
 with an `InstitutePass` through the Institute gate's; each lifts as it arrives. A yellow ring (`ui/locator.rs`) lies on the ground around
 the stalker, or the car they drive, at every zoom: its vertices follow the
 rendered terrain (or the water when wading), it never shrinks under 34 px wide,
-a relative depth bias keeps it over road slabs and stones, and it pulses while
+a relative depth bias keeps it over the road surface and stones, and it pulses while
 the stalker stands still.
 
 ## Procedural content
@@ -54,8 +61,10 @@ the stalker stands still.
   are graded over the sited land (pads and dioramas), then paved. Each route
   is dirt, old asphalt (`Surface::Asphalt`: the highway, Harmont's main road,
   the Institute and Plague roads) or New Harmont's smooth streets
-  (`Surface::Street`); the road mask texture holds gravel (R), tire ruts (G)
-  and asphalt (B), and `terrain.wesl` paints weathered asphalt from B.
+  (`Surface::Street`); the road mask texture holds gravel (R), tire ruts (G),
+  asphalt (B) and the old, broken share of that asphalt (A, `Surface::Asphalt`
+  only: New Harmont's streets and plaza keep A = 0), and `terrain.wesl` paints
+  smooth weathered tar from B and the old asphalt (see Old roads) from A.
   The same network keeps vegetation off the lanes and paints a world-space
   gravel and tire-rut mask independent of terrain LOD. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
@@ -195,11 +204,56 @@ the stalker stands still.
   follow the rendered terrain and stay above the water. Wall meshes and solid collision stream in nearby terrain tiles.
   Keep the staging area and driveway clear; the tree and bush shelterbelt is
   concentrated behind the hangar and along the sides.
-  The wall repeats one panel thousands of times, so it keeps its medium model:
-  simplify with glTF Transform `simplify --ratio 0.24 --error 0.016`, resize to
-  1536 px, bake tangents with `--vertex-layout separate`, then ground with
-  `tools/prepare_plant_asset.py`. Both checkpoints use the UHD scan; re-measure
-  `src/world/pillars/uhd_checkpoint.rs` with `tools/sample_landmark_ground.py`.
+  The wall repeats one baked box thousands of times: an 84-vertex box
+  (`site-cordon-wall-box.glb`: scan colour and normal map, baked tangents, no
+  bottom), a depth map (`textures/cordon/wall_depth.ktx2`, linear BC7) and a
+  razor-wire strip (`site-cordon-wall-wire.glb`, cut-out and double-sided), all
+  baked from the UHD scan by `tools/bake_cordon_wall.py` (Blender 4.5, about 3
+  minutes; its docstring has the options and the measurements it prints):
+
+  ```bash
+  "$BLENDER" -b --factory-startup --python-exit-code 1 --python tools/bake_cordon_wall.py -- \
+    ~/Projects/agentic/RoadSide-Picnic/models/sites/uhd/site-cordon-wall.glb \
+    assets/models/sites/medium assets/textures/cordon
+  ```
+
+  A third GLB, `site-cordon-wall-sandbags.glb` (`bake_cordon_wall.py --only
+  sandbags` bakes just it, in about 25 s, leaving the others untouched), lays a row
+  of sandbags along the foot of both faces: the scan has only one block of bags
+  (two wide, four layers) at its left end, so one module of it is baked (colour
+  and tangent normal, 740 x 632 px) and repeated seven times along the panel and
+  mirrored on the back, 696 triangles in all (each side's row is closed by a flat
+  cap at both ends, so its end seen end-on at a gate or a corner is solid);
+  `BAG_REACH` and `BAG_TOP` are its measured reach (0.1989 from the line, 1.47 m)
+  and height (0.0532, 0.39 m). `WallModel::batch` shears it onto the ground like
+  the others, but it lies on the ground (`BAG_SINK`, 2 cm) instead of standing 9 cm
+  in it, and it rises with its panel, so the Perimeter's bags are three times as
+  high. A negative corner lap shortens only the box: both runs' rows run on to the
+  outer corner (`WallModel::insets`), so no cap is left with a bare foot.
+
+  The box is 0.147 model units either side of its line (`WALL_HALF_THICKNESS`,
+  1.09 m at `WALL_HEIGHT_SCALE` 7.4: a wall 2.2 m thick and 3.04 m high, the
+  Perimeter three times that high) and its top is `WALL_TOP`; remeasure both
+  when the bake changes. `WallModel::batch` stretches each copy along its run,
+  shears it onto the ground and shears its tangents with it, so the box's
+  relief mapping (`ParallaxMappingMethod::Relief`, `PARALLAX_DEPTH_SCALE`) does
+  not swim on sloped ground. Panels in a run meet end to end; where two runs
+  meet in a corner (`end_lap`) the earlier one laps `CORNER_LAP` (the half
+  thickness) past the other's line and the later one stops that far short, so the
+  outer corner closes and no two faces share a plane. A gate's or the checkpoint
+  gap's end, and a run ending against the middle of another (the Perimeter on the
+  map-edge wall), stops where it is. A post every 0.77 m fences the wall so a body
+  stops at its visible face: a disc of 1.15 m radius up to the box's top
+  (`WALL_DISC`) and one of 1.53 m up to the sandbags' top, which lies on the ground
+  (`BAG_DISC`, 0.39 m, 1.16 m on the Perimeter); both fence at any height, so a
+  stalker cannot step onto the bags. The crawl hole's floor reaches 2 m either
+  side of the wall's line (`HOLE_FLOOR.x`), wider than the wall, and a crawler
+  passes under the bags' discs as under the wall's.
+  Scenery keeps `FOOT_REACH` (the sandbags' front) plus its clearance from the
+  wall's line. Both checkpoints use
+  the UHD scan; re-measure `src/world/pillars/uhd_checkpoint.rs` with
+  `tools/sample_landmark_ground.py`. The old 2,875-triangle panel is in the
+  assets archive zip.
 - **Sites** (`src/world/sites.rs`): the Harmont map from `doc/` (map, layout
   notes and landmark CSV) as one registry of 32 placements of the UHD landmark
   and site scans. `src/world/map.rs` lays `doc/Roadside_map.jpg` over the world
@@ -240,11 +294,40 @@ the stalker stands still.
   (`assets/models/railway/`): sleeper ladders end to end along the graded bed,
   two rails on top and wreckage beside the line. `tools/align_kit_piece.py`
   squares up each kit piece (+Z along the line, grounded at y = 0).
-- **Old roads** (`src/world/old_road.rs`): copies of the cracked-asphalt road
-  module (`assets/models/road/`, reassembled into one straight frame by
-  `tools/straighten_road_kit.py`) pave every `Surface::Asphalt` leg end to end,
-  pitched with the graded road; the full scan shows within 40 m, the
-  simplified `medium/` copy out to 900 m.
+- **Old roads** (`src/world/roads.rs`, `terrain_material.rs`, `assets/shaders/terrain.wesl`):
+  every `Surface::Asphalt` leg (the highway, Harmont's main road, the Institute
+  and Plague roads) is painted by the terrain shader; there are no road meshes.
+  Where the mask's alpha is set, the shader paints four maps baked from one
+  photo by `tools/prepare_asphalt_textures.py` (`assets/textures/terrain/asphalt_{albedo,normal,surface,crack}.ktx2`,
+  bindings 110-113: 184 px native crops, BC7 with mip chains) over the tar.
+  The mips are the distance versions; there is no second set. Rebuild the maps
+  from the photo kept in the assets workspace (needs Pillow, numpy and the `ctt`
+  CLI; the PNGs they are encoded from go to `--sources`):
+
+  ```bash
+  python3 tools/prepare_asphalt_textures.py \
+    ~/Projects/agentic/RoadSide-Picnic/textures/asphalt/image_5b974df1.jpg \
+    assets/textures/terrain --sources ~/Projects/agentic/RoadSide-Picnic/textures/asphalt
+  ```
+
+  - *Grain:* tiled every `ASPHALT_TILE` (1.2 m). Each lattice point of the
+    tiling gets a hashed offset into the map and the four around a pixel blend
+    bilinearly, rescaled to the map's average (`map_mean`) so that neither a
+    lattice nor contrast dips show.
+  - *Cracks:* one decal at most per `CRACK_CELL` (8 m) cell, in `CRACK_SHARE`
+    (50%) of the cells, hashed to a random turn, size (60-100% of
+    `CRACK_SIZE`, 4 m) and offset inside the cell. `crack_decals_fit_inside_their_cells`
+    keeps `CRACK_SIZE * sqrt(2) / 2 + CRACK_JITTER / 2` within half a cell, so
+    no decal is cut at a straight edge. A crack darkens the grain
+    (`CRACK_DARKEST`, 0.2), blends its normal toward the decal's and fades out
+    between 0.08 and 0.25 m per pixel and toward the road's edge.
+  - *Normals:* the maps' green runs up the texture, against the rows (+z), so
+    the shader flips it; a decal's tilt is also turned back by its angle into
+    world XZ.
+  - *Relief:* under 0.02 m per pixel (`RELIEF_NEAR`: only the closest zoom
+    levels) a 12-step ray march through the grain (1 cm) and crack (3 cm) depths shifts
+    where the maps are read, so stones and cracks show depth; farther out one
+    step on the grain height.
 - **Marsh props** (`src/world/marsh.rs`): dead trees, stumps, logs, fungus,
   moss, rocks, mounds and debris from the swamp kit (`assets/models/swamp/`)
   are scattered over the marsh; trees, stumps, logs and mounds may stand in
@@ -427,6 +510,12 @@ the stalker stands still.
   1M-vertex scan): after a re-export, bake them with
   `python3 ~/Projects/agentic/agentic-tooling/media/glb-bake-tangents/glb_bake_tangents.py <glb>...`
   (it works on the compressed file and keeps its KTX2 images byte-identical).
+  The standalone maps that are not in a GLB (the four asphalt maps,
+  `assets/textures/terrain/asphalt_*.ktx2`, from `tools/prepare_asphalt_textures.py`,
+  and the wall's depth map, `assets/textures/cordon/wall_depth.ktx2`, from
+  `tools/bake_cordon_wall.py`) are encoded with the same `ctt` presets: sRGB BC7 for
+  the colour, linear BC7 for the data maps, full mip chains; their PNG sources stay
+  in the assets workspace.
 - **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
   behind the splash the `ram://` asset source reads every streamed UHD scan
   (the 40 in `world::uhd_files`: the three trees, the plants, then the sites

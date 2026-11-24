@@ -25,13 +25,13 @@ const DRIVING: (f32, f32) = (3.6, 0.2);
 /// Smallest ring diameter and line width on screen, in pixels.
 const MIN_DIAMETER: f32 = 34.0;
 const MIN_WIDTH: f32 = 3.0;
-/// Height above the ground in meters (the asphalt slabs lie 8 cm up), plus
+/// Height above the ground in meters (clear of the road's grain and the verges), plus
 /// this many screen pixels' worth so coarse distant tiles don't swallow it.
 const LIFT: f32 = 0.1;
 const LIFT_PIXELS: f32 = 1.5;
 /// Constant depth bias. On a float depth buffer it is relative to depth: this
 /// pulls the ring 1–2 % of its distance toward the camera, over the road
-/// slabs and stones it lies among but behind the stalker standing in it.
+/// surface and stones it lies among but behind the stalker standing in it.
 const DEPTH_BIAS: f32 = 84_000.0;
 /// Below this ground speed, in m/s, the stalker counts as standing still.
 const STILL_SPEED: f32 = 0.15;

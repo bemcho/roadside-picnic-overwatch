@@ -71,7 +71,7 @@ enum Surface {
     /// Graded earth with tire ruts.
     Dirt,
     /// The old, broken asphalt of Harmont's roads and the highway to the
-    /// Garage, laid with the road kit (`old_road.rs`).
+    /// Garage, painted by the terrain shader from the mask's old-asphalt share.
     Asphalt,
     /// New Harmont's own paved streets.
     Street,
@@ -242,14 +242,6 @@ pub(super) fn country_roads() -> impl Iterator<Item = &'static [Vec2]> {
         .map(|route| route.points)
 }
 
-/// The old asphalt roads outside the town, for the road kit.
-pub(super) fn old_roads() -> impl Iterator<Item = &'static [Vec2]> {
-    ROUTES
-        .iter()
-        .filter(|route| route.surface == Surface::Asphalt)
-        .map(|route| route.points)
-}
-
 /// The railway's bed: the map's line, split into graded runs.
 fn railway_bed() -> Vec<Vec2> {
     let mut bed = vec![RAILWAY[0]];
@@ -304,21 +296,29 @@ impl RoadSample {
         smoothstep(shoulder, half_width, self.distance)
     }
 
-    /// The material mask: gravel, tire ruts, asphalt.
+    /// The material mask: gravel, tire ruts, asphalt, and the share of that asphalt
+    /// that is old and broken (New Harmont's streets are smooth tar).
     fn surface(&self) -> [u8; 4] {
         let d = self.distance;
-        let [gravel, rut, asphalt] = match self.surface {
+        let [gravel, rut, asphalt, old] = match self.surface {
             Surface::Dirt => [
                 smoothstep(7.5, 4.6, d),
                 smoothstep(0.83, 0.32, (d - 1.51).abs()),
                 0.0,
+                0.0,
             ],
             Surface::Asphalt | Surface::Street => {
-                [smoothstep(8.2, 6.2, d), 0.0, smoothstep(6.4, 5.4, d)]
+                let tar = smoothstep(6.4, 5.4, d);
+                let old = if self.surface == Surface::Asphalt {
+                    tar
+                } else {
+                    0.0
+                };
+                [smoothstep(8.2, 6.2, d), 0.0, tar, old]
             }
-            Surface::Ballast => [smoothstep(4.4, 2.6, d), 0.0, 0.0],
+            Surface::Ballast => [smoothstep(4.4, 2.6, d), 0.0, 0.0, 0.0],
         };
-        [gravel, rut, asphalt, 0.0].map(|v| (v * 255.0).round() as u8)
+        [gravel, rut, asphalt, old].map(|v| (v * 255.0).round() as u8)
     }
 }
 
@@ -406,6 +406,7 @@ impl RoadNetwork {
                     }
                     if town::paved(at) {
                         pixels[i + 2] = 255;
+                        pixels[i + 3] = 0;
                     }
                 }
             }
@@ -496,18 +497,41 @@ mod tests {
         );
     }
 
+    /// The mask's four bytes (gravel, ruts, asphalt, old asphalt) at a world point.
+    fn read4(image: &Image, bounds: Vec4, at: Vec2) -> [u8; 4] {
+        let uv = (at - bounds.xy()) * bounds.zw();
+        let texel = (uv * Vec2::new(image.width() as f32, image.height() as f32))
+            .floor()
+            .as_uvec2();
+        let i = ((texel.y * image.width() + texel.x) * 4) as usize;
+        let bytes = image.data.as_ref().expect("mask pixels");
+        [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+    }
+
+    #[test]
+    fn old_asphalt_is_marked_apart_from_new_harmont_streets() {
+        let terrain = Terrain::new();
+        let (image, bounds) = terrain.roads.surface_texture();
+        let read = |at: Vec2| read4(&image, bounds, at);
+        // The highway and the yard gate's road are old asphalt.
+        assert_eq!(
+            read(map(667.0, 373.0).midpoint(map(697.0, 362.0))),
+            [255, 0, 255, 255]
+        );
+        assert_eq!(read(GATE), [255, 0, 255, 255]);
+        // New Harmont stays smooth tar: its plaza and a street's centerline.
+        assert_eq!(read(town::PLAZA + Vec2::new(20.0, 15.0))[2..], [255, 0]);
+        let boulevard = town::STREETS[0];
+        assert_eq!(read(boulevard[0].midpoint(boulevard[1]))[2..], [255, 0]);
+    }
+
     #[test]
     fn the_material_mask_paints_asphalt_dirt_ruts_and_the_rail_bed() {
         let terrain = Terrain::new();
         let (image, bounds) = terrain.roads.surface_texture();
         let read = |at: Vec2| {
-            let uv = (at - bounds.xy()) * bounds.zw();
-            let texel = (uv * Vec2::new(image.width() as f32, image.height() as f32))
-                .floor()
-                .as_uvec2();
-            let i = ((texel.y * image.width() + texel.x) * 4) as usize;
-            let bytes = image.data.as_ref().expect("mask pixels");
-            [bytes[i], bytes[i + 1], bytes[i + 2]]
+            let [gravel, ruts, asphalt, _] = read4(&image, bounds, at);
+            [gravel, ruts, asphalt]
         };
         // The asphalt leaves the yard gate; the yard itself stays unpainted.
         assert_eq!(read(GATE), [255, 0, 255]);

@@ -30,7 +30,7 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **Left click** — move the stalker there (pathfinding around obstacles and deep
   water; long trips run). While driving, click to drive there.
 - **Shift + left click** — add a waypoint after the orders already given; a ring
-  marks each one until it is reached
+  marks each one until it is reached and a thin line traces the route
 - **WASD** — steer directly (camera-relative) and cancel a click order; hold **Shift** to run
 - Walk into a rock, building or other solid to **climb** onto it; the cordon walls,
   checkpoints, trees and guards can't be climbed
@@ -68,7 +68,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Section | Code |
 |---|---|
 | Tactical view (camera, zoom, cutaway, tooltips, fog of war, map, orders, locator ring) | `player/{camera,orders,path}.rs`, `base/cutaway.rs`, `world/{shroud,places}.rs`, `ui/{tooltip,map,locator}.rs` |
-| Terrain, roads, ground LODs, terrain textures | `world/{terrain,roads}.rs` |
+| Terrain, roads, ground LODs, terrain textures; Old roads (painted asphalt) | `world/{terrain,roads,terrain_material}.rs`, `shaders/terrain.wesl` |
 | Water | `world/{hydrology,water}.rs` |
 | Day/night and weather; Wind; Sky & lighting | `world/weather.rs`, `world/mod.rs` |
 | Ground fog and clouds | `world/ground_fog.rs`, `ground_fog/`, `shaders/ground_fog.wesl` |
@@ -77,7 +77,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Vegetation (clusters at landmarks) | `world/trees.rs` |
 | Cordons (yard, Perimeter, gates, crawl hole, belts) | `world/cordon.rs` |
 | Sites (Harmont map, 32 scan placements, stand-ins, relief) | `world/{sites,map}.rs` |
-| New Harmont; Railway; Old roads; Marsh props; Rocks | `world/{town,railway,old_road,marsh,rocks}.rs` |
+| New Harmont; Railway; Marsh props; Rocks | `world/{town,railway,marsh,rocks}.rs` |
 | Guards; UN patrol; Harmont traffic | `world/guards.rs`, `player/vehicle/{patrol,traffic}.rs` |
 | Wildlife; Mutants | `world/wildlife.rs`, `wildlife/{rig,mutants}.rs` |
 | Artifact showcase; Base (hangar, props, yard vehicles) | `world/base.rs`, `base/{artifacts,props,cutaway}.rs` |

@@ -31,6 +31,11 @@ pub const TERRAIN_GRASS_SURFACE: &str = "textures/terrain/grass_surface.png";
 pub const TERRAIN_EARTH_ALBEDO: &str = "textures/terrain/earth_albedo.png";
 pub const TERRAIN_EARTH_NORMAL: &str = "textures/terrain/earth_normal.png";
 pub const TERRAIN_EARTH_SURFACE: &str = "textures/terrain/earth_surface.png";
+/// The old asphalt's grain set and crack decal (`tools/prepare_asphalt_textures.py`).
+pub const TERRAIN_ASPHALT_ALBEDO: &str = "textures/terrain/asphalt_albedo.ktx2";
+pub const TERRAIN_ASPHALT_NORMAL: &str = "textures/terrain/asphalt_normal.ktx2";
+pub const TERRAIN_ASPHALT_SURFACE: &str = "textures/terrain/asphalt_surface.ktx2";
+pub const TERRAIN_ASPHALT_CRACK: &str = "textures/terrain/asphalt_crack.ktx2";
 /// The hangar floor's steel plates (`tools/prepare_hangar_floor.py`).
 pub const HANGAR_FLOOR_ALBEDO: &str = "textures/hangar/floor_albedo.png";
 pub const HANGAR_FLOOR_NORMAL: &str = "textures/hangar/floor_normal.png";
@@ -74,9 +79,14 @@ pub const VEHICLE_CRAWLER: &str = "models/vehicles/medium/vehicle-crawler.glb";
 pub const VEHICLE_QUARRY: &str = "models/vehicles/medium/vehicle-quarry.glb";
 pub const VEHICLE_SEDAN: &str = "models/vehicles/medium/vehicle-sedan.glb";
 pub const VEHICLE_TRAIN: &str = "models/vehicles/medium/vehicle-train.glb";
-/// The long walls repeat one panel thousands of times, so they keep the medium
-/// model; every standalone site uses its UHD scan.
-pub const SITE_CORDON_WALL: &str = "models/sites/medium/site-cordon-wall.glb";
+/// The long walls repeat one baked box thousands of times: its colour and normal
+/// carry the UHD scan's relief, `CORDON_WALL_DEPTH` shifts it with the view, and
+/// the razor wire is a separate cut-out strip (`tools/bake_cordon_wall.py`).
+pub const CORDON_WALL_BOX: &str = "models/sites/medium/site-cordon-wall-box.glb";
+pub const CORDON_WALL_WIRE: &str = "models/sites/medium/site-cordon-wall-wire.glb";
+/// The sandbag row along the wall's foot: a block cut from the scan, repeated.
+pub const CORDON_WALL_SANDBAGS: &str = "models/sites/medium/site-cordon-wall-sandbags.glb";
+pub const CORDON_WALL_DEPTH: &str = "textures/cordon/wall_depth.ktx2";
 pub const SITE_CHECKPOINT: &str = "models/sites/uhd/site-checkpoint.glb";
 pub const HANGAR_LAB: &str = "models/props/medium/lab.glb";
 pub const HANGAR_MAP_BOARD: &str = "models/props/medium/mapboard.glb";
@@ -221,6 +231,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
     let albedo = [
         TERRAIN_GRASS_ALBEDO,
         TERRAIN_EARTH_ALBEDO,
+        TERRAIN_ASPHALT_ALBEDO,
         HANGAR_FLOOR_ALBEDO,
     ];
     let data_maps = [
@@ -228,6 +239,9 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         TERRAIN_GRASS_SURFACE,
         TERRAIN_EARTH_NORMAL,
         TERRAIN_EARTH_SURFACE,
+        TERRAIN_ASPHALT_NORMAL,
+        TERRAIN_ASPHALT_SURFACE,
+        TERRAIN_ASPHALT_CRACK,
         HANGAR_FLOOR_NORMAL,
         HANGAR_FLOOR_SURFACE,
     ];

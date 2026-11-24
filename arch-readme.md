@@ -104,9 +104,9 @@ flowchart LR
 | Fog of war | `src/world/shroud.rs` | `Shroud` state (V), survey mask texture for the ground fog pass (opaque drifting black smoke, drawn after the sky), culling of shrouded entities |
 | Streaming | `src/world/landscape.rs`, `scenery.rs` | Async terrain build, LOD swaps, 3x3 scenery/collider streaming |
 | Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
-| Cordons | `src/world/cordon.rs` | Yard wall and gap checkpoint, 3× Perimeter, the gates' `Boom`s (`Gate::Yard` lifts for the stalker, `Gate::Institute` for an `InstitutePass`), crawl hole (`hole_depth`) and its thicket, shelterbelts and belt trees (`tree_belt`) |
+| Cordons | `src/world/cordon.rs` | Yard wall and gap checkpoint, 3× Perimeter built from a baked box with relief parallax, a razor-wire strip and a sandbag row along the foot (`WallModel::batch` shears all three onto the ground, corners lap), the gates' `Boom`s (`Gate::Yard` lifts for the stalker, `Gate::Institute` for an `InstitutePass`), crawl hole (`hole_depth`) and its thicket, shelterbelts and belt trees (`tree_belt`) |
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
-| Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `old_road.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway and asphalt roads, marsh props, big rocks |
+| Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway, marsh props, big rocks |
 | Cordon guards | `src/world/guards.rs` | Two pacing, rigged UN soldiers at each gate and five sentries by the checkpoints |
 | UN patrol | `src/player/vehicle/patrol.rs` | Four white armored cars lapping the Perimeter wall, flank plates, shared `CarWheel`/`in_the_way` |
 | Harmont traffic | `src/player/vehicle/traffic.rs` | Sweeper and sedans on `roads::traffic_routes`: right-hand lanes, U-turns, right of way |
@@ -291,12 +291,13 @@ every placement passes the road, water, yard, and site-clearance filters.
 `RoadNetwork` indexes route segments by terrain tile. It produces both:
 
 1. a smooth graded height surface for walking/driving, and
-2. a world-space RGBA8 texture with gravel (R), tire-rut (G) and asphalt (B)
-   masks, which `terrain.wesl` turns into gravel, ruts and weathered asphalt.
+2. a world-space RGBA8 texture with gravel (R), tire-rut (G), asphalt (B) and
+   old-asphalt (A) masks, which `terrain.wesl` turns into gravel, ruts, smooth
+   tar and, where A is set, the old broken asphalt.
 
-Each route has a `Surface`: dirt, `Asphalt` (the old roads, which
-`old_road.rs` also paves with copies of the road kit module) or `Street` (New
-Harmont's smooth streets).
+Each route has a `Surface`: dirt, `Asphalt` (the old roads, painted by the
+terrain shader from the A mask and four asphalt maps) or `Street` (New
+Harmont's smooth streets, B only: no A, no cracks).
 
 Road legs must connect to a real route vertex, stay below the grade and water
 thresholds tested in `world/roads.rs`, and avoid cutting through site pads.
@@ -466,7 +467,10 @@ Shift held it plans from the last stop and appends the leg
 (`MoveOrder::append`). Planning ignores a `Boom` that opens for the mover
 (`Boom::opens_for`): the yard's always, the Institute's for a driven car with
 an `InstitutePass`. `sync_order_markers` keeps one ground ring per stop,
-spawning more from `OrderMarkerLook` as needed. `move_player`:
+spawning more from `OrderMarkerLook` as needed, and `route::draw_order_route`
+draws a thin gizmo line (`RouteGizmos`) from the player through
+`MoveOrder::waypoints`, keeping the draped line in a `RouteCache` until the
+waypoints change. `move_player`:
 
 1. reads camera-relative WASD input (which cancels an order), otherwise
    steers toward the order's next waypoint,
@@ -551,6 +555,13 @@ blender -b --python-exit-code 1 --python tools/trim_tree_base.py -- \
 
 Use `--split-columns` for roofs, tunnels, and open bays where one x/z column
 must be represented by multiple separated vertical intervals.
+
+The cordon walls' posts are not generated: `cordon::WALL_PILLAR` holds two hand-set
+discs every 0.77 m along the wall, `WALL_DISC` sized to the baked box's half thickness
+(`WALL_HALF_WIDTH`) and height (`WALL_TOP`) and `BAG_DISC` to the sandbag row's
+reach and height (`BAG_REACH`, `BAG_TOP`). Resize them, the scenery clearance
+(`FOOT_REACH`) and the crawl hole's checks together when `tools/bake_cordon_wall.py`
+changes the box or the sandbags.
 
 ### Collision limitation
 
@@ -650,7 +661,7 @@ Useful query relationships:
   `water_depth_at` around the `Player` (wider while `Driving`), widens it to
   a minimum size in screen pixels, and pulses it while the player's ground
   position stays put. Its material's `depth_bias` is relative to depth on the
-  float depth buffer, so it shows over road slabs at every zoom.
+  float depth buffer, so it shows over the road surface at every zoom.
 
 ## Audio
 

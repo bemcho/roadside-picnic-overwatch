@@ -69,6 +69,11 @@ impl MoveOrder {
         path_length(at, &self.waypoints)
     }
 
+    /// The path still ahead, target last.
+    pub(super) fn waypoints(&self) -> &[Vec2] {
+        &self.waypoints
+    }
+
     fn target(&self) -> Option<Vec2> {
         self.waypoints.last().copied()
     }
