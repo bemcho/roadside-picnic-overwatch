@@ -12,6 +12,7 @@ pub const ENTERING_ZONE: &str = "Entering the Zone...";
 /// Title shown in the HUD corner.
 pub const HUD_TITLE: &str = "THE ZONE";
 pub const HUD_FPS_PENDING: &str = "FPS: --";
+pub const HUD_POSITION_PENDING: &str = "X: -- Y: -- Z: --";
 
 /// Shown for a moment after progress is saved (F5, every minute, on quitting).
 pub const PROGRESS_SAVED: &str = "Progress saved";
@@ -373,4 +374,10 @@ pub fn hud_weather(hour: f32, temperature: f32, humidity: f32, sky: &str) -> Str
 
 pub fn hud_fps(fps: f64) -> String {
     format!("FPS: {fps:.0}")
+}
+
+/// The stalker's world position in meters (Y is up).
+pub fn hud_position(at: [f32; 3]) -> String {
+    let [x, y, z] = at;
+    format!("X: {x:.1} Y: {y:.1} Z: {z:.1}")
 }

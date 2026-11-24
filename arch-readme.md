@@ -15,7 +15,7 @@ state machine, shared asset preloading, and six project plugins:
 - `WorldPlugin`: terrain, water, roads, scenery, base, sites, wildlife, and lighting.
 - `PlayerPlugin`: stalker, animation, camera, input, collision, and armored vehicle.
 - `ZonePlugin`: the current run's anomaly and collectible-object loop.
-- `UiPlugin`: splash, loading state, entry curtain, HUD, vehicle prompt, pause menu, and FPS.
+- `UiPlugin`: splash, loading state, entry curtain, HUD, vehicle prompt, pause menu, FPS and the stalker's x, y, z.
 - `SavePlugin` (`src/save.rs`): saved progress (survey, clock, stalker and car).
 
 There is deliberately no separate engine, physics crate or networking layer.
@@ -114,7 +114,7 @@ flowchart LR
 | Collision | `src/world/collision.rs`, `world/pillars/` | Static `Pillar` colliders, push-out, climbing, `Weight`/`Crusher`/`Unclimbable` |
 | Crushing | `src/world/crush.rs` | Trampled plants, knocking down lighter solids |
 | Audio | `src/audio/` | Synthesized ambience/effects and live audio sinks |
-| UI | `src/ui/` | Splash, entry curtain, HUD, FPS, weather line, controls, hover tooltips, stalker locator ring, map overlay (M), pause |
+| UI | `src/ui/` | Splash, entry curtain, HUD, FPS and position, weather line, controls, hover tooltips, stalker locator ring, map overlay (M), pause |
 | Zone loop | `src/zone/` | Current placeholder anomalies, collectible markers, run counters |
 | Asset tooling | `tools/` | Texture/GLB preparation, grounding, rigging, collision generation |
 | Shaders | `assets/shaders/` | Terrain, water, hangar cutaway and floor/wall paint, plant wind and ground fog WESL entry points |
@@ -641,6 +641,7 @@ Useful query relationships:
 
 - the HUD reads `ZoneRun`,
 - FPS reads Bevy's smoothed frame-time diagnostic,
+- the position line reads the `Player` transform (the car carries it while driving),
 - the vehicle prompt checks `can_enter_vehicle`,
 - controls change with `Driving` and `AudioMode`,
 - pause UI follows `InGamePhase`, not the world lifetime,

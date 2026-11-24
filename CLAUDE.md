@@ -22,7 +22,8 @@ who risk their lives to enter it and smuggle artifacts out.
 
 Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dread.
 
-The upper-right in-game HUD shows the smoothed frame rate.
+The upper-right in-game HUD shows the smoothed frame rate and, under it, the
+stalker's world position (X, Y, Z in meters; Y is up).
 
 ## Controls
 
