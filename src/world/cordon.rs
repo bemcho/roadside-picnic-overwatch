@@ -26,7 +26,10 @@ use super::collision::{Collider, Pillar, Unclimbable};
 use super::hydrology::{WATER_LEVEL, Wetlands};
 use super::places::{Describe, Place};
 use super::terrain::{BASE, HALF_SIZE, SPACING, TILE_SIZE, Terrain, lerp, smoothstep};
-use super::{StreamAnchor, WorldRoot, anchor_tiles, detail_range, near_anchor, neighborhoods};
+use super::{
+    StreamAnchor, WorldRoot, anchor_distance, anchor_tiles, detail_range, near_anchor,
+    neighborhoods,
+};
 
 const YARD_MIN: Vec2 = Vec2::new(BASE.0 - 64.0, BASE.1 - 64.0);
 const YARD_MAX: Vec2 = Vec2::new(BASE.0 + 64.0, BASE.1 + 60.0);
@@ -840,26 +843,26 @@ pub(super) fn stream_cordon(
     mut cordon: ResMut<Cordon>,
 ) {
     let centers = anchor_tiles(anchors);
-    if cordon.centers == centers {
-        return;
+    if cordon.centers != centers {
+        cordon.centers = centers.clone();
+        cordon.active.retain(|tile, entity| {
+            let keep = near_anchor(*tile, &centers, 2);
+            if !keep {
+                commands.entity(*entity).despawn();
+            }
+            keep
+        });
     }
-    cordon.centers = centers.clone();
-    cordon.active.retain(|tile, entity| {
-        let keep = near_anchor(*tile, &centers, 2);
-        if !keep {
-            commands.entity(*entity).despawn();
-        }
-        keep
-    });
-    for tile in neighborhoods(&centers, 2) {
-        if cordon.active.contains_key(&tile) {
-            continue;
-        }
-        if let Some(panels) = cordon.chunks.get(&tile) {
-            let entity =
-                spawn_wall_chunk(&mut commands, &mut meshes, &terrain, &cordon, tile, panels);
-            cordon.active.insert(tile, entity);
-        }
+    // One chunk a frame, nearest an anchor first: a chunk's three meshes and its
+    // posts take up to ~4 ms to build, and a step onto a new tile admits several.
+    let next = neighborhoods(&centers, 2)
+        .filter(|tile| !cordon.active.contains_key(tile) && cordon.chunks.contains_key(tile))
+        .min_by_key(|&tile| anchor_distance(tile, &centers));
+    if let Some(tile) = next
+        && let Some(panels) = cordon.chunks.get(&tile)
+    {
+        let entity = spawn_wall_chunk(&mut commands, &mut meshes, &terrain, &cordon, tile, panels);
+        cordon.active.insert(tile, entity);
     }
 }
 
@@ -1896,14 +1899,24 @@ mod tests {
             sandbags: triangle(Vec::new()),
         });
         app.update();
+        assert_eq!(
+            app.world().resource::<Cordon>().active.len(),
+            1,
+            "one chunk a frame"
+        );
+        for _ in 0..25 {
+            app.update();
+        }
         let original = app.world().resource::<Cordon>().active.clone();
-        assert!(!original.is_empty());
+        assert!(original.len() > 1);
         app.world_mut()
             .get_mut::<Transform>(player)
             .unwrap()
             .translation
             .x = EDGE - 5.0;
-        app.update();
+        for _ in 0..25 {
+            app.update();
+        }
         let cordon = app.world().resource::<Cordon>();
         assert!(!cordon.active.is_empty());
         assert!(

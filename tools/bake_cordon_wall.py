@@ -20,7 +20,7 @@ y = 0 and its centre x = z = 0.
 Outputs
   site-cordon-wall-box.glb   one primitive, one material (base colour + normal map, baked tangents).
   site-cordon-wall-wire.glb  one primitive, one MASK + double-sided material (colour + coverage).
-  wall_depth.ktx2            linear BC7 with mips, the box's UV layout, white = deepest.
+  wall_depth.ktx2            linear BC4 with mips, the box's UV layout, white = deepest.
   site-cordon-wall-sandbags.glb  one primitive, one material (colour + normal map, baked tangents): the
                              sandbag row along the foot of both faces, at most 1,000 triangles.
 The GLBs and the depth map are KTX2 (tools/compress_glb_textures.py presets); the PNGs stay out.
@@ -1149,7 +1149,7 @@ def check_box_extent(box):
 
 def encode_depth(png, ktx2):
     subprocess.run(
-        ["ctt", str(png), "-o", str(ktx2), "--quality", KTX2_QUALITY, "--zstd=19"] + ctt_arguments("data"),
+        ["ctt", str(png), "-o", str(ktx2), "--quality", KTX2_QUALITY, "--zstd=19"] + ctt_arguments("depth"),
         check=True,
         capture_output=True,
     )
