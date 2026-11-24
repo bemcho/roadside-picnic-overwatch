@@ -229,13 +229,17 @@ pub(super) fn paved(at: Vec2) -> bool {
 
 /// On the plaza or within `clearance` of a building.
 pub(super) fn clear_footprint(at: Vec2, clearance: f32) -> bool {
-    paved(at)
-        || BUILDINGS.into_iter().any(|building| {
-            (at - building.at)
-                .abs()
-                .cmple(building.half() + clearance)
-                .all()
-        })
+    paved(at) || near_building(at, clearance)
+}
+
+/// Within `clearance` of a building.
+pub(super) fn near_building(at: Vec2, clearance: f32) -> bool {
+    BUILDINGS.into_iter().any(|building| {
+        (at - building.at)
+            .abs()
+            .cmple(building.half() + clearance)
+            .all()
+    })
 }
 
 /// Each building's center, radius and height, for hover outlines.

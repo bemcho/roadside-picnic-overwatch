@@ -10,11 +10,23 @@ textures. Images that are already KTX2 are left alone, so re-running is safe.
 
     python3 tools/compress_glb_textures.py assets/models/base/hangar.glb [more.glb ...]
 
+With --external-images DIR the textures are written as .ktx2 files in DIR instead, each GLB's image
+referring to its file by a relative `uri`. GLBs that share a texture (identical image bytes in the
+same run) then share one file, and Bevy, which loads a URI image by its asset path, keeps one copy in
+memory for all of them. A file is named after its glTF image (the GLB's name and the image's index
+when it has none); an image that is already KTX2 is moved out as it is.
+
+    python3 tools/compress_glb_textures.py --external-images assets/models/vehicles/medium/textures \
+        assets/models/vehicles/medium/{ambulance,fire-truck,panel-van}-traffic.glb
+
 Requires the ctt CLI (the encoder behind Bevy's CompressedImageSaver): cargo install ctt-cli
 """
 
 import argparse
+import hashlib
 import json
+import os
+import re
 import struct
 import subprocess
 import tempfile
@@ -22,6 +34,8 @@ from pathlib import Path
 
 GLB_MAGIC, JSON_CHUNK, BIN_CHUNK = 0x46546C67, 0x4E4F534A, 0x004E4942
 COLOR_SLOTS = {"baseColorTexture", "emissiveTexture"}
+# Extensions that point at buffer views themselves; moving images out would have to renumber them.
+VIEW_EXTENSIONS = {"EXT_meshopt_compression", "KHR_draco_mesh_compression"}
 
 
 def read_glb(path):
@@ -90,7 +104,26 @@ def ctt_arguments(role):
     ]
 
 
-def compress(image_bytes, mime_type, role, quality, scratch):
+def write_external(ktx2, name, directory, glb, written):
+    """Write the texture as <name>.ktx2 in `directory` (once per run for the same bytes) and return
+    its URI relative to the GLB. A different texture with the same name gets its hash appended."""
+    digest = hashlib.sha256(ktx2).hexdigest()
+    stem = re.sub(r"[^A-Za-z0-9_-]+", "-", name)
+    target = directory / f"{stem}.ktx2"
+    if written.get(target, digest) != digest:
+        target = directory / f"{stem}-{digest[:8]}.ktx2"
+    if target not in written:
+        directory.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(ktx2)
+        written[target] = digest
+    return Path(os.path.relpath(target, glb.parent)).as_posix()
+
+
+def compress(image_bytes, mime_type, role, quality, scratch, cache=None):
+    """Encode one image; with a `cache` dict, identical images in a run are encoded once."""
+    key = (hashlib.sha256(image_bytes).hexdigest(), role, quality)
+    if cache is not None and key in cache:
+        return cache[key]
     source = scratch / ("source.png" if mime_type == "image/png" else "source.jpg")
     target = scratch / "target.ktx2"
     source.write_bytes(image_bytes)
@@ -100,42 +133,67 @@ def compress(image_bytes, mime_type, role, quality, scratch):
         check=True,
         capture_output=True,
     )
-    return target.read_bytes()
+    encoded = target.read_bytes()
+    if cache is not None:
+        cache[key] = encoded
+    return encoded
 
 
-def convert(path, quality):
+def convert(path, quality, external=None, encoded=None, written=None):
+    """Compress the GLB's embedded images in place, or with `external` (a directory) move them
+    out as .ktx2 files. `encoded` caches this run's encodings by source image; `written` maps each
+    file written this run to its bytes' hash."""
     gltf, binary = read_glb(path)
     roles = image_roles(gltf)
+    if external and VIEW_EXTENSIONS & set(gltf.get("extensionsUsed", [])):
+        raise ValueError(f"{path}: --external-images cannot renumber {sorted(VIEW_EXTENSIONS)} views")
     replaced = {}
     with tempfile.TemporaryDirectory() as scratch:
         for index, image in enumerate(gltf.get("images", [])):
-            if image.get("mimeType") == "image/ktx2" or index not in roles:
+            if index not in roles or "bufferView" not in image:
+                continue
+            if image.get("mimeType") == "image/ktx2" and not external:
                 continue
             if len(roles[index]) > 1:
                 raise ValueError(f"{path}: image {index} is shared by {sorted(roles[index])} slots")
             view = gltf["bufferViews"][image["bufferView"]]
             start = view.get("byteOffset", 0)
-            role = next(iter(roles[index]))
-            replaced[image["bufferView"]] = compress(
-                binary[start : start + view["byteLength"]],
-                image.get("mimeType"),
-                role,
-                quality,
-                Path(scratch),
-            )
+            source = binary[start : start + view["byteLength"]]
+            ktx2 = source
+            if image.get("mimeType") != "image/ktx2":
+                role = next(iter(roles[index]))
+                ktx2 = compress(source, image.get("mimeType"), role, quality, Path(scratch), encoded)
+            if external:
+                name = image.get("name") or f"{path.stem}-{index}"
+                replaced[image.pop("bufferView")] = None
+                image["uri"] = write_external(ktx2, name, external, path, written)
+            else:
+                replaced[image["bufferView"]] = ktx2
             image["mimeType"] = "image/ktx2"
     if not replaced:
         return 0, 0
 
-    # Repack every view so the new image sizes keep the others 8-byte aligned.
+    # Repack every view so the new image sizes keep the others 8-byte aligned; views of images
+    # moved out are dropped and the rest renumbered.
     packed = bytearray()
+    kept, renumber = [], {}
     for index, view in enumerate(gltf["bufferViews"]):
         start = view.get("byteOffset", 0)
         chunk = replaced.get(index, binary[start : start + view["byteLength"]])
+        if chunk is None:
+            continue
         packed += b"\0" * (-len(packed) % 8)
         view["byteOffset"] = len(packed)
         view["byteLength"] = len(chunk)
         packed += chunk
+        renumber[index] = len(kept)
+        kept.append(view)
+    gltf["bufferViews"] = kept
+    for user in [*gltf.get("accessors", []), *gltf.get("images", [])]:
+        sparse = user.get("sparse", {})
+        for holder in [user, sparse.get("indices", {}), sparse.get("values", {})]:
+            if "bufferView" in holder:
+                holder["bufferView"] = renumber[holder["bufferView"]]
     gltf["buffers"][0]["byteLength"] = len(packed)
     before = path.stat().st_size
     write_glb(path, gltf, bytes(packed))
@@ -146,9 +204,16 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("glb", nargs="+", type=Path)
     parser.add_argument("--quality", default="basic", help="ctt quality preset (default: basic)")
+    parser.add_argument(
+        "--external-images",
+        type=Path,
+        metavar="DIR",
+        help="write the textures as .ktx2 files in DIR, shared between the GLBs, instead of embedding them",
+    )
     args = parser.parse_args()
+    encoded, written = {}, {}
     for path in args.glb:
-        before, after = convert(path, args.quality)
+        before, after = convert(path, args.quality, args.external_images, encoded, written)
         if before:
             print(f"{path}: {before / 1e6:.1f} MB -> {after / 1e6:.1f} MB")
         else:

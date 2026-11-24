@@ -12,6 +12,7 @@ use super::hydrology::{Water, Wetlands};
 use super::sites::{self, Kind as SiteKind};
 use super::terrain::{self, BASE, HALF_SIZE, Terrain};
 use super::town;
+use super::townsfolk::Role as TownsfolkRole;
 use super::wildlife::Kind as CreatureKind;
 
 /// A named place or thing the map can describe.
@@ -35,12 +36,26 @@ pub enum Place {
     Guard,
     /// The UN armored cars patrolling the Perimeter.
     Patrol,
+    /// The Institute's tracked carrier, its official vehicle into the Zone.
+    Carrier,
+    /// An Institute helicopter flying over the Zone.
+    Helicopter,
     /// Harmont's street sweeper.
     Sweeper,
     /// A Harmont sedan in town traffic.
     Sedan,
+    /// The ambulance between the Institute and the Borscht.
+    Ambulance,
+    /// Harmont's fire engine on the ring street.
+    FireTruck,
+    /// The black panel van between the Institute and the Borscht.
+    PanelVan,
     /// The hole dug under the Perimeter, described only up close.
     CrawlHole,
+    /// An automatic gun on top of the Perimeter wall.
+    Turret,
+    /// A New Harmont townsperson walking the streets.
+    Townsfolk(TownsfolkRole),
     Artifact(usize),
 }
 

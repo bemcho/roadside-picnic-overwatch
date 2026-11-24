@@ -208,12 +208,11 @@ mod tests {
                 .iter()
                 .all(|site| near_landmark(site.transform.translation.xz()))
         );
-        for model in 0..MODELS.len() {
+        for (model, (name, contacts)) in MODELS.iter().enumerate() {
             assert!(sites.iter().any(|site| site.model == model));
             assert!(
-                ground_contacts(MODELS[model].1).next().is_some(),
-                "{} has no ground contacts",
-                MODELS[model].0
+                ground_contacts(contacts).next().is_some(),
+                "{name} has no ground contacts"
             );
         }
     }

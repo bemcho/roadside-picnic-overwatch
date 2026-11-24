@@ -1,11 +1,13 @@
 //! Driving, collision, and wheel posing for the armored vehicle.
 
+mod carrier;
 mod contact;
 mod patrol;
 mod traffic;
 
+pub(super) use carrier::{drive_carrier, spawn_carrier};
 pub(super) use patrol::{Patrol, drive_patrol, spawn_patrol};
-pub(super) use traffic::{drive_traffic, spawn_traffic};
+pub(super) use traffic::{drive_traffic, flash_beacons, spawn_traffic};
 
 use std::f32::consts::{FRAC_PI_2, PI, TAU};
 

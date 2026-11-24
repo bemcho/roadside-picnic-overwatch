@@ -33,6 +33,32 @@ Tripo's skeleton and skin weights and bakes the clips onto them:
       model.glb assets/models/soldiers/medium/soldier-m1.glb --armature \
       --yaw-degrees -90 --height 0.977325 --t-pose --walk-arms 32 --image-format AUTO
 
+New Harmont townsfolk (the Tripo workspace's townsfolk/: uhd/ the raw Tripo scans, glTF +Z
+front, 4096 px textures kept native). The two ~2M-triangle scans are simplified at a sub-
+millimetre error that renders identical to the source up close: ~100k triangles in medium/,
+and ~13k in low/ for bone heat, whose weights are copied onto the medium mesh:
+  W=~/Projects/agentic/RoadSide-Picnic/models/townsfolk
+  npx @gltf-transform/cli@4 simplify $W/uhd/scientist.glb $W/medium/scientist.glb --ratio 0 --error 0.0002
+  npx @gltf-transform/cli@4 simplify $W/uhd/scientist.glb $W/low/scientist.glb --ratio 0 --error 0.001
+  (the same for factory-worker)
+The factory worker hangs his arms like the soldier:
+  blender -b --factory-startup --python-exit-code 1 --python tools/rig_stalker.py -- \
+      $W/medium/factory-worker.glb assets/models/townsfolk/medium/factory-worker.glb \
+      --height 0.977325 --weights-from $W/low/factory-worker.glb --image-format AUTO
+The scientist gestures with both arms bent: his arm joints are given (tools/rig_joints/),
+the head centered on the spine, and the clips hang the arms:
+  blender -b --factory-startup --python-exit-code 1 --python tools/rig_stalker.py -- \
+      $W/medium/scientist.glb assets/models/townsfolk/medium/scientist.glb \
+      --center --joints tools/rig_joints/scientist.json --hang-arms \
+      --height 0.977325 --weights-from $W/low/scientist.glb --image-format AUTO
+The construction worker is Tripo-rigged (humanoid bone names, 4.8k triangles as delivered):
+  blender -b --factory-startup --python-exit-code 1 --python tools/rig_stalker.py -- \
+      $W/uhd/construction-worker.glb assets/models/townsfolk/medium/construction-worker.glb \
+      --armature --yaw-degrees -90 --height 0.977325 --t-pose --image-format AUTO
+Then, last, for all three (the bake step only repairs the few zero tangents Blender writes):
+  python3 tools/compress_glb_textures.py assets/models/townsfolk/medium/*.glb
+  glb_bake_tangents.py assets/models/townsfolk/medium/*.glb   # agentic-tooling media/
+
 UHD build (assets/models/stalker/uhd/stalker.glb: glTF +X front, arms outstretched,
 unrigged, 8192 px JPEG). Keep the full geometry and texture; the output is the source
 mesh skinned as-is:
@@ -59,9 +85,17 @@ Blender coords: Z up, model front faces -Y, character's left is +X (glTF: front 
   --walk-arms     the Walk clip's arm swing at the shoulder, in degrees (default 18); the
                   elbow bend grows in proportion.
   --armature      the source is already rigged (a Tripo biped rig): keep its skeleton and
-                  weights and bake the clips onto it through TRIPO_BONES.
+                  weights and bake the clips onto it through TRIPO_BONES (or HUMANOID_BONES).
+  --center        shift the scan so its head sits on x = 0, where the spine is fitted (a
+                  raised arm pulls the bounds off the body).
+  --joints        a JSON file of arm joints per side ({"L": {"shoulder", "elbow", "wrist",
+                  "hand_end"}, "R": ...}, fractions of the height in the axes above) for a
+                  pose the slice fit cannot read; a side left out is fitted and mirrored.
+  --hang-arms     the bind pose's arms are bent (a gesture): the clips turn every arm bone
+                  to hang straight down, as --t-pose does for outstretched arms.
 """
 import argparse
+import json
 import math
 import sys
 
@@ -83,7 +117,14 @@ def parse_args():
     p.add_argument('--image-format', choices=('JPEG', 'AUTO'), default='JPEG')
     p.add_argument('--walk-arms', type=float, default=18.0)
     p.add_argument('--armature', action='store_true')
+    p.add_argument('--center', action='store_true')
+    p.add_argument('--joints')
+    p.add_argument('--hang-arms', action='store_true')
     args = p.parse_args(sys.argv[sys.argv.index('--') + 1:])
+    if args.armature and (args.joints or args.hang_arms or args.center):
+        p.error('--armature keeps the source\'s own joints')
+    if args.hang_arms and args.t_pose:
+        p.error('--t-pose already hangs the arms')
     if args.coat and args.weights != 'proximity':
         p.error('--coat needs --weights proximity')
     if args.weights_from and args.weights != 'heat':
@@ -131,6 +172,13 @@ def import_scan(path):
     if A.yaw_degrees:
         obj.rotation_mode = 'XYZ'  # glTF imports use quaternions, which would ignore rotation_euler
         obj.rotation_euler.z = math.radians(A.yaw_degrees)
+        apply_transform(obj)
+    if A.center:
+        # The rig's spine runs up x = 0; a raised arm pulls the bounds off the body,
+        # so center the head (the top 8 % of the scan) instead.
+        v = vertex_array(obj)
+        head = v[v[:, 2] > v[:, 2].max() - 0.08 * (v[:, 2].max() - v[:, 2].min()), 0]
+        obj.location.x = -(head.min() + head.max()) / 2
         apply_transform(obj)
     if A.height:
         z = vertex_array(obj)[:, 2]
@@ -223,12 +271,22 @@ def fit_rig():
     bone('chest', spine(0.68), spine(0.79), 'spine', True)
     bone('neck', spine(0.79), spine(0.84), 'chest', True)
     bone('head', spine(0.84), spine(0.99), 'neck', True)
+    given = json.load(open(A.joints)) if A.joints else {}
+
+    def arm(side, m):
+        """The arm's joints: as --joints gives them (fractions of the height), or the
+        fitted left arm mirrored."""
+        if side in given:
+            return [Vector(given[side][k]) * H for k in ('shoulder', 'elbow', 'wrist', 'hand_end')]
+        return [Vector((v.x * m, v.y, v.z)) for v in (shoulder, elbow, wrist, hand_end)]
+
     for side, m in (('L', 1), ('R', -1)):
         f = lambda v: Vector((v.x * m, v.y, v.z))
-        bone(f'shoulder.{side}', spine(0.775) + Vector((0.03 * m, 0, 0)), f(shoulder), 'chest')
-        bone(f'upper_arm.{side}', f(shoulder), f(elbow), f'shoulder.{side}', True)
-        bone(f'forearm.{side}', f(elbow), f(wrist), f'upper_arm.{side}', True)
-        bone(f'hand.{side}', f(wrist), f(hand_end), f'forearm.{side}', True)
+        s, e, w, h = arm(side, m)
+        bone(f'shoulder.{side}', spine(0.775) + Vector((0.03 * m, 0, 0)), s, 'chest')
+        bone(f'upper_arm.{side}', s, e, f'shoulder.{side}', True)
+        bone(f'forearm.{side}', e, w, f'upper_arm.{side}', True)
+        bone(f'hand.{side}', w, h, f'forearm.{side}', True)
         bone(f'thigh.{side}', f(hip), f(knee), 'hips')
         bone(f'shin.{side}', f(knee), f(ankle), f'thigh.{side}', True)
         bone(f'foot.{side}', f(ankle), f(toe), f'shin.{side}', True)
@@ -452,7 +510,22 @@ for _side in ('L', 'R'):
         f'thigh.{_side}': f'{_side}_Thigh', f'shin.{_side}': f'{_side}_Calf',
         f'foot.{_side}': f'{_side}_Foot',
     })
-BONE = TRIPO_BONES if A.armature else {}
+# Newer Tripo rigs name the bones like a Unity humanoid.
+HUMANOID_BONES = {'hips': 'Hips', 'spine': 'Spine', 'chest': 'Chest', 'neck': 'Neck',
+                  'head': 'Head'}
+for _side, _long in (('L', 'Left'), ('R', 'Right')):
+    HUMANOID_BONES.update({
+        f'shoulder.{_side}': f'{_long}_Shoulder', f'upper_arm.{_side}': f'{_long}_UpperArm',
+        f'forearm.{_side}': f'{_long}_LowerArm', f'hand.{_side}': f'{_long}_Hand',
+        f'thigh.{_side}': f'{_long}_UpperLeg', f'shin.{_side}': f'{_long}_LowerLeg',
+        f'foot.{_side}': f'{_long}_Foot',
+    })
+if not A.armature:
+    BONE = {}
+elif 'Hips' in arm_data.bones:
+    BONE = HUMANOID_BONES
+else:
+    BONE = TRIPO_BONES
 
 
 def bone_name(name):
@@ -476,6 +549,7 @@ order = sorted(rest, key=depth)
 # Outstretched arms hang for the clips: the hang rotates the T-pose rest of the upper
 # arm and every bone below it (forearm, hand, twist and finger bones) about Y.
 hang = {}
+HANG_OUT = 6.0  # degrees out from the body for --hang-arms
 if A.t_pose:
     for side, m in (('L', 1), ('R', -1)):
         upper = bone_name(f'upper_arm.{side}')
@@ -485,6 +559,14 @@ if A.t_pose:
                 p = parent_of[p]
             if p == upper:
                 hang[name] = Matrix.Rotation(math.radians(90 * m), 3, 'Y')
+elif A.hang_arms:
+    # A bent bind pose (a gesture): every arm bone turns by the least rotation from its
+    # rest direction to hanging down, a little out from the body so it clears the hips.
+    for side, m in (('L', 1), ('R', -1)):
+        down = Vector((math.sin(math.radians(HANG_OUT)) * m, 0, -math.cos(math.radians(HANG_OUT))))
+        for part in ('upper_arm', 'forearm', 'hand'):
+            name = bone_name(f'{part}.{side}')
+            hang[name] = (rest[name] @ Vector((0, 1, 0))).rotation_difference(down).to_matrix()
 
 
 def hanging_rest(name):

@@ -1,16 +1,22 @@
 //! Harmont's traffic: a street sweeper up and down New Harmont's plaza avenue,
-//! two sedans round the town's ring street and two more between the
-//! Institute and the Borscht (`world::traffic_routes`). They keep to the
-//! right, turn round at a route's dead ends, slow for corners and stop for the
-//! stalker, their car, a patrol or another car in their way. Their wheels are
-//! separate nodes (`tools/split_vehicle_wheels.py`) that roll and steer.
+//! two sedans and the fire engine round the town's ring street, and two more
+//! sedans, the ambulance and a black panel van between the Institute and the
+//! Borscht (`world::traffic_routes`). They keep to the right, turn round at a
+//! route's dead ends, slow for corners and stop for the stalker, their car, a
+//! patrol or another car in their way. Their wheels are separate nodes
+//! (`tools/split_vehicle_wheels.py`) that roll and steer; the ambulance's and
+//! the fire engine's roof beacons flash.
 
+use bevy::light::NotShadowCaster;
 use bevy::prelude::*;
 
 use crate::assets;
-use crate::world::{Collider, Describe, Pillar, Place, Terrain, Unclimbable, traffic_routes};
+use crate::world::{
+    Collider, Describe, Pedestrian, Pillar, Place, Terrain, Unclimbable, traffic_routes,
+};
 
 use super::super::Player;
+use super::carrier::Carrier;
 use super::patrol::{CarWheel, Patrol, attach_wheels, in_the_way};
 use super::{Vehicle, pose_wheel};
 
@@ -40,7 +46,14 @@ struct Model {
     axles: (f32, f32),
     track: f32,
     collider: &'static [Pillar],
+    /// Its roof beacons: where each glows over its dome, and how big.
+    beacons: &'static [(Vec3, f32)],
 }
+
+/// The beacons glow this bright, in nits: they read against daylight (EV 13).
+const BEACON_GLOW: f32 = 30_000.0;
+/// Flashes per second; each beacon is lit for half of its cycle.
+const BEACON_RATE: f32 = 1.5;
 
 /// Four pillars in a row down the car's middle.
 const fn body(radius: f32, top: f32) -> [Pillar; 4] {
@@ -68,6 +81,7 @@ const SWEEPER: Model = Model {
     axles: (0.113, -0.275),
     track: 0.134,
     collider: &body(0.24, 0.56),
+    beacons: &[],
 };
 
 const SEDAN: Model = Model {
@@ -79,16 +93,61 @@ const SEDAN: Model = Model {
     axles: (0.327, -0.255),
     track: 0.164,
     collider: &body(0.2, 0.34),
+    beacons: &[],
+};
+
+// The emergency vehicles come out of one stubby Tripo scan; the ambulance is
+// as long as the UAZ-452 it draws on.
+const AMBULANCE: Model = Model {
+    path: assets::TRAFFIC_AMBULANCE,
+    place: Place::Ambulance,
+    scale: 4.4,
+    cruise: 8.5,
+    wheel_radius: 0.093,
+    axles: (0.234, -0.273),
+    track: 0.228,
+    collider: &body(0.27, 0.6),
+    beacons: &[
+        (Vec3::new(-0.033, 0.566, 0.129), 0.04),
+        (Vec3::new(0.166, 0.567, 0.118), 0.038),
+    ],
+};
+
+const FIRE_TRUCK: Model = Model {
+    path: assets::TRAFFIC_FIRE_TRUCK,
+    place: Place::FireTruck,
+    scale: 7.0,
+    cruise: 7.0,
+    wheel_radius: 0.085,
+    axles: (0.305, -0.289),
+    track: 0.176,
+    collider: &body(0.2, 0.49),
+    beacons: &[(Vec3::new(0.0, 0.428, 0.167), 0.026)],
+};
+
+const PANEL_VAN: Model = Model {
+    path: assets::TRAFFIC_PANEL_VAN,
+    place: Place::PanelVan,
+    scale: 4.8,
+    cruise: 7.5,
+    wheel_radius: 0.075,
+    axles: (0.320, -0.267),
+    track: 0.121,
+    collider: &body(0.17, 0.37),
+    beacons: &[],
 };
 
 /// Each car: its model, the index of its route and how far into the route's
 /// lap it starts, as a share of the lap.
-const FLEET: [(&Model, usize, f32); 5] = [
+const FLEET: [(&Model, usize, f32); 8] = [
     (&SWEEPER, 1, 0.0),
     (&SEDAN, 0, 0.0),
     (&SEDAN, 0, 0.5),
+    (&FIRE_TRUCK, 0, 0.25),
     (&SEDAN, 2, 0.0),
     (&SEDAN, 2, 0.5),
+    (&AMBULANCE, 2, 0.25),
+    (&PANEL_VAN, 2, 0.75),
 ];
 
 /// A closed lane on the right of a route, its corners rounded.
@@ -106,7 +165,7 @@ impl Lane {
         if !closed {
             lap.extend(route[1..route.len() - 1].iter().rev());
         }
-        let points = round_corners(&keep_right(&lap));
+        let points = round_corners(&keep_right(&lap, KEEP_RIGHT, true), true);
         let mut reached = vec![0.0];
         for (i, point) in points.iter().enumerate() {
             let next = points[(i + 1) % points.len()];
@@ -149,34 +208,40 @@ impl Lane {
     }
 }
 
-/// The closed polyline `lap` moved to the right of its direction of travel.
-/// At a dead end, where it doubles back, the lane crosses the road.
-fn keep_right(lap: &[Vec2]) -> Vec<Vec2> {
+/// The polyline `lap` moved `by` meters to the right of its direction of
+/// travel; `closed` joins its last point back to its first. At a dead end,
+/// where it doubles back, the lane crosses the road.
+pub(super) fn keep_right(lap: &[Vec2], by: f32, closed: bool) -> Vec<Vec2> {
     let n = lap.len();
     let mut lane = Vec::with_capacity(n + 2);
     for (i, &point) in lap.iter().enumerate() {
         let into = (point - lap[(i + n - 1) % n]).normalize();
         let away = (lap[(i + 1) % n] - point).normalize();
         let (right_in, right_out) = (into.perp(), away.perp());
-        if into.dot(away) < -0.9 {
-            lane.extend([
-                point + right_in * KEEP_RIGHT,
-                point + right_out * KEEP_RIGHT,
-            ]);
+        if !closed && (i == 0 || i == n - 1) {
+            // An open end follows its one leg.
+            lane.push(point + if i == 0 { right_out } else { right_in } * by);
+        } else if into.dot(away) < -0.9 {
+            lane.extend([point + right_in * by, point + right_out * by]);
         } else {
-            // The miter: KEEP_RIGHT from both the road in and the road out.
+            // The miter: `by` from both the road in and the road out.
             let miter = (right_in + right_out) / (1.0 + right_in.dot(right_out));
-            lane.push(point + miter * KEEP_RIGHT);
+            lane.push(point + miter * by);
         }
     }
     lane
 }
 
-/// Rounds each corner of the closed polyline `lane` with a curve.
-fn round_corners(lane: &[Vec2]) -> Vec<Vec2> {
+/// Rounds each corner of the polyline `lane` with a curve; an open one keeps
+/// its two ends.
+pub(super) fn round_corners(lane: &[Vec2], closed: bool) -> Vec<Vec2> {
     let n = lane.len();
     let mut rounded = Vec::with_capacity(n * (CORNER_STEPS + 1));
     for (i, &corner) in lane.iter().enumerate() {
+        if !closed && (i == 0 || i == n - 1) {
+            rounded.push(corner);
+            continue;
+        }
         let into = corner - lane[(i + n - 1) % n];
         let away = lane[(i + 1) % n] - corner;
         let turn = into.angle_to(away).abs();
@@ -213,7 +278,24 @@ pub(crate) struct Traffic {
     roll: f32,
 }
 
-pub(crate) fn spawn_traffic(mut commands: Commands, server: Res<AssetServer>) {
+/// A roof beacon's glow, lit for half of each flash; `phase` staggers a pair.
+#[derive(Component)]
+pub(crate) struct Beacon {
+    phase: f32,
+}
+
+pub(crate) fn spawn_traffic(
+    mut commands: Commands,
+    server: Res<AssetServer>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    let dome = meshes.add(Sphere::new(1.0));
+    let glow = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.9, 0.08, 0.04),
+        emissive: LinearRgba::rgb(1.0, 0.08, 0.03) * BEACON_GLOW,
+        ..default()
+    });
     let routes = traffic_routes();
     for (model, route, start) in FLEET {
         let (points, closed) = &routes[route];
@@ -242,16 +324,54 @@ pub(crate) fn spawn_traffic(mut commands: Commands, server: Res<AssetServer>) {
                     .with_scale(Vec3::splat(model.scale)),
                 WorldAssetRoot(assets::load_vehicle_scene(&server, model.path)),
             ))
-            .observe(attach_wheels);
+            .observe(attach_wheels)
+            .with_children(|car| {
+                for (i, &(at, radius)) in model.beacons.iter().enumerate() {
+                    car.spawn((
+                        Beacon {
+                            phase: 0.5 * i as f32,
+                        },
+                        Mesh3d(dome.clone()),
+                        MeshMaterial3d(glow.clone()),
+                        Transform::from_translation(at).with_scale(Vec3::splat(radius)),
+                        NotShadowCaster,
+                    ));
+                }
+            });
+    }
+}
+
+/// Flashes the roof beacons; a pair takes turns.
+pub(crate) fn flash_beacons(time: Res<Time>, mut beacons: Query<(&Beacon, &mut Visibility)>) {
+    let cycle = time.elapsed_secs() * BEACON_RATE;
+    for (beacon, mut visibility) in &mut beacons {
+        let lit = (cycle + beacon.phase).fract() < 0.5;
+        visibility.set_if_neq(if lit {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }
 
 /// Where a car at `at` heading `heading` rests on the ground: its height and
 /// its attitude, pitched and banked to its four tires.
 fn settle(model: &Model, at: Vec2, heading: Vec2, height_at: impl Fn(Vec2) -> f32) -> (f32, Quat) {
+    let axles = (model.axles.0 * model.scale, model.axles.1 * model.scale);
+    settle_footprint(at, heading, axles, model.track * model.scale, height_at)
+}
+
+/// Where a body at `at` heading `heading` rests on four contact points, the
+/// `front` and `rear` meters along it and `track` meters either side: its
+/// height and its attitude.
+pub(super) fn settle_footprint(
+    at: Vec2,
+    heading: Vec2,
+    (front, rear): (f32, f32),
+    track: f32,
+    height_at: impl Fn(Vec2) -> f32,
+) -> (f32, Quat) {
     let right = heading.perp();
-    let (front, rear) = (model.axles.0 * model.scale, model.axles.1 * model.scale);
-    let track = model.track * model.scale;
     let [fr, fl, rr, rl] = [
         (front, track),
         (front, -track),
@@ -267,14 +387,20 @@ fn settle(model: &Model, at: Vec2, heading: Vec2, height_at: impl Fn(Vec2) -> f3
     ((fr + fl + rr + rl) / 4.0, rotation)
 }
 
-/// What traffic stops for besides other traffic: the stalker, their car and
-/// the patrols.
+/// What traffic stops for besides other traffic: the stalker, their car, the
+/// patrols, the Institute's carrier and the townsfolk.
 type Others<'w, 's> = Query<
     'w,
     's,
     &'static Transform,
     (
-        Or<(With<Player>, With<Vehicle>, With<Patrol>)>,
+        Or<(
+            With<Player>,
+            With<Vehicle>,
+            With<Patrol>,
+            With<Carrier>,
+            With<Pedestrian>,
+        )>,
         Without<Traffic>,
     ),
 >;
@@ -288,6 +414,8 @@ type Wheels<'w, 's> = Query<
         Without<Player>,
         Without<Vehicle>,
         Without<Patrol>,
+        Without<Carrier>,
+        Without<Pedestrian>,
     ),
 >;
 
@@ -456,6 +584,74 @@ mod tests {
                 // Roads are paved 8.5 m either side of their middle line;
                 // corners are cut, but a car stays clear of the edge.
                 assert!(off_road(at) < 6.0, "{at} strays off the road");
+            }
+        }
+    }
+
+    #[test]
+    fn cars_sharing_a_route_start_well_apart() {
+        let routes = traffic_routes();
+        for (i, &(model, route, start)) in FLEET.iter().enumerate() {
+            for &(other, other_route, other_start) in &FLEET[i + 1..] {
+                if route != other_route {
+                    continue;
+                }
+                let (points, closed) = &routes[route];
+                let lap = Lane::new(points, *closed).length();
+                let apart = (start - other_start).rem_euclid(1.0);
+                let gap = lap * apart.min(1.0 - apart);
+                // Bumper to bumper, beyond the distance a car stops at.
+                let clear = gap - 0.5 * (model.scale + other.scale);
+                assert!(clear > 40.0, "route {route}: only {clear} m apart");
+            }
+        }
+    }
+
+    #[test]
+    fn the_emergency_vehicles_share_one_loaded_atlas() {
+        use bevy::asset::AssetPath;
+        use bevy::gltf::gltf::{Gltf, image::Source};
+        use bevy::image::ImageLoaderSettings;
+
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<Image>();
+        let server = app.world().resource::<AssetServer>().clone();
+        let atlas = server.load::<Image>(assets::TRAFFIC_EMERGENCY_ATLAS);
+        assert!(
+            std::path::Path::new("assets")
+                .join(assets::TRAFFIC_EMERGENCY_ATLAS)
+                .is_file()
+        );
+        for model in [&AMBULANCE, &FIRE_TRUCK, &PANEL_VAN] {
+            let bytes = std::fs::read(std::path::Path::new("assets").join(model.path))
+                .expect("the model is in assets/");
+            let gltf = Gltf::from_slice_without_validation(&bytes).expect("a GLB");
+            for image in gltf.images() {
+                let Source::Uri { uri, .. } = image.source() else {
+                    panic!("{}: an embedded image", model.path);
+                };
+                // As the glTF loader resolves and loads it, with its own settings.
+                let path = AssetPath::parse(model.path)
+                    .resolve_embed_str(uri)
+                    .expect("a relative URI");
+                assert_eq!(path, AssetPath::parse(assets::TRAFFIC_EMERGENCY_ATLAS));
+                let loaded = server
+                    .load_builder()
+                    .with_settings(|settings: &mut ImageLoaderSettings| settings.is_srgb = true)
+                    .load::<Image>(path);
+                assert_eq!(loaded.id(), atlas.id(), "{}", model.path);
+            }
+        }
+    }
+
+    #[test]
+    fn beacons_sit_on_their_roofs() {
+        for (model, _, _) in FLEET {
+            for &(at, radius) in model.beacons {
+                assert!(at.x.abs() < 0.5 && at.z.abs() < 0.5, "{at}");
+                let roof = model.collider[0].top;
+                assert!(at.y < roof && at.y + radius > roof - 0.05, "{at}");
             }
         }
     }

@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 
+use super::downed::Downed;
 use super::mutants::Mutant;
 use super::sound::MotionSound;
 use super::{BASE, CreatureSound, Cue, HALF_SIZE, Kind, Route, Terrain};
@@ -92,6 +93,11 @@ impl Wildlife {
             look: 0.0,
             attention: 0.0,
         }
+    }
+
+    /// A fresh animal of the same kind at the start of the same route.
+    pub(super) fn reborn(&self) -> Self {
+        Self::new(self.kind, self.route, self.flight)
     }
 
     pub(super) fn initial_pose(&self, terrain: &Terrain) -> Transform {
@@ -301,10 +307,18 @@ pub(in crate::world) struct Animal {
     hunt: Hunt,
 }
 
+/// The animals on their routes: not mutants, nor any a gun brought down.
+type Animals<'w, 's> = Query<
+    'w,
+    's,
+    (Entity, &'static mut Transform, &'static mut Wildlife),
+    (Without<Mutant>, Without<Downed>),
+>;
+
 pub(in crate::world) fn move_wildlife(
     time: Res<Time>,
     terrain: Res<Terrain>,
-    mut animals: Query<(Entity, &mut Transform, &mut Wildlife), Without<Mutant>>,
+    mut animals: Animals,
     mut nearby: Local<Vec<Animal>>,
     mut sounds: MessageWriter<CreatureSound>,
 ) {

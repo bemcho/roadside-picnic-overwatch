@@ -1,5 +1,6 @@
 //! Sparse, decorative wildlife using shared skinned meshes.
 
+mod downed;
 mod movement;
 mod mutants;
 mod rig;
@@ -23,6 +24,7 @@ use super::{WorldRoot, detail_range};
 
 const SKY_FLOCK_MULTIPLIER: usize = 5;
 
+pub(super) use downed::{Downed, fell_downed};
 pub(super) use movement::move_wildlife;
 pub(super) use mutants::move_mutants;
 pub(super) use rig::pose_wildlife;
@@ -185,6 +187,9 @@ pub(super) fn spawn_wildlife(
             for (kind, route) in ground_routes(&terrain) {
                 spawn_creature(wildlife, &models, &terrain, kind, route, None);
             }
+            for (kind, route) in perimeter_herd(&terrain) {
+                spawn_seen(wildlife, &models, &terrain, (kind, route, None), HERD_VIEW);
+            }
             for (kind, route, flight) in flight_routes(&terrain) {
                 spawn_creature(wildlife, &models, &terrain, kind, route, Some(flight));
             }
@@ -269,6 +274,36 @@ fn ground_routes(terrain: &Terrain) -> Vec<(Kind, Route)> {
         }
     }
     routes
+}
+
+/// How far from the camera the herd by the Perimeter shows: its guns pick them out from the wall.
+const HERD_VIEW: f32 = 450.0;
+/// The herd grazes around points this far into the Zone from the Perimeter, two animals every
+/// `HERD_SPACING` meters along the guarded stretch. `site_ground_route` keeps each 55 to 130 m
+/// from its point, so every route stays 100 to 400 m from the wall.
+const HERD_DEPTH: f32 = 250.0;
+const HERD_SPACING: f32 = 150.0;
+
+/// Ground animals in the Zone along the stretch of the Perimeter its guns watch, in their sight.
+fn perimeter_herd(terrain: &Terrain) -> Vec<(Kind, Route)> {
+    const SPECIES: [Kind; 4] = [
+        Kind::Hexadeer,
+        Kind::Frostwolf,
+        Kind::Hexadeer,
+        Kind::Chameleon,
+    ];
+    let (south, north) = super::turrets::guarded_span();
+    let slots = ((north - south) / HERD_SPACING).ceil() as usize;
+    let mut herd = Vec::new();
+    for i in 0..slots * 2 {
+        let z = south + HERD_SPACING * ((i / 2) as f32 + 0.5);
+        let anchor = Vec2::new(super::cordon::PERIMETER_X - HERD_DEPTH, z);
+        let kind = SPECIES[i % SPECIES.len()];
+        if let Some(route) = site_ground_route(terrain, kind, anchor, 0x4E5D + i, &herd) {
+            herd.push((kind, route));
+        }
+    }
+    herd
 }
 
 fn site_ground_route(
@@ -490,8 +525,6 @@ fn spawn_creature<'a>(
     route: Route,
     flight: Option<Flight>,
 ) -> EntityCommands<'a> {
-    let motion = Wildlife::new(kind, route, flight);
-    let pose = motion.initial_pose(terrain);
     let distance = if flight.is_some() {
         470.0
     } else if mutants::is_mutant(kind) {
@@ -499,6 +532,19 @@ fn spawn_creature<'a>(
     } else {
         100.0
     };
+    spawn_seen(parent, models, terrain, (kind, route, flight), distance)
+}
+
+/// A creature on its route, shown within `distance` meters of the camera.
+fn spawn_seen<'a>(
+    parent: &'a mut ChildSpawnerCommands,
+    models: &WildlifeModels,
+    terrain: &Terrain,
+    (kind, route, flight): (Kind, Route, Option<Flight>),
+    distance: f32,
+) -> EntityCommands<'a> {
+    let motion = Wildlife::new(kind, route, flight);
+    let pose = motion.initial_pose(terrain);
     let (model, paint) = &models.bodies[kind as usize];
     let mut entity = parent.spawn((pose, Visibility::default(), Name::new(kind.model().0)));
     let mut articulation = model.spawn(&mut entity, &motion, paint, distance);
@@ -566,6 +612,38 @@ mod tests {
                 route
                     .circuit()
                     .all(|at| flight.cruise - terrain.mesh_height_at(at) >= 11.9)
+            );
+        }
+    }
+
+    #[test]
+    fn a_herd_grazes_in_sight_of_the_perimeter_guns() {
+        let terrain = Terrain::new();
+        let herd = perimeter_herd(&terrain);
+        let (south, north) = super::super::turrets::guarded_span();
+        let slots = ((north - south) / HERD_SPACING).ceil() as usize;
+        assert!(
+            herd.len() + 2 >= slots * 2 && herd.len() <= slots * 2,
+            "{} of {} herd animals placed",
+            herd.len(),
+            slots * 2
+        );
+        let wall = super::super::cordon::PERIMETER_X;
+        for (kind, route) in &herd {
+            assert!(!kind.is_bird() && !mutants::is_mutant(*kind));
+            assert!(route.circuit().all(|at| {
+                (wall - 400.0..wall - 100.0).contains(&at.x)
+                    && (south - 140.0..north + 140.0).contains(&at.y)
+                    && dry_ground(&terrain, at)
+                    && terrain.road_mask(at.x, at.y) < 0.025
+            }));
+        }
+        // Spread along the whole guarded stretch, not bunched at one end.
+        for z in [south + 100.0, (south + north) * 0.5, north - 100.0] {
+            assert!(
+                herd.iter()
+                    .any(|(_, route)| (route.center.y - z).abs() < HERD_SPACING),
+                "no herd near z {z}"
             );
         }
     }
