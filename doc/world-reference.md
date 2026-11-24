@@ -210,6 +210,17 @@ the stalker stands still.
     assets/models/sites/medium assets/textures/cordon
   ```
 
+  A third GLB, `site-cordon-wall-sandbags.glb` (`bake_cordon_wall.py --only
+  sandbags` bakes just it, in about 25 s, leaving the others untouched), lays a row
+  of sandbags along the foot of both faces: the scan has only one block of bags
+  (two wide, four layers) at its left end, so one module of it is baked (colour
+  and tangent normal, 740 x 632 px) and repeated seven times along the panel and
+  mirrored on the back, 672 triangles in all; `BAG_REACH` and `BAG_TOP` are its
+  measured reach (0.1989 from the line, 1.47 m) and height (0.0532, 0.39 m).
+  `WallModel::batch` shears it onto the ground like the others, but it lies on the
+  ground (`BAG_SINK`, 2 cm) instead of standing 9 cm in it, and it rises with its
+  panel, so the Perimeter's bags are three times as high.
+
   The box is 0.147 model units either side of its line (`WALL_HALF_THICKNESS`,
   1.09 m at `WALL_HEIGHT_SCALE` 7.4: a wall 2.2 m thick and 3.04 m high, the
   Perimeter three times that high) and its top is `WALL_TOP`; remeasure both
@@ -221,10 +232,14 @@ the stalker stands still.
   thickness) past the other's line and the later one stops that far short, so the
   outer corner closes and no two faces share a plane. A gate's or the checkpoint
   gap's end, and a run ending against the middle of another (the Perimeter on the
-  map-edge wall), stops where it is. A post every 0.77 m (`WALL_PILLAR`, radius
-  1.15 m, up to the box's top) fences the wall so a body stops at its visible
-  face; the crawl hole's floor (2 m across) is wider than the wall. Scenery keeps
-  `WALL_HALF_WIDTH` plus its clearance from the wall's line. Both checkpoints use
+  map-edge wall), stops where it is. A post every 0.77 m fences the wall so a body
+  stops at its visible face: a disc of 1.15 m radius up to the box's top
+  (`WALL_DISC`) and one of 1.53 m up to the sandbags' top, which lies on the ground
+  (`BAG_DISC`, 0.39 m, 1.16 m on the Perimeter); both fence at any height, so a
+  stalker cannot step onto the bags. The crawl hole's floor (2 m across) is wider
+  than the wall, and a crawler passes under the bags' discs as under the wall's.
+  Scenery keeps `FOOT_REACH` (the sandbags' front) plus its clearance from the
+  wall's line. Both checkpoints use
   the UHD scan; re-measure `src/world/pillars/uhd_checkpoint.rs` with
   `tools/sample_landmark_ground.py`. The old 2,875-triangle panel is in the
   assets archive zip.

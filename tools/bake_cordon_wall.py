@@ -9,10 +9,11 @@ about 3 minutes with a GPU):
     "$BLENDER" -b --factory-startup --python-exit-code 1 --python tools/bake_cordon_wall.py -- \
         ~/Projects/agentic/RoadSide-Picnic/models/sites/uhd/site-cordon-wall.glb \
         assets/models/sites/medium assets/textures/cordon \
-        [--sources ~/Projects/agentic/RoadSide-Picnic/textures/cordon-wall] [--span-px 2048]
+        [--sources ~/Projects/agentic/RoadSide-Picnic/textures/cordon-wall] [--span-px 2048] [--only sandbags]
 
-Arguments: the UHD scan, the folder for the two GLBs and the folder for the depth map. Every
-intermediate PNG goes to --sources (the assets workspace, not the game repo). The panel frame is the
+Arguments: the UHD scan, the folder for the GLBs and the folder for the depth map. Every
+intermediate PNG goes to --sources (the assets workspace, not the game repo). `--only sandbags` bakes
+just the sandbag row (about 25 s) and leaves the box, the wire and the depth map as they are. The panel frame is the
 old medium panel's (archived, `assets/models/sites/medium/site-cordon-wall.glb`): its lowest point is
 y = 0 and its centre x = z = 0.
 
@@ -20,6 +21,8 @@ Outputs
   site-cordon-wall-box.glb   one primitive, one material (base colour + normal map, baked tangents).
   site-cordon-wall-wire.glb  one primitive, one MASK + double-sided material (colour + coverage).
   wall_depth.ktx2            linear BC7 with mips, the box's UV layout, white = deepest.
+  site-cordon-wall-sandbags.glb  one primitive, one material (colour + normal map, baked tangents): the
+                             sandbag row along the foot of both faces, at most 1,000 triangles.
 The GLBs and the depth map are KTX2 (tools/compress_glb_textures.py presets); the PNGs stay out.
 
 Frame. The scan lies along z, so it is turned a quarter about the vertical, stood on its lowest
@@ -65,8 +68,20 @@ Ends. The last END_BAND at both ends of the front, back and top faces is the bod
 end (and a ladder at one): there the normal is flat, the depth 0 and the albedo reflects the concrete
 inside each end, blended toward the other end's mirror image so panels join without a seam (seal_ends).
 
+Sandbags. The scan has no row of them: one block (two bags wide, four layers high) is piled against
+each face at the left end, with a gap of a few cm behind it, plus a few single bags and strips of tape.
+measure_bag_block finds the block (the longest run of warm low vertices that stand deep beside the front
+face), bag_module builds one module as a low-poly loft of five stations (joint, crown, joint, crown,
+joint) over a profile that goes from the wall over the crown and down the front, as deep as the block
+from its back to its front, and one UV island over the whole atlas (u along x, v along the profile).
+The module is baked once (colour and tangent normal) from the block, moved against the wall, trimmed by
+BAG_TRIM at each end (the ends are ragged) and stretched to one module (BAG_COUNT of them span a panel);
+holes in the scan (inside faces, concrete showing through, and a cable's dark loop round them) and
+paint and tape on the front are filled from around (cold_texels, bright_marks, settle). The row is
+BAG_COUNT copies along x on the front and mirrored on the back, so panels meet at the same profile.
+
 The tool prints the measurements Task 5's constants need (HALF_THICKNESS, TOP, the wire's extent,
-DEPTH_RANGE).
+DEPTH_RANGE, and the sandbags' reach and height).
 """
 
 import argparse
@@ -126,6 +141,26 @@ REACH = 0.1  # how far past the face a ray looks; the nearest surface wins, so m
 WIRE_CAGE = 0.012  # the wire strips' rays start this far outside the coil rows
 SAMPLES = 32  # antialiases the 8K scan texture down to the atlas density
 ROUGHNESS = 0.9  # as the panel it replaces
+BAG_COUNT = 7  # bag blocks along a panel: the scan's block is 0.117 wide, within 5 % of a 7th of the span
+BAG_SLICE = 0.002  # x resolution of the search for the bag block
+BAG_DEEP = 0.75  # a slice belongs to the block where the bags stand this share of the deepest slice out from the wall
+BAG_PINCH = 0.003  # the front of a bag bulges this much past the block's depth, and a joint between bags is this far in
+BAG_SAG = 0.002  # a joint between bags lies this much lower than the bags' crowns
+BAG_ROUND = 0.007  # the rounding of the crown's front edge and of the front's foot
+BAG_BACK = 0.004  # the row starts this far inside the wall's face (hidden), so sloping ground shows no gap
+BAG_REAR = 5  # the pile's back stands where this percentile of the block's vertices lie out from the wall (a gap
+# of a few cm lies between the scan's wall and its pile; the row is moved up against the wall)
+BAG_DENSITY = 6000  # px per unit of the block's atlas
+BAG_CAGE = 0.014  # rays start this far outside the row's low-poly surface ...
+BAG_REACH = 0.02  # ... and look this far inside it
+BAG_COLD = 1.1  # a baked texel with red under this share of blue (plus 0.002) is concrete seen through a hole in a bag
+BAG_TRIM = (
+    0.004  # the block's ends are ragged and rounded, so a module is baked from the block without this much of each
+)
+BAG_BRIGHT = 2.2  # a texel on a bag's front brighter than this many times the cloth's median is paint or tape
+BAG_BRIGHT_GROW = 8  # px a bright mark is grown by: past its pale rim
+BAG_FRONT = 3  # index of the profile point where the front face starts
+BAG_COLD_GROW = 24  # px a cold patch is grown by: past the dark loop (a cable or tie) round the hole it hides
 KTX2_QUALITY = "slow"
 DEPTH_BIAS = 0.1  # the depth shader emits depth + this (it cannot emit less than 0); numpy takes it off again
 DEPTH_PERCENTILE = 99  # share of the long faces' detrended depth below white
@@ -386,6 +421,153 @@ def wire_geometry(shape, islands):
         columns(), [0, 1], (0, 1, 0),
     )  # fmt: skip
     return geometry
+
+
+@dataclass(frozen=True)
+class BagBlock:
+    """The scan's block of sandbags, measured on its front (z > 0): x ends, how far its back and its front stand out
+    from the wall's face, and its height."""
+
+    x0: float
+    x1: float
+    back: float
+    depth: float
+    top: float
+
+
+def measure_bag_block(points, warm, half_thickness):
+    """The widest run of x slices (BAG_SLICE) where the warm low vertices beside the front face stand deep.
+
+    The scan has no row of sandbags: one block, two bags wide and four layers high, is piled against each
+    face at the left end (and a few single bags and strips of tape lie elsewhere), so the block is the
+    longest run of slices whose front stands out BAG_DEEP of the deepest slice's.
+    """
+    x, y, z = points.T
+    beside = warm & (y < GROUND_ZONE) & (z > half_thickness)
+    x, height, out = x[beside], y[beside], z[beside] - half_thickness
+    slices = np.floor((x - x.min()) / BAG_SLICE).astype(int)
+    front, top = np.zeros(slices.max() + 1), np.zeros(slices.max() + 1)
+    np.maximum.at(front, slices, out)
+    np.maximum.at(top, slices, height)
+    deep = front >= BAG_DEEP * front.max()
+    edges = np.flatnonzero(np.diff(np.concatenate([[0], deep.astype(int), [0]])))
+    starts, ends = edges[::2], edges[1::2]
+    longest = int(np.argmax(ends - starts))
+    run = slice(starts[longest], ends[longest])
+    x0, x1 = float(x.min() + run.start * BAG_SLICE), float(x.min() + run.stop * BAG_SLICE)
+    return BagBlock(
+        x0=x0,
+        x1=x1,
+        back=float(np.percentile(out[(x >= x0) & (x < x1)], BAG_REAR)),
+        depth=float(np.median(front[run])),
+        top=float(np.median(top[run])),
+    )
+
+
+BAG_STATIONS = (
+    (0.0, -1),
+    (0.25, 1),
+    (0.5, -1),
+    (0.75, 1),
+    (1.0, -1),
+)  # along a module: (fraction, +1 crown / -1 joint)
+
+
+def bag_profile(depth, top):
+    """A bag row's side profile, from the wall over the crown and down the front to the ground: (out, y) points."""
+    return [
+        (-BAG_BACK, top),
+        (0.4 * depth, top),
+        (depth - BAG_ROUND, top),
+        (depth, top - BAG_ROUND),
+        (depth + 0.001, top / 2),
+        (depth, BAG_ROUND),
+        (depth - 0.003, 0.0),
+    ]
+
+
+def profile_lengths(profile):
+    """Distance along the polyline `profile` (N x 2) to each of its points."""
+    return np.concatenate([[0], np.cumsum(np.linalg.norm(np.diff(profile, axis=0), axis=1))])
+
+
+def bag_front_rows(block, size):
+    """How many rows of a module's atlas (from the bottom) are the front face: v runs along the profile."""
+    lengths = profile_lengths(np.array(bag_profile(block.depth - block.back + BAG_PINCH, block.top)))
+    return round(size[1] * (1 - lengths[BAG_FRONT] / lengths[-1]))
+
+
+def bag_module(block, half_thickness):
+    """(Geometry, atlas size) of one module on the front (z > 0): two bags long, one UV island over the whole atlas.
+
+    The bags stand against the wall, so the module is as deep as the block is from its back to its front.
+    Five stations along x (joint, crown, joint, crown, joint), each a bag_profile that bulges at the crowns
+    and pinches at the joints, so modules meet at identical profiles. u grows with +x; v runs along the
+    profile from the wall (1) to the ground (0).
+    """
+    period = PANEL_SPAN / BAG_COUNT
+    depth = block.depth - block.back
+    crown = np.array(bag_profile(depth + BAG_PINCH, block.top))
+    lengths = profile_lengths(crown)
+    size = (up4(period * BAG_DENSITY), up4(lengths[-1] * BAG_DENSITY))
+    geometry = Geometry()
+    for fraction, sign in BAG_STATIONS:
+        station_depth, top = depth + sign * BAG_PINCH, block.top + (sign - 1) / 2 * BAG_SAG
+        for (out, y), length in zip(bag_profile(station_depth, top), lengths):
+            geometry.positions.append((period * (fraction - 0.5), y, half_thickness + out))
+            geometry.uvs.append((fraction, 1 - length / lengths[-1]))
+    rows = len(crown)
+    for station in range(len(BAG_STATIONS) - 1):
+        for row in range(rows - 1):
+            a = station * rows + row
+            quad = [a, a + rows, a + rows + 1, a + 1]
+            corners = np.array([geometry.positions[i] for i in quad])
+            normal = np.cross(corners[2] - corners[0], corners[3] - corners[1])
+            normal /= np.linalg.norm(normal)
+            step = (
+                crown[row + 1] - crown[row]
+            )  # the profile runs from the wall over the top and down: out is to its left
+            outward = np.array([0.0, step[0], -step[1]])
+            if np.dot(normal, outward) < 0:
+                quad, normal = quad[::-1], -normal
+            geometry.faces.append(tuple(quad))
+            geometry.normals.append(normal)
+    return geometry, size
+
+
+def bag_row(module):
+    """The whole row of one panel: BAG_COUNT copies of `module` along x on the front, and mirrored on the back."""
+    period = PANEL_SPAN / BAG_COUNT
+    row = Geometry()
+    for side in (1, -1):
+        for copy in range(BAG_COUNT):
+            first = len(row.positions)
+            shift = (copy - (BAG_COUNT - 1) / 2) * period
+            row.positions += [(x + shift, y, side * z) for x, y, z in module.positions]
+            row.uvs += module.uvs
+            row.faces += [tuple(first + i for i in (face if side > 0 else face[::-1])) for face in module.faces]
+            row.normals += [normal * np.array([1, 1, side]) for normal in module.normals]
+    return row
+
+
+def check_row_extent(row):
+    """Fail unless the row spans exactly +-PANEL_SPAN / 2 in x (within 1e-4), so it repeats from panel to panel."""
+    x = np.array(row.positions)[:, 0]
+    if abs(x.min() + PANEL_SPAN / 2) > 1e-4 or abs(x.max() - PANEL_SPAN / 2) > 1e-4:
+        raise SystemExit(f"sandbag row x extent is {x.min():.5f}..{x.max():.5f}, not +-{PANEL_SPAN / 2}")
+
+
+def bright_marks(colour):
+    """Mask of the paint and tape marks on baked bag cloth `colour` (rows x columns x RGB): far brighter than its
+    median, grown past their pale rim."""
+    brightest = colour.max(axis=2)
+    return dilate(brightest > BAG_BRIGHT * np.median(brightest), BAG_BRIGHT_GROW)
+
+
+def cold_texels(colour):
+    """Mask of baked `colour` (rows x columns x RGB, linear) that is not a sandbag's warm cloth: black (an inside
+    face seen through a hole) or concrete's blue-grey seen through one."""
+    return (colour.max(axis=2) < BLACK) | (colour[..., 0] < BAG_COLD * colour[..., 2] + 0.002)
 
 
 def depth_image(depth, mask, percentile=DEPTH_PERCENTILE):
@@ -760,6 +942,38 @@ def bake_wire(wire_scan, wire, size, shape, islands):
     return colour, coverage
 
 
+def bag_source(scan, block, half_thickness):
+    """A copy of the scan with only the bag block and the wall face behind it, centred in x and stretched to
+    one module's length, and moved against the wall's face: what a module's rays hit."""
+    x, y, z = to_panel(vertex_coordinates(scan.data)).T
+    first, last = block.x0 + BAG_TRIM, block.x1 - BAG_TRIM
+    near = (x > first - BAG_SLICE) & (x < last + BAG_SLICE) & (y < GROUND_ZONE) & (z > half_thickness - BAG_BACK)
+    copy = copy_without(scan, ~near)
+    stretch = PANEL_SPAN / BAG_COUNT / (last - first)
+    move = Matrix.Scale(stretch, 4, Vector((1, 0, 0))) @ Matrix.Translation(
+        to_blender((-(block.x0 + block.x1) / 2, 0, -block.back))
+    )
+    copy.data.transform(move)
+    return copy
+
+
+def bake_bags(source, module, size, front_rows):
+    """(colour, tangent normal) of one module baked from the scan's bags; holes in the scan, and paint and tape
+    on the front (its first `front_rows` rows), are filled from around."""
+    ray = Ray(BAG_CAGE, BAG_CAGE + BAG_REACH)
+    albedo, normal = (bake(module, source, size, kind, ray) for kind in ("DIFFUSE", "NORMAL"))
+    alpha = albedo[..., 3].copy()
+    colour = albedo[..., :3] / np.maximum(alpha, 1e-6)[..., None]
+    vectors = normal[..., :3] / np.maximum(alpha, 1e-6)[..., None] * 2 - 1
+    sideways = vectors[..., 2] < SIDEWAYS * np.linalg.norm(vectors, axis=2)
+    unusable = dilate(cold_texels(colour), BAG_COLD_GROW) | sideways
+    unusable[:front_rows] |= bright_marks(colour[:front_rows])
+    settle([albedo, normal], alpha, unusable)
+    vectors = normal[..., :3] * 2 - 1
+    unit = vectors / np.maximum(np.linalg.norm(vectors, axis=2, keepdims=True), 1e-6)
+    return albedo[..., :3], unit * 0.5 + 0.5
+
+
 def warm_vertices(scan):
     """Mask of the scan's vertices whose texture colour is warm: sandbags and tape, where the concrete is blue-grey."""
     image = next(n.image for n in scan.data.materials[0].node_tree.nodes if n.type == "TEX_IMAGE").copy()
@@ -816,6 +1030,11 @@ def wire_source(scan, wall):
     """Only the coil rows: the scan without the concrete, and without the tower, guards and hatch in the middle."""
     (_, y, _), middle, flat = top_heights(scan, wall)
     return copy_without(scan, middle | (y <= flat + WIRE_LIFT))
+
+
+def shade_smooth(obj):
+    for polygon in obj.data.polygons:
+        polygon.use_smooth = True
 
 
 def textured_material(name, albedo, normal=None, cutout=False):
@@ -924,6 +1143,12 @@ def finish_glbs(box_glb, wire_glb):
         validate(path)
 
 
+def finish_sandbags(glb):
+    subprocess.run(["python3", str(Path(__file__).with_name("compress_glb_textures.py")), str(glb)], check=True)
+    subprocess.run(["python3", str(TANGENT_BAKER), str(glb)], check=True)
+    validate(glb)
+
+
 # ---------------------------------------------------------------- main
 
 
@@ -935,6 +1160,9 @@ def parse_args():
     parser.add_argument("--sources", type=Path, default=DEFAULT_SOURCES, help="folder for the intermediate PNGs")
     parser.add_argument(
         "--span-px", type=int, default=SPAN_PX, help="px along the panel (a smaller value to try things out)"
+    )
+    parser.add_argument(
+        "--only", choices=["sandbags"], help="bake just this part, leaving the other outputs as they are"
     )
     return parser.parse_args(sys.argv[sys.argv.index("--") + 1 :])
 
@@ -953,19 +1181,21 @@ def print_measurements(wall, shape, depth_range, spread, device):
     print(f"  box x extent = +-{PANEL_SPAN / 2}, y 0..{wall.top:.4f}, z +-{wall.half_thickness:.4f}")
 
 
-def main():
-    args = parse_args()
-    for folder in (args.models, args.textures, args.sources):
-        folder.mkdir(parents=True, exist_ok=True)
-    bpy.ops.wm.read_factory_settings(use_empty=True)
-    scene = bpy.context.scene
-    scene.render.engine = "CYCLES"
-    scene.cycles.samples = SAMPLES
-    scene.cycles.use_denoising = False
-    device = use_gpu(scene)
+def print_sandbag_measurements(block, row, size):
+    points = np.array(row.positions)
+    print("sandbag row measurements (model units, panel frame):")
+    print(
+        f"  block x {block.x0:.4f}..{block.x1:.4f} in the scan, {block.back:.4f}..{block.depth:.4f} out from the wall,"
+        f" {block.top:.4f} high"
+    )
+    print(
+        f"  x extent = {points[:, 0].min():.4f}..{points[:, 0].max():.4f}, max |z| = {np.abs(points[:, 2]).max():.4f}"
+    )
+    print(f"  top y = {points[:, 1].max():.4f}, {len(row.faces) * 2} triangles, atlas {size[0]} x {size[1]} px")
 
-    scan = import_glb(args.scan)
-    wall = stand_scan_on_panel_frame(scan)
+
+def bake_wall_and_wire(scan, wall, args, device):
+    """The box, its depth map and the wire strips: baked, written and finished."""
     shape = wire_shape(wall)
 
     size, islands = box_layout(wall, args.span_px)
@@ -1012,6 +1242,53 @@ def main():
     encode_depth(args.sources / "wall_depth.png", args.textures / "wall_depth.ktx2")
     finish_glbs(box_glb, wire_glb)
     print_measurements(wall, shape, depth_range, spread, device)
+
+
+def bake_sandbags(scan, wall, args):
+    """The row of sandbags along the wall's foot: one module baked from the scan's block, repeated and mirrored."""
+    block = measure_bag_block(to_panel(vertex_coordinates(scan.data)), warm_vertices(scan), wall.half_thickness)
+    module, size = bag_module(block, wall.half_thickness)
+    module_object = mesh_object("sandbags-module", module)
+    shade_smooth(module_object)
+    source = bag_source(scan, block, wall.half_thickness)
+    albedo, normal = bake_bags(source, module_object, size, bag_front_rows(block, size))
+    write_png(args.sources / "sandbags_albedo.png", srgb_encode(albedo))
+    write_png(args.sources / "sandbags_normal.png", normal)
+
+    row = bag_row(module)
+    check_row_extent(row)
+    sandbags = mesh_object("site-cordon-wall-sandbags", row)
+    shade_smooth(sandbags)
+    material = textured_material(
+        "site-cordon-wall-sandbags",
+        load_image(args.sources / "sandbags_albedo.png", "sRGB"),
+        load_image(args.sources / "sandbags_normal.png", "Non-Color"),
+    )
+    material.use_backface_culling = True  # every face looks out; none looks at the wall or the ground
+    sandbags.data.materials.clear()
+    sandbags.data.materials.append(material)
+    glb = args.models / "site-cordon-wall-sandbags.glb"
+    export_glb(sandbags, glb)
+    finish_sandbags(glb)
+    print_sandbag_measurements(block, row, size)
+
+
+def main():
+    args = parse_args()
+    for folder in (args.models, args.textures, args.sources):
+        folder.mkdir(parents=True, exist_ok=True)
+    bpy.ops.wm.read_factory_settings(use_empty=True)
+    scene = bpy.context.scene
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = SAMPLES
+    scene.cycles.use_denoising = False
+    device = use_gpu(scene)
+
+    scan = import_glb(args.scan)
+    wall = stand_scan_on_panel_frame(scan)
+    if args.only != "sandbags":
+        bake_wall_and_wire(scan, wall, args, device)
+    bake_sandbags(scan, wall, args)
 
 
 if __name__ == "__main__" and bpy is not None:

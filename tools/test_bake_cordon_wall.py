@@ -168,6 +168,124 @@ class LayoutTests(unittest.TestCase):
         self.assertGreater(shape.floor, TOP)
 
 
+class SandbagTests(unittest.TestCase):
+    half = 0.147
+    block = wall_tool.BagBlock(x0=0.1, x1=0.22, back=0.03, depth=0.076, top=0.054)
+
+    @staticmethod
+    def scan_with_bags(seed=2):
+        """Warm low vertices beside the front face: a deep block at x 0.1..0.22, a narrower deep bag, a shallow lump
+        and a strip of tape; all of them below the ground zone."""
+        rng = np.random.default_rng(seed)
+
+        def part(x0, x1, out, top, n, back=0.0):
+            return np.stack([rng.uniform(x0, x1, n), rng.uniform(0, top, n), 0.147 + rng.uniform(back, out, n)], axis=1)
+
+        points = [
+            part(0.1, 0.22, 0.076, 0.054, 3000, 0.03),  # the block, with a gap behind it
+            part(-0.2, -0.16, 0.074, 0.05, 800),  # a single bag, narrower than the block
+            part(0.22, 0.3, 0.04, 0.057, 1500),  # the shallow lump beside it
+            part(-0.4, 0.4, 0.012, 0.035, 600),  # tape along the foot
+            np.array([[0.05, 0.01, 0.147 + 0.076]]),  # one stray deep vertex between the bags
+        ]
+        return np.concatenate(points).astype(np.float32)
+
+    def test_the_bag_block_is_the_longest_deep_run(self):
+        points = self.scan_with_bags()
+        block = wall_tool.measure_bag_block(points, np.ones(len(points), bool), self.half)
+        self.assertAlmostEqual(block.x0, 0.1, delta=wall_tool.BAG_SLICE)
+        self.assertAlmostEqual(block.x1, 0.22, delta=2 * wall_tool.BAG_SLICE)
+        self.assertAlmostEqual(block.back, 0.03, delta=0.004)
+        self.assertAlmostEqual(block.depth, 0.076, delta=0.004)
+        self.assertAlmostEqual(block.top, 0.054, delta=0.004)
+
+    def test_only_warm_vertices_beside_the_front_count(self):
+        points = self.scan_with_bags()
+        warm = np.ones(len(points), bool)
+        warm[:3000] = False  # the block's texture is not warm: it is not a sandbag
+        block = wall_tool.measure_bag_block(points, warm, self.half)
+        self.assertLess(block.x1, 0.0)  # the narrower bag is what is left
+
+    def test_a_module_has_the_blocks_depth_and_joins_its_neighbours(self):
+        geometry, size = wall_tool.bag_module(self.block, self.half)
+        points = np.array(geometry.positions)
+        period = wall_tool.PANEL_SPAN / wall_tool.BAG_COUNT
+        self.assertAlmostEqual(points[:, 0].min(), -period / 2, places=6)
+        self.assertAlmostEqual(points[:, 0].max(), period / 2, places=6)
+        deepest = 0.076 - 0.03 + wall_tool.BAG_PINCH + 0.001  # from the pile's back to its front, against the wall
+        self.assertAlmostEqual(points[:, 2].max(), self.half + deepest, places=6)
+        self.assertAlmostEqual(points[:, 1].max(), 0.054, places=6)
+        self.assertEqual(points[:, 1].min(), 0.0)
+        ends = {}
+        for x, y, z in points:
+            ends.setdefault("left" if x < 0 else "right", []).append(
+                (round(abs(x), 6), round(float(y), 6), round(float(z), 6))
+            )
+        left = sorted(p for p in ends["left"] if p[0] == round(period / 2, 6))
+        right = sorted(p for p in ends["right"] if p[0] == round(period / 2, 6))
+        self.assertEqual(left, right)  # the two ends have one profile, so modules meet without a step
+        self.assertLessEqual(max(size), 1024)
+
+    def test_module_uvs_run_along_x_and_down_the_profile(self):
+        geometry, _ = wall_tool.bag_module(self.block, self.half)
+        uvs = np.array(geometry.uvs)
+        points = np.array(geometry.positions)
+        self.assertTrue(((uvs >= 0) & (uvs <= 1)).all())
+        order = np.argsort(points[:, 0], kind="stable")
+        self.assertTrue((np.diff(uvs[order, 0]) >= -1e-9).all())  # u grows with +x
+        rows = len(wall_tool.bag_profile(0.07, 0.05))
+        first = uvs[:rows, 1]  # one station: v falls from the wall (1) to the ground (0)
+        self.assertEqual((first[0], first[-1]), (1.0, 0.0))
+        self.assertTrue((np.diff(first) < 0).all())
+
+    def test_module_faces_wind_outward(self):
+        geometry, _ = wall_tool.bag_module(self.block, self.half)
+        points = np.array(geometry.positions)
+        for face, normal in zip(geometry.faces, geometry.normals):
+            corners = points[list(face)]
+            newell = np.cross(corners[2] - corners[0], corners[3] - corners[1])
+            self.assertGreater(float(np.dot(newell / np.linalg.norm(newell), normal)), 0.999)
+            self.assertGreaterEqual(
+                float(normal[1] + normal[2]), 0.0
+            )  # looks up or out from the wall, never in or down
+
+    def test_the_row_repeats_across_the_panel_on_both_faces(self):
+        module, _ = wall_tool.bag_module(self.block, self.half)
+        row = wall_tool.bag_row(module)
+        points = np.array(row.positions)
+        wall_tool.check_row_extent(row)  # spans +-PANEL_SPAN / 2
+        self.assertAlmostEqual(points[:, 0].min(), -wall_tool.PANEL_SPAN / 2, places=5)
+        self.assertEqual(len(row.faces), 2 * wall_tool.BAG_COUNT * len(module.faces))
+        self.assertLessEqual(len(row.faces) * 2, 1000)  # a light model: at most 1,000 triangles
+        front, back = points[points[:, 2] > 0], points[points[:, 2] < 0]
+        self.assertEqual(len(front), len(back))
+        self.assertAlmostEqual(float(front[:, 2].max()), float(-back[:, 2].min()), places=6)
+        # The back is the front mirrored: its faces still look out.
+        for face, normal in zip(row.faces[len(row.faces) // 2 :], row.normals[len(row.faces) // 2 :]):
+            corners = points[list(face)]
+            newell = np.cross(corners[2] - corners[0], corners[3] - corners[1])
+            self.assertGreater(float(np.dot(newell / np.linalg.norm(newell), normal)), 0.999)
+        bad = wall_tool.cold_texels(np.array([[[0.2, 0.15, 0.08], [0.07, 0.09, 0.10], [0.0, 0.0, 0.0]]], np.float32))
+        self.assertEqual(bad.tolist(), [[False, True, True]])  # cloth stays; concrete and an inside face do not
+
+    def test_the_front_is_the_rows_below_the_profiles_crown(self):
+        _, size = wall_tool.bag_module(self.block, self.half)
+        rows = wall_tool.bag_front_rows(self.block, size)
+        self.assertTrue(0 < rows < size[1])
+        crown = np.array(wall_tool.bag_profile(0.076 - 0.03 + wall_tool.BAG_PINCH, 0.054))
+        front = wall_tool.profile_lengths(crown[wall_tool.BAG_FRONT :])[-1]
+        self.assertAlmostEqual(rows / size[1], front / wall_tool.profile_lengths(crown)[-1], places=3)
+
+    def test_paint_and_tape_are_bright_marks_but_the_cloth_is_not(self):
+        cloth = np.full((60, 80, 3), [0.12, 0.10, 0.05], np.float32)
+        cloth[20:24, 30:34] = [0.4, 0.38, 0.3]  # a fleck of paint
+        cloth[40, :] = [0.06, 0.05, 0.03]  # a dark seam
+        marks = wall_tool.bright_marks(cloth)
+        self.assertTrue(marks[22, 32])
+        self.assertTrue(marks[22, 32 + 2 + wall_tool.BAG_BRIGHT_GROW - 1])  # grown past the fleck
+        self.assertFalse(marks[40, 10] or marks[5, 5])
+
+
 class DetrendAndEndsTests(unittest.TestCase):
     def test_detrend_removes_a_lean_and_a_step_but_keeps_relief(self):
         rows, columns = 200, 300

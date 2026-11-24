@@ -84,6 +84,8 @@ pub const VEHICLE_TRAIN: &str = "models/vehicles/medium/vehicle-train.glb";
 /// the razor wire is a separate cut-out strip (`tools/bake_cordon_wall.py`).
 pub const CORDON_WALL_BOX: &str = "models/sites/medium/site-cordon-wall-box.glb";
 pub const CORDON_WALL_WIRE: &str = "models/sites/medium/site-cordon-wall-wire.glb";
+/// The sandbag row along the wall's foot: a block cut from the scan, repeated.
+pub const CORDON_WALL_SANDBAGS: &str = "models/sites/medium/site-cordon-wall-sandbags.glb";
 pub const CORDON_WALL_DEPTH: &str = "textures/cordon/wall_depth.ktx2";
 pub const SITE_CHECKPOINT: &str = "models/sites/uhd/site-checkpoint.glb";
 pub const HANGAR_LAB: &str = "models/props/medium/lab.glb";

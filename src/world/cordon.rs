@@ -100,6 +100,13 @@ const WALL_HEIGHT_SCALE: f32 = 7.4;
 const PERIMETER_RISE: f32 = 3.0;
 const PANEL_SPAN: f32 = 0.86;
 const SINK: f32 = 0.09;
+/// The sandbag row's reach out from the wall's line and its height in model units, as
+/// `tools/bake_cordon_wall.py` prints them. It lies on the ground rather than standing in it.
+const BAG_REACH: f32 = 0.1989;
+const BAG_TOP: f32 = 0.0532;
+const BAG_SINK: f32 = 0.02;
+/// How far the wall's foot reaches either side of its line, in meters: the sandbags' front.
+const FOOT_REACH: f32 = BAG_REACH * WALL_HEIGHT_SCALE;
 /// The baked box's height and half thickness in model units, as
 /// `tools/bake_cordon_wall.py` prints them.
 const WALL_TOP: f32 = 0.4104;
@@ -123,22 +130,41 @@ const CHECKPOINT_PILLARS: &[Pillar] = include!("pillars/uhd_checkpoint.rs");
 const PILLAR_SPACING: f32 = 0.77;
 /// The radius reaches the box's face even between two posts:
 /// sqrt(1.15^2 - 0.385^2) = 1.084 m of the 1.088 m half width.
-const WALL_PILLAR: &[Pillar] = &[Pillar {
+const WALL_DISC: Pillar = Pillar {
     x: 0.0,
     z: 0.0,
     radius: 1.15,
     bottom: -0.65,
     top: WALL_TOP * WALL_HEIGHT_SCALE - SINK,
-}];
-const PERIMETER_PILLAR: &[Pillar] = &[Pillar {
-    top: WALL_TOP * WALL_HEIGHT_SCALE * PERIMETER_RISE - SINK,
-    ..WALL_PILLAR[0]
-}];
-/// Over the crawl hole the wall's foot stands on the undug ground.
-const HOLE_PILLAR: &[Pillar] = &[Pillar {
+};
+/// The sandbags along the foot reach farther out, lower, and lie on the ground:
+/// sqrt(1.53^2 - 0.385^2) = 1.48 m of the row's 1.47 m.
+const BAG_DISC: Pillar = Pillar {
+    radius: 1.53,
     bottom: -0.05,
-    ..PERIMETER_PILLAR[0]
-}];
+    top: BAG_TOP * WALL_HEIGHT_SCALE - BAG_SINK,
+    ..WALL_DISC
+};
+const WALL_PILLAR: &[Pillar] = &[WALL_DISC, BAG_DISC];
+/// The rows rise with the wall, so the Perimeter's sandbags are three times as high.
+const PERIMETER_PILLAR: &[Pillar] = &[
+    Pillar {
+        top: WALL_TOP * WALL_HEIGHT_SCALE * PERIMETER_RISE - SINK,
+        ..WALL_DISC
+    },
+    Pillar {
+        top: BAG_TOP * WALL_HEIGHT_SCALE * PERIMETER_RISE - BAG_SINK,
+        ..BAG_DISC
+    },
+];
+/// Over the crawl hole the wall's foot stands on the undug ground.
+const HOLE_PILLAR: &[Pillar] = &[
+    Pillar {
+        bottom: -0.05,
+        ..PERIMETER_PILLAR[0]
+    },
+    PERIMETER_PILLAR[1],
+];
 /// A gate's boom spans its road, `BOOM_LENGTH` long, from a post at one side.
 const BOOM_LENGTH: f32 = 2.0 * PERIMETER_GATE_HALF;
 const BOOM_HINGE: f32 = 1.0;
@@ -333,7 +359,7 @@ fn near_checkpoint(at: Vec2, checkpoint: Vec2, clearance: f32) -> bool {
 }
 
 pub(super) fn near_wall_or_checkpoint(at: Vec2, clearance: f32) -> bool {
-    if (at.x - PERIMETER_X).abs() < WALL_HALF_WIDTH + clearance
+    if (at.x - PERIMETER_X).abs() < FOOT_REACH + clearance
         || near_checkpoint(at, PERIMETER_CHECKPOINT, clearance)
     {
         return true;
@@ -345,7 +371,7 @@ pub(super) fn near_wall_or_checkpoint(at: Vec2, clearance: f32) -> bool {
         || YARD_RUNS.into_iter().any(|(start, end)| {
             let line = end - start;
             let fraction = ((at - start).dot(line) / line.length_squared()).clamp(0.0, 1.0);
-            at.distance_squared(start + line * fraction) < (WALL_HALF_WIDTH + clearance).powi(2)
+            at.distance_squared(start + line * fraction) < (FOOT_REACH + clearance).powi(2)
         })
 }
 
@@ -447,7 +473,11 @@ fn hole_thicket(at: Vec2) -> f32 {
 }
 
 pub(super) fn preload_cordon(server: Res<AssetServer>, mut preloaded: ResMut<PreloadedAssets>) {
-    for path in [assets::CORDON_WALL_BOX, assets::CORDON_WALL_WIRE] {
+    for path in [
+        assets::CORDON_WALL_BOX,
+        assets::CORDON_WALL_WIRE,
+        assets::CORDON_WALL_SANDBAGS,
+    ] {
         let (mesh, paint) = assets::load_single_primitive(&server, path);
         preloaded.0.extend([mesh.untyped(), paint.untyped()]);
     }
@@ -514,6 +544,12 @@ pub(super) fn prepare_cordon(
     concrete.max_parallax_layer_count = 16.0;
     concrete.parallax_depth_scale = PARALLAX_DEPTH_SCALE;
     let (wire, steel) = wall_part(&server, &meshes, &gltf_materials, assets::CORDON_WALL_WIRE);
+    let (bags, cloth) = wall_part(
+        &server,
+        &meshes,
+        &gltf_materials,
+        assets::CORDON_WALL_SANDBAGS,
+    );
     commands.insert_resource(Cordon {
         root,
         chunks: wall_chunks(),
@@ -526,6 +562,10 @@ pub(super) fn prepare_cordon(
         wire: WallPart {
             model: wire,
             paint: materials.add(steel),
+        },
+        sandbags: WallPart {
+            model: bags.sandbags(),
+            paint: materials.add(cloth),
         },
     });
 }
@@ -780,9 +820,10 @@ pub(super) struct Cordon {
     chunks: HashMap<IVec2, Vec<Panel>>,
     active: HashMap<IVec2, Entity>,
     centers: Vec<IVec2>,
-    /// The concrete box and the razor wire on top of it.
+    /// The concrete box, the razor wire on top of it and the sandbags along its foot.
     wall: WallPart,
     wire: WallPart,
+    sandbags: WallPart,
 }
 
 /// One of the wall's meshes and the paint it wears.
@@ -844,15 +885,20 @@ fn spawn_wall_chunk(
         Transform::from_xyz(origin.x, 0.0, origin.y),
         batched(&cordon.wall),
     ));
-    let wire = batched(&cordon.wire);
+    let overlays = [
+        ("Razor wire", batched(&cordon.wire)),
+        ("Sandbags", batched(&cordon.sandbags)),
+    ];
     let at_edge = panels[0].center.abs().max_element() >= EDGE;
     if at_edge {
         root.insert(NotShadowCaster);
     }
     root.with_children(|wall| {
-        let mut wire = wall.spawn((Name::new("Razor wire"), wire));
-        if at_edge {
-            wire.insert(NotShadowCaster);
+        for (name, overlay) in overlays {
+            let mut part = wall.spawn((Name::new(name), overlay));
+            if at_edge {
+                part.insert(NotShadowCaster);
+            }
         }
         for &panel in panels {
             for at in panel.pillars() {
@@ -882,9 +928,19 @@ struct WallModel {
     indices: Vec<u32>,
     /// How far the model reaches along x and across z of its line, in model units.
     half_size: Vec2,
+    /// How far the model's foot is sunk below the ground, in meters.
+    sink: f32,
 }
 
 impl WallModel {
+    /// The sandbag row: it lies on the ground rather than standing in it.
+    fn sandbags(self) -> Self {
+        Self {
+            sink: BAG_SINK,
+            ..self
+        }
+    }
+
     fn new(mesh: &Mesh) -> Self {
         let Some(VertexAttributeValues::Float32x3(positions)) =
             mesh.attribute(Mesh::ATTRIBUTE_POSITION)
@@ -913,6 +969,7 @@ impl WallModel {
             normals: normals.clone(),
             tangents,
             half_size,
+            sink: SINK,
             uv: uv.clone(),
             indices: mesh
                 .indices()
@@ -957,7 +1014,7 @@ impl WallModel {
                 let base = floor.sample(at);
                 // Continue over lakes and rivers on a concrete foundation, not a floating row of panels.
                 let stretch = (y / 0.15).min(1.0);
-                let height = y * rise + base.value.x + stretch * base.value.y - SINK;
+                let height = y * rise + base.value.x + stretch * base.value.y - self.sink;
                 // How fast the height grows with the model's y.
                 let dheight_dy = rise
                     + if stretch < 1.0 {
@@ -1366,22 +1423,82 @@ mod tests {
 
     #[test]
     fn the_wall_colliders_stop_a_body_at_the_visible_face() {
-        let [pillar] = WALL_PILLAR else {
-            panic!("one pillar per post");
+        let [wall, bags] = WALL_PILLAR else {
+            panic!("a disc for the wall and one for the sandbags along its foot");
         };
-        // The dip between two neighbouring posts still reaches the box's face.
         let spacing = wall_chunks()
             .into_values()
             .flatten()
-            .map(|panel| panel.length / (panel.length / 0.77).ceil())
+            .map(|panel| panel.length / (panel.length / PILLAR_SPACING).ceil())
             .fold(0.0, f32::max);
-        let dip = (pillar.radius.powi(2) - (spacing / 2.0).powi(2)).sqrt();
-        assert!(
-            (CORNER_LAP - 0.02..CORNER_LAP + 0.1).contains(&dip),
-            "dip {dip}"
-        );
-        assert!(pillar.radius < CORNER_LAP + 0.1, "radius {}", pillar.radius);
-        assert!(pillar.top >= WALL_TOP * WALL_HEIGHT_SCALE - SINK - 0.01);
+        // The dip between two neighbouring posts still reaches the box's face and the sandbags' front.
+        let dip = |disc: &Pillar| (disc.radius.powi(2) - (spacing / 2.0).powi(2)).sqrt();
+        for (disc, reach) in [(wall, CORNER_LAP), (bags, FOOT_REACH)] {
+            assert!(
+                (reach - 0.02..reach + 0.1).contains(&dip(disc)),
+                "dip {}",
+                dip(disc)
+            );
+            assert!(disc.radius < reach + 0.1, "radius {}", disc.radius);
+        }
+        assert!(wall.top >= WALL_TOP * WALL_HEIGHT_SCALE - SINK - 0.01);
+        // The sandbags lie on the ground: a crawler under a raised wall still passes below them.
+        assert!(bags.top >= BAG_TOP * WALL_HEIGHT_SCALE - BAG_SINK - 0.01);
+        assert!(bags.top < wall.top && bags.bottom > -0.1);
+    }
+
+    /// A stand-in for the sandbag row: the panel's width, from just inside the box's face to the sandbags' front
+    /// on one side, as high as the sandbags.
+    fn test_bags() -> WallModel {
+        let inner = WALL_HALF_THICKNESS - 0.004;
+        let mesh = Mesh::from(Cuboid::new(PANEL_SPAN, BAG_TOP, BAG_REACH - inner))
+            .translated_by(Vec3::new(0.0, BAG_TOP / 2.0, (inner + BAG_REACH) / 2.0))
+            .with_generated_tangents()
+            .expect("a cuboid has normals and UVs");
+        WallModel::new(&mesh).sandbags()
+    }
+
+    #[test]
+    fn the_sandbags_lie_on_the_ground_inside_their_ground_patch() {
+        let terrain = Terrain::new();
+        let bags = test_bags();
+        // Panels with the row's front 3 cm outside a line of the ground's grid, on either side of the
+        // run and along both axes, then a stretch of sloping ground.
+        let reach = BAG_REACH * WALL_HEIGHT_SCALE;
+        let past = |side: f32| 30.0 * SPACING + side * (0.03 - reach);
+        let mut panels = Vec::new();
+        for along in [Vec2::X, Vec2::Y] {
+            for side in [-1.0, 1.0] {
+                panels.push(Panel {
+                    center: along.abs() * 100.0 + along.perp().abs() * past(side),
+                    along,
+                    length: 7.4,
+                    rise: 1.0,
+                    laps: [0.0; 2],
+                });
+            }
+        }
+        panels.extend(sloped_stretch(&terrain));
+        for panel in panels {
+            let mesh = bags.batch(&terrain, Vec2::ZERO, &[panel]);
+            for (model, vertex) in bags
+                .positions
+                .iter()
+                .zip(float3(&mesh, Mesh::ATTRIBUTE_POSITION))
+            {
+                let ground = floor_point(&terrain, vertex.xz()).x;
+                let lowest = vertex.y + BAG_SINK - ground;
+                if model[1] == 0.0 {
+                    assert!(
+                        lowest.abs() < 0.03,
+                        "a foot {lowest} m off the ground at {vertex}"
+                    );
+                } else {
+                    // The crown of the row stands its height above the ground, whatever the slope.
+                    assert!((lowest - model[1] * WALL_HEIGHT_SCALE).abs() < 0.03);
+                }
+            }
+        }
     }
 
     #[test]
@@ -1712,6 +1829,7 @@ mod tests {
                 uv: vec![[0.0, 0.0]; 3],
                 indices: vec![0, 1, 2],
                 half_size: Vec2::new(0.4, 0.0),
+                sink: SINK,
             },
             paint: Handle::default(),
         };
@@ -1722,6 +1840,7 @@ mod tests {
             centers: Vec::new(),
             wall: triangle(vec![[1.0, 0.0, 0.0, 1.0]; 3]),
             wire: triangle(Vec::new()),
+            sandbags: triangle(Vec::new()),
         });
         app.update();
         let original = app.world().resource::<Cordon>().active.clone();
@@ -1747,12 +1866,12 @@ mod tests {
         );
         for &entity in cordon.active.values() {
             assert!(app.world().get::<Mesh3d>(entity).is_some());
-            // The razor wire, and a collider for every post.
+            // The razor wire and the sandbags, and a collider for every post.
             let children = app.world().get::<Children>(entity).unwrap();
-            let (wire, posts): (Vec<_>, Vec<_>) = children
+            let (overlays, posts): (Vec<_>, Vec<_>) = children
                 .iter()
                 .partition(|&child| app.world().get::<Mesh3d>(child).is_some());
-            assert_eq!(wire.len(), 1);
+            assert_eq!(overlays.len(), 2);
             assert!(
                 posts
                     .iter()

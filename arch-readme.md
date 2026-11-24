@@ -104,7 +104,7 @@ flowchart LR
 | Fog of war | `src/world/shroud.rs` | `Shroud` state (V), survey mask texture for the ground fog pass (opaque drifting black smoke, drawn after the sky), culling of shrouded entities |
 | Streaming | `src/world/landscape.rs`, `scenery.rs` | Async terrain build, LOD swaps, 3x3 scenery/collider streaming |
 | Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
-| Cordons | `src/world/cordon.rs` | Yard wall and gap checkpoint, 3× Perimeter built from a baked box with relief parallax and a razor-wire strip (`WallModel::batch` shears both onto the ground, corners lap), the gates' `Boom`s (`Gate::Yard` lifts for the stalker, `Gate::Institute` for an `InstitutePass`), crawl hole (`hole_depth`) and its thicket, shelterbelts and belt trees (`tree_belt`) |
+| Cordons | `src/world/cordon.rs` | Yard wall and gap checkpoint, 3× Perimeter built from a baked box with relief parallax, a razor-wire strip and a sandbag row along the foot (`WallModel::batch` shears all three onto the ground, corners lap), the gates' `Boom`s (`Gate::Yard` lifts for the stalker, `Gate::Institute` for an `InstitutePass`), crawl hole (`hole_depth`) and its thicket, shelterbelts and belt trees (`tree_belt`) |
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
 | Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway, marsh props, big rocks |
 | Cordon guards | `src/world/guards.rs` | Two pacing, rigged UN soldiers at each gate and five sentries by the checkpoints |
@@ -553,11 +553,12 @@ blender -b --python-exit-code 1 --python tools/trim_tree_base.py -- \
 Use `--split-columns` for roofs, tunnels, and open bays where one x/z column
 must be represented by multiple separated vertical intervals.
 
-The cordon walls' posts are not generated: `cordon::WALL_PILLAR` is a hand-set
-disc every 0.77 m along the wall, sized to the baked box's half thickness
-(`WALL_HALF_WIDTH`) and height (`WALL_TOP`). Resize it, the scenery clearance
-and the crawl hole's checks together when `tools/bake_cordon_wall.py` changes
-the box.
+The cordon walls' posts are not generated: `cordon::WALL_PILLAR` holds two hand-set
+discs every 0.77 m along the wall, `WALL_DISC` sized to the baked box's half thickness
+(`WALL_HALF_WIDTH`) and height (`WALL_TOP`) and `BAG_DISC` to the sandbag row's
+reach and height (`BAG_REACH`, `BAG_TOP`). Resize them, the scenery clearance
+(`FOOT_REACH`) and the crawl hole's checks together when `tools/bake_cordon_wall.py`
+changes the box or the sandbags.
 
 ### Collision limitation
 
