@@ -15,7 +15,7 @@ state machine, shared asset preloading, and six project plugins:
 - `WorldPlugin`: terrain, water, roads, scenery, base, sites, wildlife, and lighting.
 - `PlayerPlugin`: stalker, animation, camera, input, collision, and armored vehicle.
 - `ZonePlugin`: the current run's anomaly and collectible-object loop.
-- `UiPlugin`: splash, loading state, entry curtain, HUD, vehicle prompt, pause menu, and FPS.
+- `UiPlugin`: splash, loading state, entry curtain, HUD, vehicle prompt, pause menu, FPS and the stalker's x, y, z.
 - `SavePlugin` (`src/save.rs`): saved progress (survey, clock, stalker and car).
 
 There is deliberately no separate engine, physics crate or networking layer.
@@ -114,7 +114,7 @@ flowchart LR
 | Collision | `src/world/collision.rs`, `world/pillars/` | Static `Pillar` colliders, push-out, climbing, `Weight`/`Crusher`/`Unclimbable` |
 | Crushing | `src/world/crush.rs` | Trampled plants, knocking down lighter solids |
 | Audio | `src/audio/` | Synthesized ambience/effects and live audio sinks |
-| UI | `src/ui/` | Splash, entry curtain, HUD, FPS, weather line, controls, hover tooltips, stalker locator ring, map overlay (M), pause |
+| UI | `src/ui/` | Splash, entry curtain, HUD, FPS and position, weather line, controls, hover tooltips, stalker locator ring, map overlay (M), pause |
 | Zone loop | `src/zone/` | Current placeholder anomalies, collectible markers, run counters |
 | Asset tooling | `tools/` | Texture/GLB preparation, grounding, rigging, collision generation |
 | Shaders | `assets/shaders/` | Terrain, water, hangar cutaway and floor/wall paint, plant wind and ground fog WESL entry points |
@@ -464,7 +464,11 @@ point-and-click order and its clicked stops: `issue_move_order` ray-casts the
 click onto the rendered terrain (`orders::cast_to_ground`) and plans the route
 with grid A* around collider pillars and deep water (`player/path.rs`); with
 Shift held it plans from the last stop and appends the leg
-(`MoveOrder::append`). Planning ignores a `Boom` that opens for the mover
+(`MoveOrder::append`), and a route Shift starts on a standing mover is held
+(`MoveOrder::hold`) until Shift is released. `replan_order` pathfinds the leg to
+the next stop again from the mover's position when a stop is reached or the mover
+stalls (`MoveOrder::wants_replan`), because scenery colliders stream in only
+near the stalker. Planning ignores a `Boom` that opens for the mover
 (`Boom::opens_for`): the yard's always, the Institute's for a driven car with
 an `InstitutePass`. `sync_order_markers` keeps one ground ring per stop,
 spawning more from `OrderMarkerLook` as needed, and `route::draw_order_route`
@@ -641,6 +645,7 @@ Useful query relationships:
 
 - the HUD reads `ZoneRun`,
 - FPS reads Bevy's smoothed frame-time diagnostic,
+- the position line reads the `Player` transform (the car carries it while driving),
 - the vehicle prompt checks `can_enter_vehicle`,
 - controls change with `Driving` and `AudioMode`,
 - pause UI follows `InGamePhase`, not the world lifetime,

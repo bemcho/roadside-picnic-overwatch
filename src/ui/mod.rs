@@ -38,6 +38,10 @@ struct HudStats;
 #[derive(Component)]
 struct HudFps;
 
+/// The stalker's x, y, z under the frame rate.
+#[derive(Component)]
+struct HudPosition;
+
 /// Clock, temperature, humidity and sky under the Zone statistics.
 #[derive(Component)]
 struct HudWeather;
@@ -95,7 +99,10 @@ impl Plugin for UiPlugin {
             Update,
             (update_hud_stats, update_hud_weather).run_if(in_state(InGamePhase::Running)),
         )
-        .add_systems(Update, update_fps.run_if(in_state(AppState::InGame)))
+        .add_systems(
+            Update,
+            (update_fps, update_hud_position).run_if(in_state(AppState::InGame)),
+        )
         .add_systems(
             PostUpdate,
             (
@@ -194,6 +201,26 @@ fn spawn_hud(mut commands: Commands) {
             Node {
                 position_type: PositionType::Absolute,
                 top: Val::Px(12.0),
+                right: Val::Px(12.0),
+                ..default()
+            },
+        ));
+
+        hud.spawn((
+            HudPosition,
+            Text::new(text::HUD_POSITION_PENDING),
+            TextFont {
+                font_size: FontSize::Px(16.0),
+                ..default()
+            },
+            TextColor(Color::srgb(0.85, 0.85, 0.8)),
+            TextShadow {
+                offset: Vec2::splat(1.0),
+                ..default()
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                top: Val::Px(34.0),
                 right: Val::Px(12.0),
                 ..default()
             },
@@ -380,6 +407,17 @@ fn update_fps(diagnostics: Res<DiagnosticsStore>, mut fps: Single<&mut Text, Wit
     let line = text::hud_fps(1000.0 / milliseconds);
     if fps.0 != line {
         fps.0 = line;
+    }
+}
+
+/// Shows where the stalker stands (or the car they drive, which carries them).
+fn update_hud_position(
+    player: Single<&Transform, With<Player>>,
+    mut position: Single<&mut Text, With<HudPosition>>,
+) {
+    let line = text::hud_position(player.translation.to_array());
+    if position.0 != line {
+        position.0 = line;
     }
 }
 
@@ -593,6 +631,23 @@ mod tests {
             .single(world)
             .expect("one FPS counter in the HUD");
         assert_eq!(line.0, "FPS: 25");
+    }
+
+    #[test]
+    fn hud_shows_the_stalkers_position_under_the_frame_rate() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .add_systems(Startup, spawn_hud)
+            .add_systems(Update, update_hud_position);
+        app.world_mut()
+            .spawn((Player::default(), Transform::from_xyz(703.24, 12.06, -45.0)));
+        app.update();
+        let world = app.world_mut();
+        let line = world
+            .query_filtered::<&Text, With<HudPosition>>()
+            .single(world)
+            .expect("one position line in the HUD");
+        assert_eq!(line.0, "X: 703.2 Y: 12.1 Z: -45.0");
     }
 
     #[test]

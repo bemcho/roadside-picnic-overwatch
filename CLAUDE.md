@@ -22,15 +22,17 @@ who risk their lives to enter it and smuggle artifacts out.
 
 Themes: exploration, survival, anomaly physics, artifact hunting, atmospheric dread.
 
-The upper-right in-game HUD shows the smoothed frame rate.
+The upper-right in-game HUD shows the smoothed frame rate and, under it, the
+stalker's world position (X, Y, Z in meters; Y is up).
 
 ## Controls
 
 - **Any key** — enter the Zone from the hangar splash once loading finishes
 - **Left click** — move the stalker there (pathfinding around obstacles and deep
   water; long trips run). While driving, click to drive there.
-- **Shift + left click** — add a waypoint after the orders already given; a ring
-  marks each one until it is reached and a thin line traces the route
+- **Shift + left click** — add a waypoint after the orders already given; a pulsing
+  ring marks each one until it is reached and a thin line traces the route. A
+  route started with Shift-clicks waits until Shift is released
 - **WASD** — steer directly (camera-relative) and cancel a click order; hold **Shift** to run
 - Walk into a rock, building or other solid to **climb** onto it; the cordon walls,
   checkpoints, trees and guards can't be climbed
