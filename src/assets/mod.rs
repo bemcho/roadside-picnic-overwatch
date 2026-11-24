@@ -31,6 +31,11 @@ pub const TERRAIN_GRASS_SURFACE: &str = "textures/terrain/grass_surface.png";
 pub const TERRAIN_EARTH_ALBEDO: &str = "textures/terrain/earth_albedo.png";
 pub const TERRAIN_EARTH_NORMAL: &str = "textures/terrain/earth_normal.png";
 pub const TERRAIN_EARTH_SURFACE: &str = "textures/terrain/earth_surface.png";
+/// The old asphalt's grain set and crack decal (`tools/prepare_asphalt_textures.py`).
+pub const TERRAIN_ASPHALT_ALBEDO: &str = "textures/terrain/asphalt_albedo.ktx2";
+pub const TERRAIN_ASPHALT_NORMAL: &str = "textures/terrain/asphalt_normal.ktx2";
+pub const TERRAIN_ASPHALT_SURFACE: &str = "textures/terrain/asphalt_surface.ktx2";
+pub const TERRAIN_ASPHALT_CRACK: &str = "textures/terrain/asphalt_crack.ktx2";
 /// The hangar floor's steel plates (`tools/prepare_hangar_floor.py`).
 pub const HANGAR_FLOOR_ALBEDO: &str = "textures/hangar/floor_albedo.png";
 pub const HANGAR_FLOOR_NORMAL: &str = "textures/hangar/floor_normal.png";
@@ -221,6 +226,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
     let albedo = [
         TERRAIN_GRASS_ALBEDO,
         TERRAIN_EARTH_ALBEDO,
+        TERRAIN_ASPHALT_ALBEDO,
         HANGAR_FLOOR_ALBEDO,
     ];
     let data_maps = [
@@ -228,6 +234,9 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         TERRAIN_GRASS_SURFACE,
         TERRAIN_EARTH_NORMAL,
         TERRAIN_EARTH_SURFACE,
+        TERRAIN_ASPHALT_NORMAL,
+        TERRAIN_ASPHALT_SURFACE,
+        TERRAIN_ASPHALT_CRACK,
         HANGAR_FLOOR_NORMAL,
         HANGAR_FLOOR_SURFACE,
     ];

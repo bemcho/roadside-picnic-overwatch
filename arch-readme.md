@@ -106,7 +106,7 @@ flowchart LR
 | Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
 | Cordons | `src/world/cordon.rs` | Yard wall and gap checkpoint, 3× Perimeter, the gates' `Boom`s (`Gate::Yard` lifts for the stalker, `Gate::Institute` for an `InstitutePass`), crawl hole (`hole_depth`) and its thicket, shelterbelts and belt trees (`tree_belt`) |
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
-| Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `old_road.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway and asphalt roads, marsh props, big rocks |
+| Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway, marsh props, big rocks |
 | Cordon guards | `src/world/guards.rs` | Two pacing, rigged UN soldiers at each gate and five sentries by the checkpoints |
 | UN patrol | `src/player/vehicle/patrol.rs` | Four white armored cars lapping the Perimeter wall, flank plates, shared `CarWheel`/`in_the_way` |
 | Harmont traffic | `src/player/vehicle/traffic.rs` | Sweeper and sedans on `roads::traffic_routes`: right-hand lanes, U-turns, right of way |
@@ -291,12 +291,13 @@ every placement passes the road, water, yard, and site-clearance filters.
 `RoadNetwork` indexes route segments by terrain tile. It produces both:
 
 1. a smooth graded height surface for walking/driving, and
-2. a world-space RGBA8 texture with gravel (R), tire-rut (G) and asphalt (B)
-   masks, which `terrain.wesl` turns into gravel, ruts and weathered asphalt.
+2. a world-space RGBA8 texture with gravel (R), tire-rut (G), asphalt (B) and
+   old-asphalt (A) masks, which `terrain.wesl` turns into gravel, ruts, smooth
+   tar and, where A is set, the old broken asphalt.
 
-Each route has a `Surface`: dirt, `Asphalt` (the old roads, which
-`old_road.rs` also paves with copies of the road kit module) or `Street` (New
-Harmont's smooth streets).
+Each route has a `Surface`: dirt, `Asphalt` (the old roads, painted by the
+terrain shader from the A mask and four asphalt maps) or `Street` (New
+Harmont's smooth streets, B only: no A, no cracks).
 
 Road legs must connect to a real route vertex, stay below the grade and water
 thresholds tested in `world/roads.rs`, and avoid cutting through site pads.

@@ -68,7 +68,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Section | Code |
 |---|---|
 | Tactical view (camera, zoom, cutaway, tooltips, fog of war, map, orders, locator ring) | `player/{camera,orders,path}.rs`, `base/cutaway.rs`, `world/{shroud,places}.rs`, `ui/{tooltip,map,locator}.rs` |
-| Terrain, roads, ground LODs, terrain textures | `world/{terrain,roads}.rs` |
+| Terrain, roads, ground LODs, terrain textures; Old roads (painted asphalt) | `world/{terrain,roads,terrain_material}.rs`, `shaders/terrain.wesl` |
 | Water | `world/{hydrology,water}.rs` |
 | Day/night and weather; Wind; Sky & lighting | `world/weather.rs`, `world/mod.rs` |
 | Ground fog and clouds | `world/ground_fog.rs`, `ground_fog/`, `shaders/ground_fog.wesl` |
@@ -77,7 +77,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Vegetation (clusters at landmarks) | `world/trees.rs` |
 | Cordons (yard, Perimeter, gates, crawl hole, belts) | `world/cordon.rs` |
 | Sites (Harmont map, 32 scan placements, stand-ins, relief) | `world/{sites,map}.rs` |
-| New Harmont; Railway; Old roads; Marsh props; Rocks | `world/{town,railway,old_road,marsh,rocks}.rs` |
+| New Harmont; Railway; Marsh props; Rocks | `world/{town,railway,marsh,rocks}.rs` |
 | Guards; UN patrol; Harmont traffic | `world/guards.rs`, `player/vehicle/{patrol,traffic}.rs` |
 | Wildlife; Mutants | `world/wildlife.rs`, `wildlife/{rig,mutants}.rs` |
 | Artifact showcase; Base (hangar, props, yard vehicles) | `world/base.rs`, `base/{artifacts,props,cutaway}.rs` |

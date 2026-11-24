@@ -35,6 +35,14 @@ pub(super) struct GroundLayers {
     road_bounds: Vec4,
     #[uniform(109)]
     fog_settings: Vec4,
+    #[texture(110)]
+    asphalt_albedo: Handle<Image>,
+    #[texture(111)]
+    asphalt_normal: Handle<Image>,
+    #[texture(112)]
+    asphalt_surface: Handle<Image>,
+    #[texture(113)]
+    asphalt_crack: Handle<Image>,
 }
 
 impl MaterialExtension for GroundLayers {
@@ -71,6 +79,10 @@ pub(super) fn load_terrain_material(
             road_surface: images.add(road_surface),
             road_bounds,
             fog_settings: Vec4::ZERO,
+            asphalt_albedo: load(assets::TERRAIN_ASPHALT_ALBEDO, true),
+            asphalt_normal: load(assets::TERRAIN_ASPHALT_NORMAL, false),
+            asphalt_surface: load(assets::TERRAIN_ASPHALT_SURFACE, false),
+            asphalt_crack: load(assets::TERRAIN_ASPHALT_CRACK, false),
         },
     }
 }
@@ -188,6 +200,36 @@ mod tests {
     use bevy::render::render_resource::{Extent3d, TextureDimension};
 
     use super::*;
+
+    /// A `const NAME: f32 = value;` of the terrain shader.
+    fn shader_const(name: &str) -> f32 {
+        let source = include_str!("../../assets/shaders/terrain.wesl");
+        let declaration = format!("const {name}: f32 = ");
+        let value = source
+            .split_once(&declaration)
+            .and_then(|(_, rest)| rest.split_once(';'))
+            .unwrap_or_else(|| panic!("shader constant {name} is missing"))
+            .0;
+        value
+            .trim()
+            .parse()
+            .unwrap_or_else(|_| panic!("shader constant {name} is not a number: {value}"))
+    }
+
+    #[test]
+    fn crack_decals_fit_inside_their_cells() {
+        // A decal turned any way, shifted by the jitter, must stay inside its cell, or the
+        // neighbouring cell's pixels would cut it off at a straight edge.
+        let (cell, size, jitter) = (
+            shader_const("CRACK_CELL"),
+            shader_const("CRACK_SIZE"),
+            shader_const("CRACK_JITTER"),
+        );
+        assert!(
+            size * std::f32::consts::SQRT_2 / 2.0 + jitter / 2.0 <= cell / 2.0,
+            "a {size} m decal jittered by {jitter} m leaves its {cell} m cell"
+        );
+    }
 
     #[test]
     fn mipmaps_opt_in_for_anisotropic_clamped_atlases() {

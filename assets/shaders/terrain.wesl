@@ -23,6 +23,35 @@ import bevy_pbr::render::forward_io::{VertexOutput, FragmentOutput};
 @group(constants::MATERIAL_BIND_GROUP) @binding(107) var road_surface: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(108) var<uniform> road_bounds: vec4<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(109) var<uniform> fog_settings: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(110) var asphalt_albedo: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(111) var asphalt_normal: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(112) var asphalt_surface: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(113) var asphalt_crack: texture_2d<f32>;
+
+const TAU: f32 = 6.2831855;
+
+// The old asphalt (tools/prepare_asphalt_textures.py): a tiling grain set with crack decals
+// scattered over it, one decal at most per cell. The maps' mip chains are the distance
+// versions, so only the cracks and the relief are faded out by hand.
+// Metres one repeat of the grain maps covers.
+const ASPHALT_TILE: f32 = 1.2;
+// Metres per side of the cells that each may hold one crack decal, the share of cells that do,
+// the decal's largest side and how far its centre may stray from its cell's. A decal turned any
+// way must stay inside its cell (a test checks it), or the neighbouring cell would cut it off.
+const CRACK_CELL: f32 = 8.0;
+const CRACK_SHARE: f32 = 0.5;
+const CRACK_SIZE: f32 = 4.0;
+const CRACK_JITTER: f32 = 2.0;
+// The smallest decal, as a share of CRACK_SIZE, and the factor a crack darkens the grain by.
+const CRACK_SMALLEST: f32 = 0.6;
+const CRACK_DARKEST: f32 = 0.2;
+// Metres the grain's lows lie under its tops, and a crack's bottom under the grain.
+const GRAIN_DEPTH: f32 = 0.01;
+const CRACK_DEPTH: f32 = 0.03;
+// The relief march's steps, and the ground's pixel size (m per pixel) under which it runs.
+const RELIEF_STEPS: i32 = 12;
+const RELIEF_NEAR: f32 = 0.02;
+
 fn patch_hash(cell: vec2<f32>) -> f32 {
     let p = fract(vec3<f32>(cell.xyx) * vec3<f32>(0.1031, 0.1030, 0.0973));
     let q = p + dot(p, p.yzx + 33.33);
@@ -44,6 +73,159 @@ fn rotation(angle: f32) -> mat2x2<f32> {
     let c = cos(angle);
     let s = sin(angle);
     return mat2x2<f32>(vec2<f32>(c, s), vec2<f32>(-s, c));
+}
+
+struct Crack {
+    centre: vec2<f32>,
+    turn: mat2x2<f32>,
+    // The decal's side in metres.
+    size: f32,
+    // How much of the decal shows: zero in a cell without one.
+    weight: f32,
+}
+
+// The crack decal of the cell around `xz`: shifted off the cell's centre, turned and scaled at
+// random, never larger than `CRACK_SIZE`, which stays inside the cell so that no neighbour cuts
+// it off.
+fn crack_of(xz: vec2<f32>, fade: f32) -> Crack {
+    let cell = floor(xz / CRACK_CELL);
+    let offset = vec2<f32>(
+        patch_hash(cell + vec2<f32>(17.0, 5.0)), patch_hash(cell + vec2<f32>(3.0, 29.0)),
+    ) - 0.5;
+    var crack: Crack;
+    crack.centre = (cell + 0.5) * CRACK_CELL + offset * CRACK_JITTER;
+    crack.turn = rotation(patch_hash(cell + vec2<f32>(53.0, 11.0)) * TAU);
+    crack.size = CRACK_SIZE * mix(CRACK_SMALLEST, 1.0, patch_hash(cell + vec2<f32>(23.0, 41.0)));
+    crack.weight = select(0.0, fade, patch_hash(cell) < CRACK_SHARE);
+    return crack;
+}
+
+// The decal at a world point: tangent normal xy, depth and mask, the last two weighted by how
+// much of the crack shows. The gradients follow the decal's turn, so they never jump at cell borders.
+fn crack_at(crack: Crack, xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> vec4<f32> {
+    if crack.weight <= 0.0 {
+        return vec4<f32>(0.0);
+    }
+    let uv = crack.turn * (xz - crack.centre) / crack.size + 0.5;
+    let texel = textureSampleGrad(
+        asphalt_crack, ground_sampler, uv,
+        crack.turn * dx / crack.size, crack.turn * dy / crack.size,
+    );
+    let inside = all(uv > vec2<f32>(0.0)) && all(uv < vec2<f32>(1.0));
+    return texel * vec4<f32>(1.0, 1.0, vec2<f32>(select(0.0, crack.weight, inside)));
+}
+
+// World xz tilt of a tangent normal. The maps' y runs up the texture, against the rows, and
+// the rows run along +z, so the tilt's z is the map's y flipped.
+fn asphalt_tilt(xy: vec2<f32>) -> vec2<f32> {
+    let z = sqrt(max(1.0 - dot(xy, xy), 0.0));
+    return vec2<f32>(xy.x, -xy.y) / max(z, 0.3);
+}
+
+// A tiling map without a visible lattice: every lattice point of the tiling has its own random
+// offset into the map, and the four around the pixel blend bilinearly. Independent copies lose
+// contrast where they blend, so the blend is rescaled from the map's average (`mean`) by the
+// weights' energy. The offsets are hashed per pixel because they follow the world position:
+// a baked offset map would be larger than the grain maps themselves.
+fn stochastic(
+    tex: texture_2d<f32>, uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, mean: vec4<f32>,
+) -> vec4<f32> {
+    let cell = floor(uv);
+    let t = fract(uv);
+    let w = t * t * (3.0 - 2.0 * t);
+    var blend = vec4<f32>(0.0);
+    var energy = 0.0;
+    for (var j = 0; j < 2; j++) {
+        for (var i = 0; i < 2; i++) {
+            let lattice = cell + vec2<f32>(f32(i), f32(j));
+            let weight = select(1.0 - w.x, w.x, i == 1) * select(1.0 - w.y, w.y, j == 1);
+            let offset = vec2<f32>(
+                patch_hash(lattice + vec2<f32>(7.0, 19.0)), patch_hash(lattice + vec2<f32>(31.0, 2.0)),
+            );
+            blend += textureSampleGrad(tex, ground_sampler, uv + offset, dx, dy) * weight;
+            energy += weight * weight;
+        }
+    }
+    return mean + (blend - mean) / sqrt(energy);
+}
+
+// The averages of the grain maps, from the last mip level.
+fn map_mean(tex: texture_2d<f32>) -> vec4<f32> {
+    return textureSampleLevel(tex, ground_sampler, vec2<f32>(0.5), 16.0);
+}
+
+// How far the grain's surface lies under its top at a world point.
+fn grain_depth(xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, height_mean: f32) -> f32 {
+    let height = stochastic(
+        asphalt_surface, xz / ASPHALT_TILE, dx / ASPHALT_TILE, dy / ASPHALT_TILE, vec4<f32>(height_mean),
+    ).b;
+    return (1.0 - clamp(height, 0.0, 1.0)) * GRAIN_DEPTH;
+}
+
+// Where the view ray meets the asphalt, as how deep it has gone: a march through the grain and
+// crack depths near the camera, a single step on the grain's own height farther out.
+fn asphalt_hit(
+    crack: Crack, xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, along: vec2<f32>, pixel_size: f32,
+    height_mean: f32,
+) -> f32 {
+    if pixel_size >= RELIEF_NEAR {
+        return grain_depth(xz, dx, dy, height_mean);
+    }
+    // The crack's depth fades out so that the march and the single step meet.
+    let relief = 1.0 - smoothstep(0.5 * RELIEF_NEAR, RELIEF_NEAR, pixel_size);
+    let deepest = GRAIN_DEPTH + CRACK_DEPTH * relief;
+    var above = -grain_depth(xz, dx, dy, height_mean) - crack_at(crack, xz, dx, dy).b * CRACK_DEPTH * relief;
+    var ray_above = 0.0;
+    var hit = deepest;
+    for (var i = 1; i <= RELIEF_STEPS; i++) {
+        let ray = deepest * f32(i) / f32(RELIEF_STEPS);
+        let at = xz + along * ray;
+        let gap = ray - grain_depth(at, dx, dy, height_mean)
+            - crack_at(crack, at, dx, dy).b * CRACK_DEPTH * relief;
+        if gap >= 0.0 {
+            hit = mix(ray_above, ray, above / (above - gap));
+            break;
+        }
+        above = gap;
+        ray_above = ray;
+    }
+    return hit;
+}
+
+struct OldAsphalt {
+    albedo: vec3<f32>,
+    tilt: vec2<f32>,
+    roughness: f32,
+    occlusion: f32,
+}
+
+// The old asphalt where the mask holds `old` of it. `along` is how far the view ray shifts over
+// the ground per metre of depth; `dx` and `dy` are the ground's screen derivatives.
+fn old_asphalt(
+    xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, along: vec2<f32>, old: f32, pixel_size: f32,
+) -> OldAsphalt {
+    // Cracks keep to the broken middle of the road and fade out with distance.
+    let fade = smoothstep(0.6, 1.0, old) * (1.0 - smoothstep(0.08, 0.25, pixel_size));
+    let crack = crack_of(xz, fade);
+    let surface_mean = map_mean(asphalt_surface);
+    let at = xz + along * asphalt_hit(crack, xz, dx, dy, along, pixel_size, surface_mean.b);
+    let uv = at / ASPHALT_TILE;
+    let grad_x = dx / ASPHALT_TILE;
+    let grad_y = dy / ASPHALT_TILE;
+    let albedo = max(
+        stochastic(asphalt_albedo, uv, grad_x, grad_y, map_mean(asphalt_albedo)).rgb, vec3<f32>(0.0),
+    );
+    let normal = stochastic(asphalt_normal, uv, grad_x, grad_y, map_mean(asphalt_normal)).xy;
+    let surface = stochastic(asphalt_surface, uv, grad_x, grad_y, surface_mean).rgb;
+    let notch = crack_at(crack, at, dx, dy);
+    // The decal's tilt is in its own turned frame; turn it back into the world's.
+    let notch_tilt = transpose(crack.turn) * asphalt_tilt(notch.xy * 2.0 - 1.0);
+    var asphalt: OldAsphalt;
+    asphalt.albedo = albedo * mix(1.0, CRACK_DARKEST, notch.a);
+    asphalt.tilt = mix(asphalt_tilt(normal * 2.0 - 1.0), notch_tilt, notch.a);
+    asphalt.roughness = mix(0.34, 0.98, surface.g);
+    asphalt.occlusion = clamp(surface.r, 0.0, 1.0) * mix(1.0, 0.5, notch.a);
+    return asphalt;
 }
 
 // Project onto all three axes so quarry walls do not stretch the ground textures.
@@ -119,13 +301,22 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let luminance = dot(albedo, vec3<f32>(0.2126, 0.7152, 0.0722));
     albedo = mix(albedo, vec3<f32>(luminance) * vec3<f32>(0.72, 0.74, 0.70), ash * 0.9);
     let road_uv = clamp((p.xz - road_bounds.xy) * road_bounds.zw, vec2<f32>(0.0), vec2<f32>(1.0));
-    // Road mask: red gravel, green tire ruts, blue asphalt.
-    let road = textureSampleLevel(road_surface, ground_sampler, road_uv, 0.0).rgb;
+    // Road mask: red gravel, green tire ruts, blue asphalt, alpha the old, broken share of it.
+    let road = textureSampleLevel(road_surface, ground_sampler, road_uv, 0.0);
     let gravel = (vec3<f32>(0.23, 0.184, 0.124) + earth * 0.48) * (1.0 - road.g * 0.34);
     albedo = mix(albedo, gravel, road.r);
     // Weathered asphalt, grained by the earth map.
     let tar = vec3<f32>(0.052, 0.053, 0.057) + dot(earth, vec3<f32>(0.2126, 0.7152, 0.0722)) * 0.2;
     albedo = mix(albedo, tar, road.b);
+    // The ground's derivatives are taken here, outside any branch; the asphalt samples with them.
+    let ground_dx = dpdx(p.xz);
+    let ground_dy = dpdy(p.xz);
+    var asphalt: OldAsphalt;
+    if road.a > 0.0 {
+        let along = -tangent_view.xz / max(facing, 0.32);
+        asphalt = old_asphalt(p.xz, ground_dx, ground_dy, along, road.a, pixel_size);
+    }
+    albedo = mix(albedo, asphalt.albedo, road.a);
     albedo *= mix(vec3<f32>(1.0), vec3<f32>(0.48, 0.56, 0.42), wetness);
     let alpine = smoothstep(32.0, 100.0, p.y);
     albedo = mix(albedo, vec3<f32>(0.62, 0.81, 1.06) * (luminance + 0.038), alpine * 0.74);
@@ -140,9 +331,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         sample_ground(earth_surface, earth_uv, weights, earth_axes),
         exposed,
     );
-    pbr_input.material.perceptual_roughness = mix(0.34, 0.98, surface.g) * mix(1.0, 0.65, wetness);
+    let roughness = mix(mix(0.34, 0.98, surface.g), asphalt.roughness, road.a);
+    pbr_input.material.perceptual_roughness = roughness * mix(1.0, 0.65, wetness);
     pbr_input.material.metallic = 0.0;
-    pbr_input.diffuse_occlusion *= vec3<f32>(mix(1.0, surface.r, 0.6));
+    let occlusion = mix(mix(1.0, surface.r, 0.6), mix(1.0, asphalt.occlusion, 0.6), road.a);
+    pbr_input.diffuse_occlusion *= vec3<f32>(occlusion);
     pbr_input.N = normalize(mix(
         ground_normal(grass_normal, grass_uv, weights, normal, grass_axes),
         ground_normal(earth_normal, earth_uv, weights, normal, earth_axes),
@@ -150,6 +343,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     ));
     // Asphalt lies flatter than the ground's texture.
     pbr_input.N = normalize(mix(pbr_input.N, normal, road.b * 0.7));
+    // The old asphalt's own grain and cracks tilt the surface normal.
+    let tilt = vec3<f32>(asphalt.tilt.x, 0.0, asphalt.tilt.y);
+    let asphalt_normal_world = normalize(normal + (tilt - normal * dot(tilt, normal)) * 0.8);
+    pbr_input.N = normalize(mix(pbr_input.N, asphalt_normal_world, road.a));
 
     var out: FragmentOutput;
 @if(PREPASS_PIPELINE) {

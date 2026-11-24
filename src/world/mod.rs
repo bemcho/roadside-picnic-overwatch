@@ -11,7 +11,6 @@ mod hydrology;
 mod landscape;
 mod map;
 mod marsh;
-mod old_road;
 mod places;
 mod plants;
 mod railway;
@@ -131,7 +130,6 @@ impl Plugin for WorldPlugin {
                 town::preload_town,
                 railway::preload_railway,
                 plants::preload_plants,
-                old_road::preload_old_roads,
                 marsh::preload_marsh,
                 rocks::preload_rocks,
                 guards::preload_guards,
@@ -153,7 +151,6 @@ impl Plugin for WorldPlugin {
                 sites::spawn_sites,
                 town::spawn_town,
                 railway::spawn_railway,
-                old_road::spawn_old_roads,
                 marsh::spawn_marsh,
                 rocks::spawn_rocks,
                 guards::spawn_guards,

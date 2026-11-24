@@ -54,8 +54,10 @@ the stalker stands still.
   are graded over the sited land (pads and dioramas), then paved. Each route
   is dirt, old asphalt (`Surface::Asphalt`: the highway, Harmont's main road,
   the Institute and Plague roads) or New Harmont's smooth streets
-  (`Surface::Street`); the road mask texture holds gravel (R), tire ruts (G)
-  and asphalt (B), and `terrain.wesl` paints weathered asphalt from B.
+  (`Surface::Street`); the road mask texture holds gravel (R), tire ruts (G),
+  asphalt (B) and the old, broken share of that asphalt (A, `Surface::Asphalt`
+  only: New Harmont's streets and plaza keep A = 0), and `terrain.wesl` paints
+  smooth weathered tar from B and the old asphalt (see Old roads) from A.
   The same network keeps vegetation off the lanes and paints a world-space
   gravel and tire-rut mask independent of terrain LOD. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
@@ -240,11 +242,31 @@ the stalker stands still.
   (`assets/models/railway/`): sleeper ladders end to end along the graded bed,
   two rails on top and wreckage beside the line. `tools/align_kit_piece.py`
   squares up each kit piece (+Z along the line, grounded at y = 0).
-- **Old roads** (`src/world/old_road.rs`): copies of the cracked-asphalt road
-  module (`assets/models/road/`, reassembled into one straight frame by
-  `tools/straighten_road_kit.py`) pave every `Surface::Asphalt` leg end to end,
-  pitched with the graded road; the full scan shows within 40 m, the
-  simplified `medium/` copy out to 900 m.
+- **Old roads** (`src/world/roads.rs`, `terrain_material.rs`, `assets/shaders/terrain.wesl`):
+  every `Surface::Asphalt` leg (the highway, Harmont's main road, the Institute
+  and Plague roads) is painted by the terrain shader; there are no road meshes.
+  Where the mask's alpha is set, the shader paints four maps baked from one
+  photo by `tools/prepare_asphalt_textures.py` (`assets/textures/terrain/asphalt_{albedo,normal,surface,crack}.ktx2`,
+  bindings 110-113: 184 px native crops, BC7 with mip chains) over the tar.
+  The mips are the distance versions; there is no second set.
+  - *Grain:* tiled every `ASPHALT_TILE` (1.2 m). Each lattice point of the
+    tiling gets a hashed offset into the map and the four around a pixel blend
+    bilinearly, rescaled to the map's average (`map_mean`) so that neither a
+    lattice nor contrast dips show.
+  - *Cracks:* one decal at most per `CRACK_CELL` (8 m) cell, in `CRACK_SHARE`
+    (50%) of the cells, hashed to a random turn, size (60-100% of
+    `CRACK_SIZE`, 4 m) and offset inside the cell. `crack_decals_fit_inside_their_cells`
+    keeps `CRACK_SIZE * sqrt(2) / 2 + CRACK_JITTER / 2` within half a cell, so
+    no decal is cut at a straight edge. A crack darkens the grain
+    (`CRACK_DARKEST`, 0.2), blends its normal toward the decal's and fades out
+    between 0.08 and 0.25 m per pixel and toward the road's edge.
+  - *Normals:* the maps' green runs up the texture, against the rows (+z), so
+    the shader flips it; a decal's tilt is also turned back by its angle into
+    world XZ.
+  - *Relief:* under 0.02 m per pixel (`RELIEF_NEAR`: only the closest zoom
+    levels) a 12-step ray march through the grain (1 cm) and crack (3 cm) depths shifts
+    where the maps are read, so stones and cracks show depth; farther out one
+    step on the grain height.
 - **Marsh props** (`src/world/marsh.rs`): dead trees, stumps, logs, fungus,
   moss, rocks, mounds and debris from the swamp kit (`assets/models/swamp/`)
   are scattered over the marsh; trees, stumps, logs and mounds may stand in
