@@ -20,6 +20,7 @@ use crate::assets;
 use crate::world::{Collider, Describe, PATROL_RADIUS, PATROL_TURNS, Place, Terrain};
 
 use super::super::Player;
+use super::carrier::Carrier;
 use super::{
     CAR, COLLISION, MODEL_SCALE, Vehicle, WHEEL_RADIUS, WHEELBASE, contact, pose_wheel, wheel_slot,
 };
@@ -169,15 +170,27 @@ pub(super) fn attach_wheels(
     }
 }
 
-/// What the patrol stops for: the stalker and their car.
-type InTheWay<'w, 's> =
-    Query<'w, 's, &'static Transform, (Or<(With<Player>, With<Vehicle>)>, Without<Patrol>)>;
+/// What the patrol stops for: the stalker, their car and the Institute's carrier.
+type InTheWay<'w, 's> = Query<
+    'w,
+    's,
+    &'static Transform,
+    (
+        Or<(With<Player>, With<Vehicle>, With<Carrier>)>,
+        Without<Patrol>,
+    ),
+>;
 
 type Wheels<'w, 's> = Query<
     'w,
     's,
     (Entity, &'static CarWheel, &'static mut Transform),
-    (Without<Patrol>, Without<Player>, Without<Vehicle>),
+    (
+        Without<Patrol>,
+        Without<Player>,
+        Without<Vehicle>,
+        Without<Carrier>,
+    ),
 >;
 
 /// Drives each patrol around the loop over the rendered ground, then poses

@@ -62,6 +62,10 @@ flowchart LR
     WORLD --> SCENERY["Scenery\nplants, trees, rocks, colliders"]
     WORLD --> SITES["Sites\nmodels, pads, roads, train"]
     WORLD --> WILDLIFE["Wildlife + mutants\nrigging and AI"]
+    WORLD --> TURRETS["Perimeter guns\nlaser scan, fire"]
+    TURRETS -->|"Downed"| WILDLIFE
+    TURRETS -->|"Respawn"| PLAYER
+    TURRETS -->|"GunSound"| AUDIO
     WORLD --> BASE["Base\nhangar, props, vehicles, artifacts"]
 
     TERRAIN --> LANDSCAPE
@@ -108,9 +112,13 @@ flowchart LR
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
 | Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway, marsh props, big rocks |
 | Cordon guards | `src/world/guards.rs` | Two pacing, rigged UN soldiers at each gate and five sentries by the checkpoints |
+| Townsfolk | `src/world/townsfolk.rs` | Fifteen rigged pedestrians on New Harmont's sidewalks; scientists walk to the Institute's door, hide inside and come back. `watch_the_way` → `walk_townsfolk` → `show_townsfolk` → `animate_townsfolk` in Update while running; `Place::Townsfolk(Role)` |
 | UN patrol | `src/player/vehicle/patrol.rs` | Four white armored cars lapping the Perimeter wall, flank plates, shared `CarWheel`/`in_the_way` |
-| Harmont traffic | `src/player/vehicle/traffic.rs` | Sweeper and sedans on `roads::traffic_routes`: right-hand lanes, U-turns, right of way |
-| Wildlife | `src/world/wildlife/` | Shared rigs, gaits, flyers, predator/mutant AI, spatial cues |
+| Harmont traffic | `src/player/vehicle/traffic.rs` | Sweeper, sedans, ambulance, fire engine and panel van on `roads::traffic_routes`: right-hand lanes, U-turns, right of way, flashing roof beacons |
+| Institute carrier | `src/player/vehicle/carrier.rs` | Tracked carrier's expedition cycle (bay → Zone → pivot → home → back in), `InstitutePass`, counter-rolling track wheels; patrols and traffic stop for it |
+| Institute helicopters | `src/world/helicopters.rs` | Two helicopters: rotor spin-up, climb from the Institute's roof pads, survey passes over the Zone, landing; `fly_helicopters` → `spin_rotors` in PostUpdate before propagation |
+| Wildlife | `src/world/wildlife/` | Shared rigs, gaits, flyers, predator/mutant AI, spatial cues, the Perimeter herd, `Downed` creatures |
+| Perimeter guns | `src/world/turrets.rs`, `turrets/{scan,fire}.rs` | `TurretPlugin`: twelve guns on the Perimeter wall, Lissajous laser scan, beam-touch detection, `Trespasser` marking, lock/spin/burst fire, pooled tracers, `GunSound` |
 | Collision | `src/world/collision.rs`, `world/pillars/` | Static `Pillar` colliders, push-out, climbing, `Weight`/`Crusher`/`Unclimbable` |
 | Crushing | `src/world/crush.rs` | Trampled plants, knocking down lighter solids |
 | Audio | `src/audio/` | Synthesized ambience/effects and live audio sinks |
@@ -210,9 +218,12 @@ Update, only while InGamePhase::Running
   order rings (pulsing) and route line
   stalker animation, body pitch, coat swing
   anomaly checks
+  Perimeter guns: mark trespassers -> sweep beams / lock on -> spin, fire
+    bursts (tracers, Downed, Respawn, GunSound) -> fly tracers
+    -> beams, spots, muzzle flashes + head yaw / barrel spin
 
 PostUpdate, before Transform propagation
-  wildlife route/mutant AI
+  wildlife route/mutant AI (Downed creatures skip it), downed creatures fall
   shared creature rig pose
   trample plants, knock down lighter solids
   artifact idle motion
@@ -226,7 +237,7 @@ PostUpdate, after CheckVisibility and CheckLightVisibility
 Last
   mute processing
   footsteps / door / engine
-  spatial creature sounds
+  spatial creature sounds, Perimeter gunfire
 ```
 
 The transform-changing creature, tree, artifact, and player chains intentionally
@@ -1002,8 +1013,10 @@ than stretching `sites.rs` into a universal object registry.
 
 Use Bevy messages for one-shot communication, matching the existing patterns:
 
-- `Respawn`: sent by anomaly/mutant attacks, read by `PlayerPlugin`.
+- `Respawn`: sent by anomaly/mutant attacks and the Perimeter guns, read by
+  `PlayerPlugin` (and by the guns, to clear `Trespasser`).
 - `CreatureSound`: written by movement/AI, read by the audio plugin.
+- `GunSound`: written when a Perimeter gun starts a burst, read by the audio plugin.
 - `TreeBreak`: read by tree-fall systems.
 
 Rules:

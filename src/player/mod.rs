@@ -40,8 +40,9 @@ use orders::{
     MoveOrder, Turning, issue_move_order, prepare_order_markers, replan_order, sync_order_markers,
 };
 use vehicle::{
-    Driver, Driving, Patrol, Vehicle, drive_patrol, drive_traffic, drive_vehicle, interact_vehicle,
-    pose_wheels, spawn_patrol, spawn_traffic, sync_spotlight,
+    Driver, Driving, Patrol, Vehicle, drive_carrier, drive_patrol, drive_traffic, drive_vehicle,
+    flash_beacons, interact_vehicle, pose_wheels, spawn_carrier, spawn_patrol, spawn_traffic,
+    sync_spotlight,
 };
 
 pub struct PlayerPlugin;
@@ -155,6 +156,7 @@ impl Plugin for PlayerPlugin {
                     prepare_order_markers,
                     spawn_patrol,
                     spawn_traffic,
+                    spawn_carrier,
                 ),
             )
             .add_systems(OnExit(AppState::InGame), despawn_player)
@@ -183,7 +185,8 @@ impl Plugin for PlayerPlugin {
             )
             .add_systems(
                 Update,
-                (drive_patrol, drive_traffic).run_if(in_state(InGamePhase::Running)),
+                (drive_patrol, drive_traffic, flash_beacons, drive_carrier)
+                    .run_if(in_state(InGamePhase::Running)),
             )
             .add_systems(OnEnter(InGamePhase::Paused), pause_stalker_animation)
             .add_systems(OnExit(InGamePhase::Paused), resume_stalker_animation)

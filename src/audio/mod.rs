@@ -3,6 +3,7 @@
 mod ambience;
 mod creatures;
 mod effects;
+mod guns;
 
 use std::sync::Arc;
 
@@ -14,7 +15,7 @@ use crate::player::{
     vehicle::{Driving, Vehicle},
 };
 use crate::states::{AppState, InGamePhase, SplashPhase};
-use crate::world::CreatureSound;
+use crate::world::{CreatureSound, GunSound};
 
 const SAMPLE_RATE: u32 = 22_050;
 
@@ -38,7 +39,15 @@ impl Plugin for GameAudioPlugin {
     fn build(&self, app: &mut App) {
         app.init_resource::<AudioMode>()
             .add_message::<CreatureSound>()
-            .add_systems(Startup, (load_sounds, creatures::load_creature_sounds))
+            .add_message::<GunSound>()
+            .add_systems(
+                Startup,
+                (
+                    load_sounds,
+                    creatures::load_creature_sounds,
+                    guns::load_gun_sounds,
+                ),
+            )
             .add_systems(OnEnter(AppState::Loading), start_hangar_audio)
             .add_systems(OnEnter(SplashPhase::Ready), play_ready_signal)
             .add_systems(OnEnter(AppState::InGame), start_ambience)
@@ -46,7 +55,12 @@ impl Plugin for GameAudioPlugin {
                 Last,
                 (
                     toggle_mute,
-                    (play_actions, sync_engine, creatures::play_creature_sounds)
+                    (
+                        play_actions,
+                        sync_engine,
+                        creatures::play_creature_sounds,
+                        guns::play_gun_sounds,
+                    )
                         .run_if(in_state(AppState::InGame)),
                 )
                     .chain(),

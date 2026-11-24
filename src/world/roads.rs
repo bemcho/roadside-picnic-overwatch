@@ -234,6 +234,21 @@ pub(crate) fn traffic_routes() -> [(Vec<Vec2>, bool); 3] {
     [(ring, true), (avenue, false), (main, false)]
 }
 
+/// The Institute carrier's expedition (`player/vehicle/carrier.rs`): from the
+/// yard's gate through the Institute gate and along the highway to the north
+/// suburbs' fork, about 300 m into the Zone.
+pub(crate) fn expedition_route() -> [Vec2; 7] {
+    [
+        GATE,
+        YARD_TURN,
+        map(397.0, 348.0),
+        PERIMETER_GATE,
+        map(442.0, 353.0),
+        map(487.0, 348.0),
+        NORTH_SUBURBS_FORK,
+    ]
+}
+
 /// The dirt tracks and old asphalt roads outside the town's streets.
 pub(super) fn country_roads() -> impl Iterator<Item = &'static [Vec2]> {
     ROUTES

@@ -7,6 +7,7 @@ mod cordon;
 mod crush;
 mod ground_fog;
 mod guards;
+mod helicopters;
 mod hydrology;
 mod landscape;
 mod map;
@@ -22,8 +23,10 @@ mod sites;
 mod terrain;
 mod terrain_material;
 mod town;
+mod townsfolk;
 mod tree_fall;
 mod trees;
+mod turrets;
 mod water;
 mod weather;
 mod wildlife;
@@ -43,11 +46,12 @@ pub(crate) use hydrology::SWAMP;
 pub(crate) use map::{MAP_SIZE, METERS_PER_PIXEL, map, map_pixel};
 pub use places::{Describe, Explored, Place, SURVEY_CELL, place_at, structure_on_ray};
 pub(crate) use plants::PlantsGrowing;
-pub(crate) use roads::traffic_routes;
-#[cfg(test)]
+pub(crate) use roads::{expedition_route, traffic_routes};
 pub(crate) use terrain::BASE;
 pub(crate) use terrain::lattice_hash;
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};
+pub(crate) use townsfolk::Pedestrian;
+pub(crate) use turrets::{Gun, GunSound};
 pub use weather::{Sky, Weather, Wind, WorldClock};
 pub(crate) use wildlife::{CreatureSound, Cue as CreatureCue, Kind as CreatureKind};
 
@@ -110,6 +114,7 @@ impl Plugin for WorldPlugin {
             MaterialPlugin::<plants::PlantMaterial>::default(),
             ground_fog::GroundFogRenderPlugin,
             shroud::ShroudPlugin,
+            turrets::TurretPlugin,
         ))
         .init_asset::<Landscape>()
         .init_resource::<Terrain>()
@@ -133,6 +138,7 @@ impl Plugin for WorldPlugin {
                 marsh::preload_marsh,
                 rocks::preload_rocks,
                 guards::preload_guards,
+                townsfolk::preload_townsfolk,
             ),
         )
         .add_systems(
@@ -154,6 +160,8 @@ impl Plugin for WorldPlugin {
                 marsh::spawn_marsh,
                 rocks::spawn_rocks,
                 guards::spawn_guards,
+                helicopters::spawn_helicopters,
+                townsfolk::spawn_townsfolk,
             ),
         )
         .add_systems(Update, mipmap_filtered_textures)
@@ -193,8 +201,13 @@ impl Plugin for WorldPlugin {
         .add_systems(
             PostUpdate,
             (
-                (wildlife::move_wildlife, wildlife::move_mutants),
+                (
+                    wildlife::move_wildlife,
+                    wildlife::move_mutants,
+                    wildlife::fell_downed,
+                ),
                 wildlife::pose_wildlife,
+                (helicopters::fly_helicopters, helicopters::spin_rotors).chain(),
             )
                 .chain()
                 .before(TransformSystems::Propagate)
@@ -222,6 +235,14 @@ impl Plugin for WorldPlugin {
             Update,
             (
                 (guards::patrol_guards, guards::animate_guards).chain(),
+                (
+                    townsfolk::watch_the_way,
+                    townsfolk::walk_townsfolk,
+                    townsfolk::show_townsfolk,
+                    townsfolk::animate_townsfolk,
+                    townsfolk::follow_near_animators,
+                )
+                    .chain(),
                 cordon::lift_booms,
                 cordon::notice_crawl_hole,
             )

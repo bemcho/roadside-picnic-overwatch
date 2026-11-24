@@ -722,6 +722,27 @@ pub(super) const LANDMARKS: [Landmark; 32] = [
     Landmark::new(GoldenSphere, map(1216.5, 348.0), roads::GOLDEN_SPHERE),
 ];
 
+/// The two helipads on the International Institute's roof, in world meters:
+/// on its two wings (flat at 0.70 model units, `pillars/uhd_institute.rs`),
+/// where a rotor clears the central towers.
+pub(crate) fn institute_helipads() -> [Vec3; 2] {
+    let pose = institute().pose();
+    [-1.0, 1.0].map(|side| pose.transform_point(Vec3::new(0.255 * side, 0.70, -0.10)))
+}
+
+/// The height of the Institute's highest point, in world meters.
+pub(crate) fn institute_top() -> f32 {
+    let site = institute();
+    site.pose().transform_point(Vec3::Y * site.model().top).y
+}
+
+fn institute() -> Landmark {
+    LANDMARKS
+        .into_iter()
+        .find(|site| site.kind == Institute)
+        .expect("the Institute is a landmark")
+}
+
 /// Every site and the derailed train as a rough upright cylinder around the
 /// model: center, radius, height and what it is.
 pub(super) fn outlines() -> impl Iterator<Item = (Vec2, f32, f32, Place)> {

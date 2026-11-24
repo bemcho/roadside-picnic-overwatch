@@ -104,7 +104,9 @@ pub const KIND_COAST: &str = "Coast";
 pub const KIND_WILDLIFE: &str = "Wildlife";
 pub const KIND_MUTANT: &str = "Mutant";
 pub const KIND_VEHICLE: &str = "Vehicle";
+pub const KIND_AIRCRAFT: &str = "Aircraft";
 pub const KIND_GUARD: &str = "Cordon guard";
+pub const KIND_TOWNSFOLK: &str = "Townsperson";
 pub const KIND_PASSAGE: &str = "Hidden passage";
 pub const KIND_ARTIFACT: &str = "Recovered artifact";
 
@@ -272,6 +274,14 @@ pub const PATROL: Entry = Entry {
     title: "UN patrol car",
     description: "A white armored car of the international forces, driving the length of the Perimeter wall on the Harmont side.",
 };
+pub const CARRIER: Entry = Entry {
+    title: "Institute carrier",
+    description: "The International Institute's tracked carrier, the only vehicle that enters the Zone on official papers. It goes out with an expedition, comes back with samples, and is hosed down twice.",
+};
+pub const HELICOPTER: Entry = Entry {
+    title: "Institute helicopter",
+    description: "An Institute helicopter on survey, flying back and forth over the Zone from the Institute's roof. The pilots keep high: nobody wants to learn what hangs in the air down there.",
+};
 pub const SWEEPER: Entry = Entry {
     title: "Street sweeper",
     description: "Harmont's sweeper, brushing the dust off New Harmont's avenue. Nobody in town asks where the dust comes from.",
@@ -280,9 +290,40 @@ pub const SEDAN: Entry = Entry {
     title: "Harmont sedan",
     description: "Townsfolk about their business between New Harmont, the Institute and the Borscht.",
 };
+/// Indexed like the townsfolk's roles.
+pub const TOWNSFOLK: [Entry; 3] = [
+    Entry {
+        title: "Institute scientist",
+        description: "One of the International Institute's researchers, walking between the town and the labs. They pay well for what the Zone gives up, as long as nobody asks where it came from.",
+    },
+    Entry {
+        title: "Factory worker",
+        description: "A hand from one of Harmont's plants on his way along the block. The town's factories have done well since the Visit, and nobody there likes to say why.",
+    },
+    Entry {
+        title: "Construction worker",
+        description: "New Harmont keeps building: offices for the Institute, flats for its staff. The work never stops, though the ground under the town is said to move.",
+    },
+];
+pub const AMBULANCE: Entry = Entry {
+    title: "Ambulance",
+    description: "An old ambulance running between the Institute and the Borscht. It is seldom in a hurry: by the time anyone sends for it from the Zone, there is rarely anything left to hurry for.",
+};
+pub const FIRE_TRUCK: Entry = Entry {
+    title: "Fire engine",
+    description: "Harmont's fire engine, doing its rounds of the ring street with the ladder strapped down. Fires in town get put out. Nobody drives out to the ones in the Zone.",
+};
+pub const PANEL_VAN: Entry = Entry {
+    title: "Black panel van",
+    description: "A black van with a skull on its flank, between the Borscht and the Institute. Its owner says it carries amplifiers. The customs men stopped looking a long time ago.",
+};
 pub const CRAWL_HOLE: Entry = Entry {
     title: "Crawl hole",
     description: "Someone has dug under the Perimeter here and let the weeds grow over it. Lie flat (hold Ctrl) to crawl under the wall.",
+};
+pub const TURRET: Entry = Entry {
+    title: "Perimeter gun",
+    description: "An automatic UN gun on top of the Perimeter wall. Its red laser sweeps the Zone, and whatever it touches without leave to be there, beast or stalker, it shoots. Near the wall the beam passes overhead; further out, lie flat under it.",
 };
 
 /// Indexed like the world's creature kinds.

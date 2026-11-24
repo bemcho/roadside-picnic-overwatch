@@ -71,6 +71,28 @@ pub const UN_VEHICLE: &str = "models/vehicles/medium/un_armored_vehicle.glb";
 /// nodes (`tools/split_vehicle_wheels.py`).
 pub const STREET_SWEEPER: &str = "models/vehicles/medium/street-sweeper.glb";
 pub const TRAFFIC_SEDAN: &str = "models/vehicles/medium/sedan-traffic.glb";
+/// Three vehicles pulled out of one fused Tripo scan
+/// (`tools/extract_fused_vehicles.py`), full resolution.
+pub const TRAFFIC_AMBULANCE: &str = "models/vehicles/medium/ambulance-traffic.glb";
+pub const TRAFFIC_FIRE_TRUCK: &str = "models/vehicles/medium/fire-truck-traffic.glb";
+pub const TRAFFIC_PANEL_VAN: &str = "models/vehicles/medium/panel-van-traffic.glb";
+/// The one 4096² atlas those three refer to by URI
+/// (`compress_glb_textures.py --external-images`): loaded once for all three.
+pub const TRAFFIC_EMERGENCY_ATLAS: &str =
+    "models/vehicles/medium/textures/vintage_emergency_vehicles_3d_model_basecolor.ktx2";
+/// The Institute's tracked carrier (`player/vehicle/carrier.rs`) and its two
+/// helicopters (`world/helicopters.rs`): wheels and rotors are separate nodes
+/// (`tools/split_moving_parts.py`).
+pub const INSTITUTE_CARRIER: &str = "models/vehicles/medium/institute_carrier.glb";
+pub const INSTITUTE_HELICOPTER: &str = "models/vehicles/medium/institute_helicopter.glb";
+pub const MILITARY_HELICOPTER: &str = "models/vehicles/medium/military_helicopter.glb";
+/// The Perimeter guns (`world/turrets.rs`): a static `Base`, a `Head` yawing
+/// about +Y with the `Barrels` (spinning about +Z) and an empty `Muzzle`
+/// (`tools/split_moving_parts.py`). The `_FAR` tiers show beyond 150 m.
+pub const GATLING_TURRET: &str = "models/props/medium/gatling_turret.glb";
+pub const NAVAL_TURRET: &str = "models/props/medium/naval_turret.glb";
+pub const GATLING_TURRET_FAR: &str = "models/props/low/gatling_turret.glb";
+pub const NAVAL_TURRET_FAR: &str = "models/props/low/naval_turret.glb";
 /// The UN marking for the patrol car's flanks: blue on a transparent ground.
 pub const UN_DECAL: &str = "textures/decals/un_flank.png";
 /// The Harmont map (`doc/Roadside_map.jpg`) shown on M.
@@ -144,6 +166,20 @@ pub const GUARDS: [&str; 4] = [
     "models/soldiers/medium/soldier-f2.glb",
     "models/soldiers/medium/soldier-m1.glb",
     "models/soldiers/medium/soldier-m2.glb",
+];
+/// New Harmont's townsfolk, rigged like the guards and indexed by their role.
+pub const TOWNSFOLK: [&str; 3] = [
+    "models/townsfolk/medium/scientist.glb",
+    "models/townsfolk/medium/factory-worker.glb",
+    "models/townsfolk/medium/construction-worker.glb",
+];
+/// Their far tiers: the same skeleton and clips on a ~17k-triangle mesh with no
+/// textures of its own (drawn with the near model's material). The 4.8k-triangle
+/// construction worker is light enough to be his own far tier.
+pub const TOWNSFOLK_FAR: [&str; 3] = [
+    "models/townsfolk/low/scientist.glb",
+    "models/townsfolk/low/factory-worker.glb",
+    "models/townsfolk/medium/construction-worker.glb",
 ];
 pub const ARTIFACTS: [&str; 14] = [
     "models/artifacts/medium/artifact-death-lamp.glb",
@@ -259,11 +295,29 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
     assets.0.extend([golden_sphere.untyped(), gold.untyped()]);
     let (hangar, hangar_paint) = load_single_primitive(&server, BASE_HANGAR);
     assets.0.extend([hangar.untyped(), hangar_paint.untyped()]);
-    for vehicle in [BASE_VEHICLE, UN_VEHICLE, STREET_SWEEPER, TRAFFIC_SEDAN] {
+    for vehicle in [
+        BASE_VEHICLE,
+        UN_VEHICLE,
+        STREET_SWEEPER,
+        TRAFFIC_SEDAN,
+        TRAFFIC_AMBULANCE,
+        TRAFFIC_FIRE_TRUCK,
+        TRAFFIC_PANEL_VAN,
+        INSTITUTE_CARRIER,
+        INSTITUTE_HELICOPTER,
+        MILITARY_HELICOPTER,
+        GATLING_TURRET,
+        NAVAL_TURRET,
+        GATLING_TURRET_FAR,
+        NAVAL_TURRET_FAR,
+    ] {
         assets
             .0
             .push(load_vehicle_scene(&server, vehicle).untyped());
     }
+    assets
+        .0
+        .push(load_vehicle_atlas(&server, TRAFFIC_EMERGENCY_ATLAS).untyped());
     assets.0.push(server.load::<Image>(UN_DECAL).untyped());
     assets.0.push(server.load::<Image>(UI_MAP).untyped());
     assets
@@ -286,12 +340,34 @@ pub(crate) fn load_vehicle_scene(server: &AssetServer, path: &'static str) -> Ha
     server
         .load_builder()
         .with_settings(|settings: &mut GltfLoaderSettings| {
-            settings.default_sampler = Some(ImageSamplerDescriptor {
-                anisotropy_clamp: 8,
-                ..ImageSamplerDescriptor::linear()
-            });
+            settings.default_sampler = Some(vehicle_sampler());
         })
         .load(GltfAssetLabel::Scene(0).from_asset(path))
+}
+
+fn vehicle_sampler() -> ImageSamplerDescriptor {
+    ImageSamplerDescriptor {
+        anisotropy_clamp: 8,
+        ..ImageSamplerDescriptor::linear()
+    }
+}
+
+/// Loads a color atlas that vehicle GLBs share by URI, with the settings
+/// their glTF loads give it (the vehicle sampler, repeating as glTF does by
+/// default): the asset server keeps the first load's settings, so either
+/// way the vehicles get the same single image.
+fn load_vehicle_atlas(server: &AssetServer, path: &'static str) -> Handle<Image> {
+    server
+        .load_builder()
+        .with_settings(|settings: &mut ImageLoaderSettings| {
+            settings.is_srgb = true;
+            settings.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+                address_mode_u: ImageAddressMode::Repeat,
+                address_mode_v: ImageAddressMode::Repeat,
+                ..vehicle_sampler()
+            });
+        })
+        .load(path)
 }
 
 /// Loads the shared mesh and material of a single-primitive GLB.

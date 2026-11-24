@@ -2,7 +2,10 @@
 
 Each wheel is cut out of the body by a cylinder around its axle (X axis), so the
 game can roll a wheel about its local X and steer the front pair about local Y.
-The body keeps a small hole behind each wheel; the wheel hides it.
+The body keeps a small hole behind each wheel; the wheel hides it. Where the scan
+models each wheel as its own shell ("shells" below), the wheel takes whole shells
+whose centroid lies in the cylinder and is centered on them, so the body keeps no
+hole and an unevenly placed wheel still turns about its own axle.
 
 Output matches assets/models/vehicles/medium/armored_vehicle.glb: top-level nodes
 Chassis, WheelFrontRight, WheelFrontLeft, WheelRearRight, WheelRearLeft; each wheel
@@ -30,9 +33,25 @@ the source's UVs; Blender re-exports tangents for normal maps):
   blender -b --factory-startup --python-exit-code 1 --python tools/split_vehicle_wheels.py -- \
       $T/sweep_tan.glb assets/models/vehicles/medium/street-sweeper.glb --model sweeper
 
+  # ambulance, fire truck and panel van: three vehicles fused in one Tripo scan,
+  # first pulled apart by tools/extract_fused_vehicles.py. Nothing is simplified
+  # or resized: every face and the native 4096 texture are kept.
+  SRC=~/Projects/agentic/RoadSide-Picnic/models/vehicles/uhd/vintage-emergency-vehicles.glb
+  for v in ambulance fire-truck panel-van; do
+    blender -b --factory-startup --python-exit-code 1 --python tools/extract_fused_vehicles.py -- \
+        $SRC $T/$v.glb --vehicle $v
+    blender -b --factory-startup --python-exit-code 1 --python tools/split_vehicle_wheels.py -- \
+        $T/$v.glb assets/models/vehicles/medium/$v-traffic.glb --model $v
+  done
+
 Finish each GLB last (Blender cannot read the KTX2 output):
   python3 tools/compress_glb_textures.py assets/models/vehicles/medium/<model>.glb
   npx @gltf-transform/cli validate assets/models/vehicles/medium/<model>.glb
+The three emergency vehicles share one atlas: finish them together, so it is written once as
+textures/<image>.ktx2 beside them (assets::TRAFFIC_EMERGENCY_ATLAS) and each refers to it by URI:
+  M=assets/models/vehicles/medium
+  python3 tools/compress_glb_textures.py --external-images $M/textures \\
+      $M/{ambulance,fire-truck,panel-van}-traffic.glb
 
 Preview before compression (the textures must still be readable):
   blender -b --factory-startup --python-exit-code 1 --python \
@@ -43,17 +62,24 @@ Measured in the grounded source frame (glTF axes, before scaling to length 1.0):
   sedan   wheel radius 0.077, axle y 0.078, front z +0.32, rear z -0.25, tire |x| 0.18..0.20
   sweeper wheel radius 0.078, axle y 0.085, front z +0.11, rear z -0.27, tire |x| 0.12..0.19
 The side brush of the sweeper shares its front bumper zone, so it stays in the chassis.
+The emergency vehicles' wheel nodes sit at their own shells' centers; the script prints
+them (SPLIT ... node) in the final, length-1 frame for traffic.rs.
 
 Blender coords: Z up. glTF (x, y, z) maps to Blender (x, -z, y).
 """
 
 import argparse
 import math
+import os
 import sys
 
 import bmesh
 import bpy
 from mathutils import Matrix, Vector
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.dont_write_bytecode = True  # keep tools/ free of __pycache__
+from extract_fused_vehicles import shells  # noqa: E402
 
 # Wheel centers (glTF frame, grounded, before scaling). "cut" is the cylinder radius
 # that takes faces out of the body; "band" is the |x| range of the tire.
@@ -71,6 +97,32 @@ MODELS = {
         "cut": 0.088,
         "band": (0.115, 0.20),
         "axles": {"Front": 0.11, "Rear": -0.27},
+    },
+    # The emergency vehicles, after tools/extract_fused_vehicles.py: each wheel is
+    # its own shell, so "cut" is how far a shell's centroid may sit from the axle.
+    "ambulance": {
+        "turn_degrees": 0.0,
+        "shells": True,
+        "axle_y": 0.042,
+        "cut": 0.03,
+        "band": (0.07, 0.14),
+        "axles": {"Front": 0.085, "Rear": -0.144},
+    },
+    "fire-truck": {
+        "turn_degrees": 0.0,
+        "shells": True,
+        "axle_y": 0.047,
+        "cut": 0.03,
+        "band": (0.07, 0.13),
+        "axles": {"Front": 0.169, "Rear": -0.161},
+    },
+    "panel-van": {
+        "turn_degrees": 0.0,
+        "shells": True,
+        "axle_y": 0.052,
+        "cut": 0.03,
+        "band": (0.05, 0.13),
+        "axles": {"Front": 0.215, "Rear": -0.18},
     },
 }
 
@@ -130,20 +182,39 @@ def keep_faces(obj, faces):
     return copy
 
 
-def split(body, config):
+def wheel_groups(body, config):
+    """Map (axle, side) to the polygon indices of that wheel."""
     groups = {}
+    if config.get("shells"):
+        for shell in shells(body.data):
+            corners = [body.data.vertices[i].co for f in shell for i in body.data.polygons[f].vertices]
+            centroid = sum(corners, Vector()) / len(corners)
+            key = wheel_key(to_gltf(centroid), config)
+            if key:
+                groups.setdefault(key, set()).update(shell)
+        return groups
     for index, polygon in enumerate(body.data.polygons):
         key = wheel_key(to_gltf(polygon.center), config)
         if key:
             groups.setdefault(key, set()).add(index)
+    return groups
+
+
+def split(body, config):
+    groups = wheel_groups(body, config)
+    if len(groups) != 4:
+        raise ValueError(f"Expected four wheels, found {sorted(groups)}")
 
     wheels = []
     for (axle, side), faces in sorted(groups.items()):
         wheel = keep_faces(body, faces)
         wheel.name = f"Wheel{axle}{side}"
         points = [to_gltf(v.co) for v in wheel.data.vertices]
-        x_mid = (min(p[0] for p in points) + max(p[0] for p in points)) / 2
-        center = (x_mid, config["axle_y"], config["axles"][axle])
+        mid = [(min(p[k] for p in points) + max(p[k] for p in points)) / 2 for k in range(3)]
+        if config.get("shells"):
+            center = tuple(mid)
+        else:
+            center = (mid[0], config["axle_y"], config["axles"][axle])
         wheel.data.transform(Matrix.Translation(-to_blender(*center)))
         wheel.location = to_blender(*center)
         wheels.append(wheel)
@@ -174,6 +245,15 @@ def normalize(objects):
     return scale
 
 
+def has_normal_map():
+    return any(
+        node.type == "NORMAL_MAP"
+        for material in bpy.data.materials
+        if material.node_tree
+        for node in material.node_tree.nodes
+    )
+
+
 def main():
     args = parse_args()
     config = MODELS[args.model]
@@ -187,6 +267,10 @@ def main():
     objects = split(body, config)
     scale = normalize(objects)
     print(f"SPLIT scale {scale:.5f}")
+    for wheel in objects[1:]:
+        at = to_gltf(wheel.location)
+        radius = max(to_gltf(v.co)[1] for v in wheel.data.vertices)
+        print(f"SPLIT {wheel.name} node {tuple(round(c, 4) for c in at)} radius {radius:.4f}")
 
     bpy.ops.object.select_all(action="DESELECT")
     for obj in objects:
@@ -197,7 +281,8 @@ def main():
         export_format="GLB",
         use_selection=True,
         export_apply=False,
-        export_tangents=True,
+        # Tangents only serve a normal map; without one they are dead weight.
+        export_tangents=has_normal_map(),
         export_image_format="AUTO",
     )
 

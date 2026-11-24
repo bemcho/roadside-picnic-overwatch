@@ -9,6 +9,7 @@ use bevy::mesh::{
 };
 use bevy::prelude::*;
 
+use super::downed::Downed;
 use super::movement::{Wildlife, smooth};
 use super::mutants::is_mutant;
 use super::{Kind, Terrain, detail_range};
@@ -674,10 +675,18 @@ fn bone_pose(
     }
 }
 
+/// The creatures whose rigs follow their motion: not one a gun brought down.
+type Posed<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Wildlife, &'static Transform, &'static Articulation),
+    (Without<VisualPart>, Without<Downed>),
+>;
+
 pub(in crate::world) fn pose_wildlife(
     terrain: Res<Terrain>,
     camera: Query<&Transform, (With<Camera3d>, Without<VisualPart>)>,
-    wildlife: Query<(&Wildlife, &Transform, &Articulation), Without<VisualPart>>,
+    wildlife: Posed,
     mut parts: Query<(&mut Transform, Option<&mut Visibility>), With<VisualPart>>,
 ) {
     let camera = camera.single().ok();

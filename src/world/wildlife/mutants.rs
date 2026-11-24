@@ -10,6 +10,7 @@ use crate::world::{
     terrain::{QUARRY_CENTER, lattice_hash},
 };
 
+use super::downed::Downed;
 use super::movement::{Wildlife, smooth};
 use super::sound::MotionSound;
 use super::{BASE, CreatureSound, Cue, HALF_SIZE, Kind, Route, SiteFauna, Terrain, site_fauna};
@@ -96,6 +97,11 @@ impl Mutant {
                 height: 1.0,
             },
         }
+    }
+
+    /// A fresh mutant of `kind` patrolling the same home.
+    pub(super) fn reborn(&self, kind: Kind) -> Self {
+        Self::new(kind, self.home)
     }
 
     fn decide(&mut self, from: Vec2, forward: Vec2, target: Option<Vec2>, dt: f32) -> Intent {
@@ -338,11 +344,23 @@ fn lands_hit(
     })
 }
 
+/// The mutants still on their feet.
+type Mutants<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Mutant,
+        &'static mut Wildlife,
+        &'static mut Transform,
+    ),
+    (Without<Player>, Without<Downed>),
+>;
+
 pub(in crate::world) fn move_mutants(
     time: Res<Time>,
     terrain: Res<Terrain>,
     player: Query<(&Transform, Option<&Driving>), With<Player>>,
-    mut mutants: Query<(&mut Mutant, &mut Wildlife, &mut Transform), Without<Player>>,
+    mut mutants: Mutants,
     colliders: Query<(&Collider, &GlobalTransform)>,
     (mut respawns, mut sounds): (MessageWriter<Respawn>, MessageWriter<CreatureSound>),
 ) {

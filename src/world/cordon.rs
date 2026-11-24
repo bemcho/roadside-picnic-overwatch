@@ -1077,6 +1077,12 @@ impl WallModel {
     }
 }
 
+/// The height of the Perimeter wall's top at `z` along its line, as `WallModel::batch` raises it.
+pub(super) fn perimeter_top(terrain: &Terrain, z: f32) -> f32 {
+    let floor = floor_point(terrain, Vec2::new(PERIMETER_X, z));
+    floor.x + floor.y + WALL_TOP * WALL_HEIGHT_SCALE * PERIMETER_RISE - SINK
+}
+
 fn floor_point(terrain: &Terrain, at: Vec2) -> Vec2 {
     // The wall spans the crawl hole on the undug ground.
     let ground = terrain.mesh_height_at(at) + hole_depth(at);
@@ -1365,12 +1371,12 @@ mod tests {
             .expect("the run has a panel at its end")
     }
 
+    /// A panel and which of its ends meets a corner.
+    type PanelEnd = (Panel, usize);
+
     /// Each corner of the walls with the panel of the earlier run that ends there and the later run's, each
     /// with the end that meets the corner.
-    fn corner_panels(
-        runs: &[Run],
-        panels: &[Panel],
-    ) -> Vec<(Vec2, (Panel, usize), (Panel, usize))> {
+    fn corner_panels(runs: &[Run], panels: &[Panel]) -> Vec<(Vec2, PanelEnd, PanelEnd)> {
         let (a, b) = (Vec2::splat(-EDGE), Vec2::new(EDGE, -EDGE));
         let (c, d) = (Vec2::splat(EDGE), Vec2::new(-EDGE, EDGE));
         [a, b, c, d, SOUTHWEST, SOUTHEAST, NORTHEAST, NORTHWEST]

@@ -318,7 +318,12 @@ mod tests {
             let pixels = (width * height + (width / 2).max(1) * (height / 2).max(1) + 1) as usize;
             let data = image.data.expect("mip pixels");
             assert_eq!(data.len(), pixels * 4);
-            assert!(data.chunks_exact(4).all(|p| p == [128, 128, 255, 255]));
+            assert!(
+                data.as_chunks::<4>()
+                    .0
+                    .iter()
+                    .all(|p| *p == [128, 128, 255, 255])
+            );
         }
     }
 }

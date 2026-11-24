@@ -362,6 +362,25 @@ the stalker stands still.
   rig's own skeleton): two at each gate (the hangar yard's and the Institute's)
   pace a short beat beside the opening (the yard's whole gap, checkpoint and
   lane), and five sentries walk short beats beside the two checkpoints. Each idles watching at either end of its beat.
+- **Townsfolk** (`src/world/townsfolk.rs`): fifteen New Harmont pedestrians
+  (`assets/models/townsfolk/medium/`: a scientist, a factory worker and a
+  construction worker, rigged like the guards; Idle is clip 1, Walk clip 4).
+  Ten workers and a scientist walk the sidewalks round the town's four blocks,
+  7 m out from each street's middle line (the lanes keep 2.5 m, the paving
+  8.5 m), both ways round; four scientists walk from the plaza along the
+  avenue's north sidewalk, across the ring street, up the town side of the
+  Institute road and its drive to a door 6 m past the Institute's
+  `entrance()`, where they vanish inside (hidden, collider removed) for
+  30–90 s and then walk back. Paces are 1.2–1.4 m/s with the walk clip at
+  pace / 1.8; at about a third of the corners they stand 2–8 s. They stop
+  while the stalker or anything described stands within 1.2 m ahead, and
+  wait at the ring street's kerb until no vehicle (anything described wider
+  than 1.5 m, on the ground) is within 90 m. Routes and start points are
+  fixed tables; meshes fade out 150 m beyond the strategy reach, like the
+  guards'. Asset rebuild: `tools/rig_stalker.py`'s docstring (the scans are
+  simplified at a sub-millimetre error to ~100k triangles, 4096 px textures
+  kept; the scientist's gesturing arms get `--joints` and `--hang-arms`).
+  Traffic does not yet stop for pedestrians.
 - **UN patrol** (`src/player/vehicle/patrol.rs`): four white armored cars
   (`UN_VEHICLE`, the stalkers' car repainted with a UN marking in its roof
   atlas; the flank plates are separate quads with `textures/decals/un_flank.png`)
@@ -370,12 +389,102 @@ the stalker stands still.
   (`cordon::PATROL_TURNS`), and halt while the stalker, their car or another
   patrol is in their way.
 - **Harmont traffic** (`src/player/vehicle/traffic.rs`): a street sweeper up
-  and down New Harmont's plaza avenue, two sedans round the town's ring street
-  and two between the Institute and the Borscht (`roads::traffic_routes`). They
-  keep right, turn round at dead ends, slow for bends and stop for the stalker,
-  their car, a patrol or each other. Both models are Tripo scans split into a
-  chassis and four wheel nodes by `tools/split_vehicle_wheels.py` (its
-  docstring has the commands); the wheels roll and the front pair steers.
+  and down New Harmont's plaza avenue, two sedans and the fire engine (7 m,
+  7 m/s) round the town's ring street, and two sedans, the ambulance (4.4 m,
+  8.5 m/s) and a black panel van (4.8 m, 7.5 m/s) between the Institute and the
+  Borscht (`roads::traffic_routes`), a quarter or half lap apart. They keep
+  right, turn round at dead ends, slow for bends and stop for the stalker,
+  their car, a patrol or each other; faster cars queue behind slower ones. The
+  models are Tripo scans split into a chassis and four wheel nodes by
+  `tools/split_vehicle_wheels.py` (its docstring has the commands); the wheels
+  roll and the front pair steers. The ambulance, fire engine and van come out of
+  one scan that fused them with a fourth car (a militia sedan, not used):
+  `tools/extract_fused_vehicles.py` gives each welded shell to the nearest
+  vehicle's footprint box, so where they touched each part stays whole and no
+  hole is cut; they keep every source triangle (3,985 / 6,115 / 3,870) and
+  the native 4096² atlas. Every vehicle's UVs span the whole atlas, so the
+  three share it: it is one external file,
+  `models/vehicles/medium/textures/vintage_emergency_vehicles_3d_model_basecolor.ktx2`
+  (`TRAFFIC_EMERGENCY_ATLAS`, BC7, ~22 MB of VRAM once), which each GLB names
+  by URI (`compress_glb_textures.py --external-images`, the three in one run)
+  and the asset server loads once. The ambulance's two roof beacons and
+  the fire engine's one flash in turn (emissive spheres, 30,000 nits, 1.5 Hz).
+- **Institute carrier** (`src/player/vehicle/carrier.rs`): the International
+  Institute's tracked carrier (`INSTITUTE_CARRIER`, 7 m long) waits 150 s in
+  its bay on the hangar's east side (hangar-local (3.2, -12), clear of the
+  central aisle, the exhibit rows and the stalkers' car), then drives out of
+  the door, through the yard's boom and the Institute gate (its
+  `InstitutePass` lifts both) and down the highway about 300 m into the Zone
+  (`roads::expedition_route`), keeping 3 m right of the road's middle. It
+  waits 90 s, pivots on its tracks (0.35 rad/s, the two sides counter-rolling),
+  drives home, pivots on the apron and backs into its bay at 1.5 m/s. It
+  keeps to 3 m/s within 75 m of the hangar and on bends and cruises at 7 m/s;
+  it stops for the stalker, their car, a patrol or traffic, and they stop for
+  it. On the hall's floor it stands level; outside it settles on the rendered
+  ground by its first and last road wheels. Road wheels, return rollers, sprocket
+  and idler are `WheelL*` /
+  `WheelR*` nodes cut by `tools/split_moving_parts.py` (its docstring has the
+  commands).
+- **Institute helicopters** (`src/world/helicopters.rs`): two helicopters
+  (`INSTITUTE_HELICOPTER`, `MILITARY_HELICOPTER`) rest on pads on the
+  Institute roof's two wings (`sites::institute_helipads`, model units
+  (±0.255, 0.70, -0.10)). Each spins its rotor up over 8 s, climbs at 4 m/s to
+  two storeys (7 m) over the Institute's top (`sites::institute_top`), and
+  flies three passes back and forth across the Zone between 120 m and 950 m
+  west of the Perimeter, 160 m apart, at 32 m/s, turning at 0.3 rad/s; each
+  sortie picks a different stretch (`lattice_hash` of the sortie number). It
+  stays at least 25 m over the ground, looking 10 s ahead, banks up to 0.35 rad
+  into turns and dips its nose with speed. Home, it slows over its pad, slides
+  in, sets down at up to 2.5 m/s, spins down and rests 120 s; the second starts
+  90 s after the first. The `Rotor` node spins about +Y and `TailRotor` about
+  +X (`tools/split_moving_parts.py`).
+- **Perimeter guns** (`src/world/turrets.rs`, `turrets/{scan,fire}.rs`): twelve
+  automatic guns stand on top of the Perimeter wall (`cordon::perimeter_top`,
+  about 9 m up), alternating a gatling and a naval mount, evenly spread
+  (about 78 m apart) from `REACH_PAST` (50 map tiles, 120 m) south of the
+  hangar, z ≈ -233, to as far past the Institute, z ≈ 630 (`guarded_span`).
+  The one that would land in the Institute gate steps to `GATE_CLEAR` (12 m)
+  from its middle. Each has a `Collider`, is `Unclimbable` and describes itself
+  (`Place::Turret`). The full model shows within 150 m of the camera, the light
+  `low/` one out to 700 m, as do the beam and spot.
+  *Scan:* the head sweeps ±60° about the Zone's heading (-X) with a 26 s
+  period while the beam's reach nods between 60 and 400 m with a 37 s period,
+  a Lissajous scan from a per-gun phase. The beam is a red additive glow
+  (radius 7 cm, `BEAM_GLOW` 18,000, about 2 after the EV 13 exposure, ~30 at
+  night) from the `Muzzle` down to where it meets the ground, one terrain
+  sample per gun per frame, with a 0.55 m spot there (`SPOT_GLOW` 60,000).
+  *Detection is the beam:* a body is caught within 1 m (plus its radius) of the
+  beam's ground track, between the muzzle and the end (swept since the last
+  frame, so a fast sweep does not skip it), where the beam passes between its
+  feet and its height: the stalker 1.8 m standing, 0.5 m crawling or prone, a
+  creature 0.6 × its size. From 10 m up the beam clears a standing stalker
+  until the last ~17% of its reach and a crawler until the last ~5%.
+  *Targets:* ground creatures (wildlife and mutants, not birds) in the Zone,
+  and the stalker only as a `Trespasser`: crossing from Harmont into the Zone
+  on foot within 10 m of the crawl hole marks them; the Institute gate, the
+  car (`Driving`) or a restored save do not; Harmont's side or a `Respawn`
+  clears it. Cars, the carrier, patrols and anyone in Harmont are never targets.
+  *Engagement:* a locked head turns after its target (gatling 1.4 rad/s, naval
+  0.9), the beam ending at its feet; the barrels spin up over 1 s, then, aimed
+  within 3°, fire 0.6 s bursts every 0.95 s: pooled tracers (64 in all, 2.6 m
+  streaks; gatling 14/s at 450 m/s, spread 0.6°; naval 6/s at 380 m/s, 1.6×
+  bigger), a flickering muzzle flash with a 14 m point light, and a positional
+  burst sound (`GunSound`, `src/audio/guns.rs`, heard to 650 m). After 0.3 s of
+  fire on a creature (0.5 s on the stalker) plus the rounds' flight time, a
+  creature is `Downed` (`wildlife/downed.rs`: it stops, tips onto its side away
+  from the gun over 0.6 s, lies 8 s, sinks over 2.5 s and returns to the start
+  of its route 45 s after the hit) and the stalker respawns. A gun lets go of a
+  target that leaves the Zone, falls, goes beyond 450 m or 75° off the Zone's
+  heading; the barrels spin down over 1.6 s and the scan resumes from where the
+  gun points.
+  *Assets:* `assets/models/props/{medium,low}/{gatling,naval}_turret.glb`
+  (`GATLING_TURRET`, `NAVAL_TURRET` and the `_FAR` tiers): glTF +Y up,
+  barrels along +Z at rest, about one unit long (scaled 3.5, to read from the tactical camera), base at y = 0 and
+  centred on the yaw axis; top-level nodes `Base` (static) and `Head` (yaws
+  about its local +Y), under it `Barrels` (spin about local +Z) and an empty
+  `Muzzle` at the barrel tips, whose rest position the game reads. They are
+  split into these nodes by `tools/split_moving_parts.py` (its docstring has
+  the commands); finish with `tools/compress_glb_textures.py`.
 - **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
   textured sources in `assets/models/{animals,birds}/medium/` share mesh handles
   and preserve the original PBR maps. Rebuild with glTF Transform `simplify
@@ -392,8 +501,12 @@ the stalker stands still.
   Harmont's sites only get birds. Walkers
   stay outside the site's pad and road. Each base flight route fans into a
   five-bird flock with staggered phase, radius, and altitude while preserving
-  landing routes and terrain clearance. Wildlife is otherwise decorative and
-  has no collision.
+  landing routes and terrain clearance. A herd of ground animals
+  (`perimeter_herd`: hexadeer, frostwolves and chameleons, two every 150 m)
+  grazes 100 to 400 m west of the Perimeter along the guns' stretch, shown
+  from 450 m (others 100 m) so they can be seen from the wall; the Perimeter
+  guns shoot them, and a `Downed` creature stops moving and posing until it
+  returns. Wildlife is otherwise decorative and has no collision.
 - **Artifact showcase** (`src/world/base/artifacts.rs`): all 14 supplied
   artifacts sit on individual lit pedestals in two seven-table rows inside the
   hangar. The west row stays outside the aisle and the east row hugs the wall,
@@ -493,7 +606,9 @@ the stalker stands still.
   engine. Wildlife calls, footfalls, takeoff/landing, and fight cues originate
   from the creature's world position; nearby sounds pan with the camera and fade
   with distance. Footfalls follow accepted travel and attack sounds follow
-  chase, lunge, and hit events. N mutes both positional and non-positional audio.
+  chase, lunge, and hit events. Each Perimeter gun burst (`GunSound`) plays a
+  synthesized gatling or naval burst at the muzzle (`audio/guns.rs`), full
+  within 90 m and fading out by 650 m. N mutes both positional and non-positional audio.
   Playback follows the system's default audio output.
 - **Stalker model** (`STALKER_MODEL`: `assets/models/soldier/uhd/soldier_rigged.glb`)
   is the UHD Tripo soldier scan (~2M triangles, 4K normal-mapped PBR) rigged in
@@ -520,7 +635,10 @@ the stalker stands still.
   data maps), loaded through Bevy's `ktx2` + `zstd_rust` features. Finish every
   new or re-exported runtime GLB with
   `python3 tools/compress_glb_textures.py <glb>...` (needs `cargo install ctt-cli`).
-  Run it last: Blender and glTF Transform cannot decode or edit the converted
+  GLBs that share one texture (the emergency vehicles' atlas) instead write it
+  once beside them with `--external-images <dir>` and refer to it by URI; give
+  its path a constant in `assets/mod.rs` and preload it with the settings the
+  glTF loader would use (`load_vehicle_atlas`). Run it last: Blender and glTF Transform cannot decode or edit the converted
   textures' pixels, so re-run earlier pipeline steps from the git/source GLB
   (the tangent bake below is the one step allowed after compression). Runtime CPU mipmaps
   (`terrain_material::mipmap_filtered_textures`) only cover procedural images
