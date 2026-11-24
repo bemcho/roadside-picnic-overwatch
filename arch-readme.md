@@ -200,12 +200,14 @@ Update, only while InGamePhase::Running
   shroud toggle (V) and survey mask repaint
   map overlay toggle (M), marker, fog and birds
   player/camera input
+  click orders (Shift holds a new route), leg replanning
   respawn handling
   vehicle enter/exit
   on-foot motion + collision
   vehicle simulation
   wheel pose + spotlight
   camera follow
+  order rings (pulsing) and route line
   stalker animation, body pitch, coat swing
   anomaly checks
 

@@ -11,7 +11,7 @@ use crate::states::AppState;
 use crate::world::Terrain;
 
 use super::Player;
-use super::orders::{MoveOrder, sync_order_markers};
+use super::orders::{MoveOrder, ORDER_COLOR, sync_order_markers};
 
 /// Meters between the points of the line: close enough to follow hills.
 const ROUTE_STEP: f32 = 2.0;
@@ -24,8 +24,8 @@ const ROUTE_WIDTH: f32 = 2.0;
 /// Pulls the line 1 % of its distance toward the camera, so a shallow view does not bury it in the
 /// ground, while walls and buildings in front of it still hide it.
 const ROUTE_DEPTH_BIAS: f32 = -0.01;
-/// The order rings' colour (`OrderMarkerLook`), a little translucent.
-const ROUTE_COLOR: Color = Color::srgba(0.95, 0.78, 0.35, 0.8);
+/// How opaque the line is, in the order rings' colour.
+const ROUTE_ALPHA: f32 = 0.8;
 
 /// The gizmo group the route is drawn with, to give it its own width and depth bias.
 #[derive(Default, Reflect, GizmoConfigGroup)]
@@ -125,7 +125,10 @@ fn draw_order_route(
         return;
     };
     let head = drape(&terrain, stalker.translation.xz(), next);
-    gizmos.linestrip(head.chain(cache.line.iter().skip(1).copied()), ROUTE_COLOR);
+    gizmos.linestrip(
+        head.chain(cache.line.iter().skip(1).copied()),
+        ORDER_COLOR.with_alpha(ROUTE_ALPHA),
+    );
 }
 
 #[cfg(test)]

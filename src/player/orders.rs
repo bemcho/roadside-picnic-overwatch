@@ -36,6 +36,8 @@ const STALL_RATIO: f32 = 0.15;
 const STALL_SECONDS: f32 = 0.8;
 /// Farthest point on the ground a click can reach, in meters.
 const CLICK_REACH: f32 = 12_000.0;
+/// The colour of the stop rings and the route line.
+pub(super) const ORDER_COLOR: Color = Color::srgb(0.95, 0.78, 0.35);
 /// How often a blocked leg is pathfound again before the order is dropped.
 const STALL_REPLANS: u8 = 2;
 /// A stall this much nearer the target than the last one meets a new
@@ -233,7 +235,7 @@ pub(super) fn prepare_order_markers(
     commands.insert_resource(OrderMarkerLook {
         mesh: meshes.add(Annulus::new(0.32, 0.45)),
         material: materials.add(StandardMaterial {
-            base_color: Color::srgb(0.95, 0.78, 0.35),
+            base_color: ORDER_COLOR,
             emissive: LinearRgba::rgb(900.0, 620.0, 180.0),
             unlit: true,
             ..default()
