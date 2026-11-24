@@ -4,6 +4,7 @@ python3 -m unittest tools/test_bake_cordon_wall.py -v
 """
 
 import io
+import re
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,9 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import bake_cordon_wall as wall_tool  # noqa: E402
+from compress_glb_textures import read_glb  # noqa: E402
+
+REPO = Path(__file__).resolve().parent.parent
 
 HALF = 0.147
 TOP = 0.41
@@ -166,6 +170,33 @@ class LayoutTests(unittest.TestCase):
         self.assertTrue((upright[:, 2] == 0).all())
         self.assertTrue(np.allclose(flat[:, 1], shape.middle))
         self.assertGreater(shape.floor, TOP)
+
+
+class ShippedWallTests(unittest.TestCase):
+    def test_the_constants_in_cordon_rs_match_the_shipped_glbs(self):
+        """src/world/cordon.rs copies the measurements this tool prints: a re-bake that moves them must move those."""
+        source = (REPO / "src/world/cordon.rs").read_text()
+
+        def constant(name):
+            return float(re.search(rf"^const {name}: f32 = ([0-9.]+);", source, re.M).group(1))
+
+        def bounds(glb):
+            gltf, _ = read_glb(REPO / "assets/models/sites/medium" / glb)
+            position = gltf["meshes"][0]["primitives"][0]["attributes"]["POSITION"]
+            return gltf["accessors"][position]["min"], gltf["accessors"][position]["max"]
+
+        (_, box_low_y, box_low_z), (_, box_top, box_half) = bounds("site-cordon-wall-box.glb")
+        (_, _, bags_low_z), (_, bags_top, bags_reach) = bounds("site-cordon-wall-sandbags.glb")
+        for name, found in (
+            ("WALL_TOP", box_top),
+            ("WALL_HALF_THICKNESS", box_half),
+            ("WALL_HALF_THICKNESS", -box_low_z),
+            ("BAG_TOP", bags_top),
+            ("BAG_REACH", bags_reach),
+            ("BAG_REACH", -bags_low_z),
+        ):
+            self.assertAlmostEqual(constant(name), found, delta=1e-4, msg=name)
+        self.assertEqual(box_low_y, 0)  # the foot, as the runtime's `SINK` assumes
 
 
 class SandbagTests(unittest.TestCase):

@@ -152,7 +152,7 @@ BAG_REAR = 5  # the pile's back stands where this percentile of the block's vert
 # of a few cm lies between the scan's wall and its pile; the row is moved up against the wall)
 BAG_DENSITY = 6000  # px per unit of the block's atlas
 BAG_CAGE = 0.014  # rays start this far outside the row's low-poly surface ...
-BAG_REACH = 0.02  # ... and look this far inside it
+BAG_DEPTH_IN = 0.02  # ... and look this far inside it
 BAG_COLD = 1.1  # a baked texel with red under this share of blue (plus 0.002) is concrete seen through a hole in a bag
 BAG_TRIM = (
     0.004  # the block's ends are ragged and rounded, so a module is baked from the block without this much of each
@@ -995,7 +995,7 @@ def bag_source(scan, block, half_thickness):
 def bake_bags(source, module, size, front_rows):
     """(colour, tangent normal) of one module baked from the scan's bags; holes in the scan, and paint and tape
     on the front (its first `front_rows` rows), are filled from around."""
-    ray = Ray(BAG_CAGE, BAG_CAGE + BAG_REACH)
+    ray = Ray(BAG_CAGE, BAG_CAGE + BAG_DEPTH_IN)
     albedo, normal = (bake(module, source, size, kind, ray) for kind in ("DIFFUSE", "NORMAL"))
     alpha = albedo[..., 3].copy()
     colour = albedo[..., :3] / np.maximum(alpha, 1e-6)[..., None]
