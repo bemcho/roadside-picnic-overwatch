@@ -4,6 +4,7 @@ mod animation;
 mod camera;
 mod orders;
 mod path;
+mod route;
 pub(crate) mod vehicle;
 
 use std::f32::consts::PI;
@@ -143,6 +144,7 @@ type PlayerEntities<'w, 's> =
 impl Plugin for PlayerPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<Respawn>()
+            .add_plugins(route::RoutePlugin)
             .add_systems(Startup, load_stalker_animations)
             .add_systems(
                 OnEnter(AppState::InGame),

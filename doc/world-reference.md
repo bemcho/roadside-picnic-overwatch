@@ -36,7 +36,14 @@ marker, opaque near-black smoke over unsurveyed cells and a few birds wheeling o
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
 in `drive_vehicle`. Shift-clicks append legs pathfound from the last stop
-(`MoveOrder::append`). Routes pass through the yard gate's boom, and a car
+(`MoveOrder::append`). A thin line (`player/route.rs`: a gizmo group 2 px wide with a
+small depth bias, in the rings' colour) traces the exact route from the stalker, or
+the car they drive, through every pathfound waypoint still ahead to the last ring:
+points every 2 m (at most 64 steps a leg) laid on the ground, or on the water where
+the stalker wades. It shrinks as waypoints are reached and goes with the order (WASD,
+arrival, a stall, boarding or leaving the car). The draped line through the waypoints
+is rebuilt only when they change; only the leg to the next one is laid each frame.
+Routes pass through the yard gate's boom, and a car
 with an `InstitutePass` through the Institute gate's; each lifts as it arrives. A yellow ring (`ui/locator.rs`) lies on the ground around
 the stalker, or the car they drive, at every zoom: its vertices follow the
 rendered terrain (or the water when wading), it never shrinks under 34 px wide,

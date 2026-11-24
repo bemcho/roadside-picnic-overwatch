@@ -467,7 +467,10 @@ Shift held it plans from the last stop and appends the leg
 (`MoveOrder::append`). Planning ignores a `Boom` that opens for the mover
 (`Boom::opens_for`): the yard's always, the Institute's for a driven car with
 an `InstitutePass`. `sync_order_markers` keeps one ground ring per stop,
-spawning more from `OrderMarkerLook` as needed. `move_player`:
+spawning more from `OrderMarkerLook` as needed, and `route::draw_order_route`
+draws a thin gizmo line (`RouteGizmos`) from the player through
+`MoveOrder::waypoints`, keeping the draped line in a `RouteCache` until the
+waypoints change. `move_player`:
 
 1. reads camera-relative WASD input (which cancels an order), otherwise
    steers toward the order's next waypoint,

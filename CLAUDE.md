@@ -30,7 +30,7 @@ The upper-right in-game HUD shows the smoothed frame rate.
 - **Left click** — move the stalker there (pathfinding around obstacles and deep
   water; long trips run). While driving, click to drive there.
 - **Shift + left click** — add a waypoint after the orders already given; a ring
-  marks each one until it is reached
+  marks each one until it is reached and a thin line traces the route
 - **WASD** — steer directly (camera-relative) and cancel a click order; hold **Shift** to run
 - Walk into a rock, building or other solid to **climb** onto it; the cordon walls,
   checkpoints, trees and guards can't be climbed
