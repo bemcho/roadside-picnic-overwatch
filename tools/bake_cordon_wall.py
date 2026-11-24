@@ -535,8 +535,35 @@ def bag_module(block, half_thickness):
     return geometry, size
 
 
+def bag_cap(row, module, station, shift, side, direction):
+    """Close the row's end: `module`'s end profile at `station`, moved `shift` along x and mirrored for the back,
+    with its foot against the wall, as one flat polygon facing `direction` (+1 or -1 along x).
+
+    The row is a hollow loft and its faces are single-sided, so without this an end seen end-on (a gate's jamb,
+    the corner of a run) shows nothing but the wall behind it. Vertices are not shared with the sides, so the
+    cap stays flat under smooth shading.
+    """
+    rows = len(module.positions) // len(BAG_STATIONS)
+    ring = range(station * rows, (station + 1) * rows)
+    points = [module.positions[i] for i in ring]
+    uvs = [module.uvs[i] for i in ring]
+    points.append((points[0][0], 0.0, points[0][2]))  # the foot, below where the profile starts at the wall
+    uvs.append((uvs[0][0], 0.0))
+    first = len(row.positions)
+    row.positions += [(x + shift, y, side * z) for x, y, z in points]
+    row.uvs += uvs
+    face = tuple(range(first, first + len(points)))
+    corners = np.array(row.positions[first:])
+    area = sum(np.cross(a, b) for a, b in zip(corners, np.roll(corners, -1, axis=0)))
+    if area[0] * direction < 0:
+        face = face[::-1]
+    row.faces.append(face)
+    row.normals.append(np.array([direction, 0.0, 0.0]))
+
+
 def bag_row(module):
-    """The whole row of one panel: BAG_COUNT copies of `module` along x on the front, and mirrored on the back."""
+    """The whole row of one panel: BAG_COUNT copies of `module` along x on the front, and mirrored on the back,
+    each side closed at both ends."""
     period = PANEL_SPAN / BAG_COUNT
     row = Geometry()
     for side in (1, -1):
@@ -547,7 +574,15 @@ def bag_row(module):
             row.uvs += module.uvs
             row.faces += [tuple(first + i for i in (face if side > 0 else face[::-1])) for face in module.faces]
             row.normals += [normal * np.array([1, 1, side]) for normal in module.normals]
+        shift = (BAG_COUNT - 1) / 2 * period
+        bag_cap(row, module, 0, -shift, side, -1)
+        bag_cap(row, module, len(BAG_STATIONS) - 1, shift, side, 1)
     return row
+
+
+def triangle_count(faces):
+    """Triangles in `faces` (quads and polygons count as fans)."""
+    return sum(len(face) - 2 for face in faces)
 
 
 def check_row_extent(row):
@@ -1191,7 +1226,7 @@ def print_sandbag_measurements(block, row, size):
     print(
         f"  x extent = {points[:, 0].min():.4f}..{points[:, 0].max():.4f}, max |z| = {np.abs(points[:, 2]).max():.4f}"
     )
-    print(f"  top y = {points[:, 1].max():.4f}, {len(row.faces) * 2} triangles, atlas {size[0]} x {size[1]} px")
+    print(f"  top y = {points[:, 1].max():.4f}, {triangle_count(row.faces)} triangles, atlas {size[0]} x {size[1]} px")
 
 
 def bake_wall_and_wire(scan, wall, args, device):

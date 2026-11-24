@@ -930,13 +930,18 @@ struct WallModel {
     half_size: Vec2,
     /// How far the model's foot is sunk below the ground, in meters.
     sink: f32,
+    /// Whether a run that stops short of a corner (a negative lap) shortens this model too. The box does; the
+    /// sandbags run on to the outer corner instead, since no wall's cap stands over their foot.
+    insets: bool,
 }
 
 impl WallModel {
-    /// The sandbag row: it lies on the ground rather than standing in it.
+    /// The sandbag row: it lies on the ground rather than standing in it, and every run's row reaches the
+    /// corner, so the foot of a lapping run's end cap is not left bare.
     fn sandbags(self) -> Self {
         Self {
             sink: BAG_SINK,
+            insets: false,
             ..self
         }
     }
@@ -970,6 +975,7 @@ impl WallModel {
             tangents,
             half_size,
             sink: SINK,
+            insets: true,
             uv: uv.clone(),
             indices: mesh
                 .indices()
@@ -995,9 +1001,14 @@ impl WallModel {
         let mut indices = Vec::with_capacity(self.indices.len() * panels.len());
         for &panel in panels {
             // Model x = 0 stands `shift` along the run from the center.
-            let total = panel.length + panel.laps[0] + panel.laps[1];
+            let laps = if self.insets {
+                panel.laps
+            } else {
+                panel.laps.map(f32::abs)
+            };
+            let total = panel.length + laps[0] + laps[1];
             let scale_x = total / PANEL_SPAN;
-            let shift = (panel.laps[1] - panel.laps[0]) * 0.5;
+            let shift = (laps[1] - laps[0]) * 0.5;
             // The ground under every vertex, whatever this model's width.
             let reach = panel.along.abs()
                 * (self.half_size.x * scale_x + shift.abs() + PATCH_MARGIN)
@@ -1351,6 +1362,32 @@ mod tests {
             .expect("the run has a panel at its end")
     }
 
+    /// Each corner of the walls with the panel of the earlier run that ends there and the later run's, each
+    /// with the end that meets the corner.
+    fn corner_panels(
+        runs: &[Run],
+        panels: &[Panel],
+    ) -> Vec<(Vec2, (Panel, usize), (Panel, usize))> {
+        let (a, b) = (Vec2::splat(-EDGE), Vec2::new(EDGE, -EDGE));
+        let (c, d) = (Vec2::splat(EDGE), Vec2::new(-EDGE, EDGE));
+        [a, b, c, d, SOUTHWEST, SOUTHEAST, NORTHEAST, NORTHWEST]
+            .into_iter()
+            .map(|corner| {
+                let meeting = runs
+                    .iter()
+                    .filter(|run| run.from == corner || run.to == corner)
+                    .collect::<Vec<_>>();
+                assert_eq!(meeting.len(), 2, "corner {corner}");
+                let (first, second) = (meeting[0], meeting[1]);
+                (
+                    corner,
+                    end_panel(panels, first, corner),
+                    end_panel(panels, second, corner),
+                )
+            })
+            .collect()
+    }
+
     #[test]
     fn straight_runs_meet_end_to_end_and_corners_lap() {
         let terrain = Terrain::new();
@@ -1373,18 +1410,7 @@ mod tests {
 
         // Where two runs meet in a corner the earlier one laps past the other's line, closing the
         // outer corner, and the later one stops against it.
-        let (a, b) = (Vec2::splat(-EDGE), Vec2::new(EDGE, -EDGE));
-        let (c, d) = (Vec2::splat(EDGE), Vec2::new(-EDGE, EDGE));
-        for corner in [a, b, c, d, SOUTHWEST, SOUTHEAST, NORTHEAST, NORTHWEST] {
-            let meeting = runs
-                .iter()
-                .filter(|run| run.from == corner || run.to == corner)
-                .collect::<Vec<_>>();
-            assert_eq!(meeting.len(), 2, "corner {corner}");
-            let ((first, first_end), (second, second_end)) = (
-                end_panel(&panels, meeting[0], corner),
-                end_panel(&panels, meeting[1], corner),
-            );
+        for (corner, (first, first_end), (second, second_end)) in corner_panels(&runs, &panels) {
             assert_eq!(first.laps[first_end], CORNER_LAP, "corner {corner}");
             assert_eq!(second.laps[second_end], -CORNER_LAP, "corner {corner}");
             // The later run's end touches the earlier run's near face, without overlapping it.
@@ -1418,6 +1444,32 @@ mod tests {
                 .expect("a run ends here");
             let (panel, end) = end_panel(&panels, run, end);
             assert_eq!(panel.laps[end], 0.0);
+        }
+    }
+
+    #[test]
+    fn the_sandbag_rows_of_both_runs_run_on_to_the_outer_corner() {
+        let terrain = Terrain::new();
+        let (wall, bags) = (test_wall(), test_bags());
+        let panels = wall_chunks().into_values().flatten().collect::<Vec<_>>();
+        let extent = |model: &WallModel, panel: Panel, axis: Vec2| {
+            extent_along(&model.batch(&terrain, Vec2::ZERO, &[panel]), axis)
+        };
+        for (corner, (first, first_end), (second, second_end)) in
+            corner_panels(&wall_runs(), &panels)
+        {
+            // The earlier run's cap stands in the plane of the later run's outer face: the plane the later
+            // box is inset from, and where each run's row of bags ends, so no bare foot is left under the cap.
+            for (panel, end) in [(first, first_end), (second, second_end)] {
+                let toward = panel.along * (2.0 * end as f32 - 1.0);
+                let outer = extent(&wall, first, toward).1;
+                let rows = extent(&bags, panel, toward).1;
+                assert!(
+                    (rows - outer).abs() < 1e-3,
+                    "corner {corner}: a row stops {} short",
+                    outer - rows
+                );
+            }
         }
     }
 
@@ -1830,6 +1882,7 @@ mod tests {
                 indices: vec![0, 1, 2],
                 half_size: Vec2::new(0.4, 0.0),
                 sink: SINK,
+                insets: true,
             },
             paint: Handle::default(),
         };

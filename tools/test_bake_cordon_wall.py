@@ -255,8 +255,8 @@ class SandbagTests(unittest.TestCase):
         points = np.array(row.positions)
         wall_tool.check_row_extent(row)  # spans +-PANEL_SPAN / 2
         self.assertAlmostEqual(points[:, 0].min(), -wall_tool.PANEL_SPAN / 2, places=5)
-        self.assertEqual(len(row.faces), 2 * wall_tool.BAG_COUNT * len(module.faces))
-        self.assertLessEqual(len(row.faces) * 2, 1000)  # a light model: at most 1,000 triangles
+        self.assertEqual(len(row.faces), 2 * (wall_tool.BAG_COUNT * len(module.faces) + 2))  # and two end caps a side
+        self.assertLessEqual(wall_tool.triangle_count(row.faces), 1000)  # a light model: at most 1,000 triangles
         front, back = points[points[:, 2] > 0], points[points[:, 2] < 0]
         self.assertEqual(len(front), len(back))
         self.assertAlmostEqual(float(front[:, 2].max()), float(-back[:, 2].min()), places=6)
@@ -267,6 +267,26 @@ class SandbagTests(unittest.TestCase):
             self.assertGreater(float(np.dot(newell / np.linalg.norm(newell), normal)), 0.999)
         bad = wall_tool.cold_texels(np.array([[[0.2, 0.15, 0.08], [0.07, 0.09, 0.10], [0.0, 0.0, 0.0]]], np.float32))
         self.assertEqual(bad.tolist(), [[False, True, True]])  # cloth stays; concrete and an inside face do not
+
+    def test_the_row_is_closed_at_both_ends_of_each_side(self):
+        module, _ = wall_tool.bag_module(self.block, self.half)
+        row = wall_tool.bag_row(module)
+        points = np.array(row.positions)
+        caps = [(face, normal) for face, normal in zip(row.faces, row.normals) if len(face) > 4]
+        self.assertEqual(len(caps), 4)
+        half_span = wall_tool.PANEL_SPAN / 2
+        for face, normal in caps:
+            corners = points[list(face)]
+            self.assertTrue(np.allclose(corners[:, 0], corners[0, 0], atol=1e-6))  # flat in x
+            self.assertAlmostEqual(abs(float(corners[0, 0])), half_span, places=5)  # at an end of the panel
+            self.assertGreater(float(normal[0]) * float(corners[0, 0]), 0)  # facing out of the row
+            area = sum(np.cross(a, b) for a, b in zip(corners, np.roll(corners, -1, axis=0)))
+            self.assertGreater(abs(float(area[0])) / 2, 1e-4)  # the profile's section, not a sliver
+            self.assertGreater(float(area[0]) * float(normal[0]), 0)  # wound to face its normal
+            self.assertEqual(float(corners[:, 1].min()), 0.0)  # on the ground
+            self.assertAlmostEqual(float(corners[:, 1].max()), 0.054 - wall_tool.BAG_SAG, places=6)  # a joint
+        # The cap is the end profile plus the foot at the wall: one more point than the profile has.
+        self.assertEqual({len(face) for face, _ in caps}, {len(wall_tool.bag_profile(0.07, 0.05)) + 1})
 
     def test_the_front_is_the_rows_below_the_profiles_crown(self):
         _, size = wall_tool.bag_module(self.block, self.half)

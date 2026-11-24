@@ -215,11 +215,14 @@ the stalker stands still.
   of sandbags along the foot of both faces: the scan has only one block of bags
   (two wide, four layers) at its left end, so one module of it is baked (colour
   and tangent normal, 740 x 632 px) and repeated seven times along the panel and
-  mirrored on the back, 672 triangles in all; `BAG_REACH` and `BAG_TOP` are its
-  measured reach (0.1989 from the line, 1.47 m) and height (0.0532, 0.39 m).
-  `WallModel::batch` shears it onto the ground like the others, but it lies on the
-  ground (`BAG_SINK`, 2 cm) instead of standing 9 cm in it, and it rises with its
-  panel, so the Perimeter's bags are three times as high.
+  mirrored on the back, 696 triangles in all (each side's row is closed by a flat
+  cap at both ends, so its end seen end-on at a gate or a corner is solid);
+  `BAG_REACH` and `BAG_TOP` are its measured reach (0.1989 from the line, 1.47 m)
+  and height (0.0532, 0.39 m). `WallModel::batch` shears it onto the ground like
+  the others, but it lies on the ground (`BAG_SINK`, 2 cm) instead of standing 9 cm
+  in it, and it rises with its panel, so the Perimeter's bags are three times as
+  high. A negative corner lap shortens only the box: both runs' rows run on to the
+  outer corner (`WallModel::insets`), so no cap is left with a bare foot.
 
   The box is 0.147 model units either side of its line (`WALL_HALF_THICKNESS`,
   1.09 m at `WALL_HEIGHT_SCALE` 7.4: a wall 2.2 m thick and 3.04 m high, the
