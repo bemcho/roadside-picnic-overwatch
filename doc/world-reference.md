@@ -36,7 +36,13 @@ marker, opaque near-black smoke over unsurveyed cells and a few birds wheeling o
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
 in `drive_vehicle`. Shift-clicks append legs pathfound from the last stop
-(`MoveOrder::append`). A thin line (`player/route.rs`: a gizmo group 2 px wide with a
+(`MoveOrder::append`); a route started with Shift-clicks while the mover stands
+still is held until Shift is released (appending to a moving order never stops it).
+Scenery colliders stream in only near the stalker, so a far leg is planned
+without them: `replan_order` pathfinds the leg to the next stop again from where
+the mover stands each time a stop is reached, and when the mover stalls (no
+progress for 0.8 s); after two stalls on one leg the order is dropped. The stop
+rings pulse (1.4 s, swelling 25%). A thin line (`player/route.rs`: a gizmo group 2 px wide with a
 small depth bias, in the rings' colour) traces the exact route from the stalker, or
 the car they drive, through every pathfound waypoint still ahead to the last ring:
 points every 2 m (at most 64 steps a leg) laid on the ground, or on the water where

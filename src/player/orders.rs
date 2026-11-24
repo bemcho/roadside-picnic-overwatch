@@ -1,7 +1,10 @@
 //! Point-and-click movement: left-click the ground to send the stalker there,
 //! Shift + left click to add a waypoint after the orders already given. Each
-//! waypoint shows a ring on the ground until it is reached. WASD still steers
+//! waypoint shows a pulsing ring on the ground until it is reached. A route
+//! started with Shift waits until Shift is released. WASD still steers
 //! directly and cancels the order.
+
+use std::f32::consts::{FRAC_PI_2, TAU};
 
 use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
@@ -33,6 +36,11 @@ const STALL_RATIO: f32 = 0.15;
 const STALL_SECONDS: f32 = 0.8;
 /// Farthest point on the ground a click can reach, in meters.
 const CLICK_REACH: f32 = 12_000.0;
+/// How often a blocked leg is pathfound again before the order is dropped.
+const STALL_REPLANS: u8 = 2;
+/// One pulse of the waypoint rings, in seconds, and how far they swell.
+const RING_PULSE_PERIOD: f32 = 1.4;
+const RING_PULSE_SWELL: f32 = 0.25;
 
 /// Where the stalker was told to go: the remaining path, target last, and
 /// the clicked stops along it still ahead.
@@ -43,6 +51,13 @@ pub struct MoveOrder {
     run: bool,
     arrival: f32,
     stalled: f32,
+    /// Waiting for Shift to be released before setting off.
+    held: bool,
+    /// The leg to the next stop should be pathfound again from where the
+    /// mover stands: scenery colliders stream in only near the stalker, so a
+    /// far leg was planned without them.
+    replan: bool,
+    replans: u8,
 }
 
 impl MoveOrder {
@@ -52,8 +67,36 @@ impl MoveOrder {
             stops: waypoints.last().copied().into_iter().collect(),
             waypoints,
             arrival,
-            stalled: 0.0,
+            ..default()
         };
+    }
+
+    /// Holds the stalker in place until [`MoveOrder::release`].
+    pub(super) fn hold(&mut self) {
+        self.held = !self.waypoints.is_empty();
+    }
+
+    pub(super) fn release(&mut self) {
+        self.held = false;
+    }
+
+    /// The next stop, when its leg must be pathfound again.
+    fn wants_replan(&self) -> Option<Vec2> {
+        self.stops.first().copied().filter(|_| self.replan)
+    }
+
+    /// Swaps the path to the next stop for `leg`, which ends at that stop (or
+    /// the nearest free spot to it).
+    fn replace_leg(&mut self, leg: Vec<Vec2>) {
+        self.replan = false;
+        let (Some(&stop), Some(&end)) = (self.stops.first(), leg.last()) else {
+            return;
+        };
+        let Some(reach) = self.waypoints.iter().position(|&point| point == stop) else {
+            return;
+        };
+        self.waypoints.splice(..=reach, leg);
+        self.stops[0] = end;
     }
 
     /// Adds a leg after the current target; the whole trip decides whether
@@ -82,8 +125,12 @@ impl MoveOrder {
         *self = Self::default();
     }
 
-    /// Ground direction toward the next waypoint, or `None` once arrived or idle.
+    /// Ground direction toward the next waypoint, or `None` once arrived, idle
+    /// or held.
     pub(super) fn steer(&mut self, at: Vec2) -> Option<Vec2> {
+        if self.held {
+            return None;
+        }
         while let Some(&next) = self.waypoints.first() {
             let reach = if self.waypoints.len() == 1 {
                 self.arrival
@@ -96,6 +143,9 @@ impl MoveOrder {
             self.waypoints.remove(0);
             if self.stops.first() == Some(&next) {
                 self.stops.remove(0);
+                // The next leg was planned from afar: plan it again from here.
+                self.replan = !self.stops.is_empty();
+                self.replans = 0;
             }
         }
         self.cancel();
@@ -106,9 +156,10 @@ impl MoveOrder {
         !self.waypoints.is_empty() && self.run
     }
 
-    /// Drops the order when the stalker keeps pushing against an obstacle.
+    /// Pathfinds the leg again when the stalker keeps pushing against an
+    /// obstacle, and drops the order when that does not help.
     pub(super) fn track_progress(&mut self, moved: f32, intended: f32, dt: f32) {
-        if self.waypoints.is_empty() || intended <= 0.0 {
+        if self.waypoints.is_empty() || self.held || intended <= 0.0 {
             return;
         }
         self.stalled = if moved < intended * STALL_RATIO {
@@ -117,7 +168,13 @@ impl MoveOrder {
             0.0
         };
         if self.stalled > STALL_SECONDS {
-            self.cancel();
+            if self.replans < STALL_REPLANS {
+                self.replans += 1;
+                self.replan = true;
+                self.stalled = 0.0;
+            } else {
+                self.cancel();
+            }
         }
     }
 }
@@ -174,7 +231,8 @@ type Solids<'w, 's> = Query<
 >;
 
 /// Turns a left click on the ground into a pathfound move order for the stalker,
-/// or for the vehicle while the stalker drives it.
+/// or for the vehicle while the stalker drives it. A Shift-click on a mover
+/// standing still starts a held route that sets off once Shift is released.
 pub(super) fn issue_move_order(
     mouse: Res<ButtonInput<MouseButton>>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -184,14 +242,18 @@ pub(super) fn issue_move_order(
     colliders: Solids,
     mut players: Query<(&Transform, &mut MoveOrder, Option<&Driving>), With<Player>>,
 ) {
+    let Ok((stalker, mut order, driving)) = players.single_mut() else {
+        return;
+    };
+    // Shift queues the new leg after the current target.
+    let queue = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+    if !queue {
+        order.release();
+    }
     if !mouse.just_pressed(MouseButton::Left) {
         return;
     }
-    let (Some(cursor), Ok((camera, eye)), Ok((stalker, mut order, driving))) = (
-        window.cursor_position(),
-        cameras.single(),
-        players.single_mut(),
-    ) else {
+    let (Some(cursor), Ok((camera, eye))) = (window.cursor_position(), cameras.single()) else {
         return;
     };
     let Some(target) = camera
@@ -202,10 +264,67 @@ pub(super) fn issue_move_order(
         return;
     };
     let from = stalker.translation.xz();
+    let start = match order.target() {
+        Some(last) if queue => last,
+        _ => from,
+    };
     let vehicle = driving.map(|driving| driving.0);
-    let (body, depth, arrival, mover) = match vehicle {
-        Some(_) => (VEHICLE_BODY, FORD_DEPTH, VEHICLE_ARRIVAL, CAR),
-        None => (STANDING, WADE_DEPTH, STALKER_ARRIVAL, STALKER),
+    let Some(path) = route(&terrain, &colliders, vehicle, start, target.xz()) else {
+        return;
+    };
+    if start == from {
+        let arrival = if vehicle.is_some() {
+            VEHICLE_ARRIVAL
+        } else {
+            STALKER_ARRIVAL
+        };
+        order.give(path, from, false, arrival);
+        if queue {
+            order.hold();
+        }
+    } else {
+        order.append(path, from);
+    }
+}
+
+/// Pathfinds the leg to the next stop again from where the mover stands, now
+/// that the scenery colliders around it have streamed in.
+pub(super) fn replan_order(
+    terrain: Res<Terrain>,
+    colliders: Solids,
+    mut players: Query<(&Transform, &mut MoveOrder, Option<&Driving>), With<Player>>,
+) {
+    let Ok((stalker, mut order, driving)) = players.single_mut() else {
+        return;
+    };
+    let Some(stop) = order.wants_replan() else {
+        return;
+    };
+    let vehicle = driving.map(|driving| driving.0);
+    match route(
+        &terrain,
+        &colliders,
+        vehicle,
+        stalker.translation.xz(),
+        stop,
+    ) {
+        Some(leg) => order.replace_leg(leg),
+        None => order.cancel(),
+    }
+}
+
+/// A path for the stalker, or for the vehicle they drive, around everything
+/// that blocks it.
+fn route(
+    terrain: &Terrain,
+    colliders: &Solids,
+    vehicle: Option<Entity>,
+    from: Vec2,
+    to: Vec2,
+) -> Option<Vec<Vec2>> {
+    let (body, depth, mover) = match vehicle {
+        Some(_) => (VEHICLE_BODY, FORD_DEPTH, CAR),
+        None => (STANDING, WADE_DEPTH, STALKER),
     };
     // The driven vehicle must not block its own route, nor anything lighter,
     // nor a gate's boom that lifts for it (the yard's always does).
@@ -220,26 +339,14 @@ pub(super) fn issue_move_order(
                 && !boom.is_some_and(|boom| boom.opens_for(pass))
         })
         .map(|(_, collider, pose, ..)| (collider, pose));
-    // Shift queues the new leg after the current target.
-    let queue = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
-    let start = match order.target() {
-        Some(last) if queue => last,
-        _ => from,
-    };
-    let Some(path) = find_path(&terrain, obstacles, start, target.xz(), body, depth) else {
-        return;
-    };
-    if start == from {
-        order.give(path, from, false, arrival);
-    } else {
-        order.append(path, from);
-    }
+    find_path(terrain, obstacles, from, to, body, depth)
 }
 
-/// Shows a ring at each stop still ahead, spawning more as orders queue up;
+/// Shows a pulsing ring at each stop still ahead, spawning more as orders queue up;
 /// boarding or leaving a vehicle drops the order.
 pub(super) fn sync_order_markers(
     mut commands: Commands,
+    time: Res<Time>,
     terrain: Res<Terrain>,
     look: Res<OrderMarkerLook>,
     mut was_driving: Local<bool>,
@@ -253,9 +360,11 @@ pub(super) fn sync_order_markers(
         *was_driving = driving;
         order.cancel();
     }
+    let beat = 0.5 - 0.5 * (time.elapsed_secs() * TAU / RING_PULSE_PERIOD).cos();
     let place = |at: Vec2| {
         Transform::from_translation(at.extend(terrain.mesh_height_at(at) + 0.06).xzy())
-            .with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2))
+            .with_rotation(Quat::from_rotation_x(-FRAC_PI_2))
+            .with_scale(Vec3::splat(1.0 + RING_PULSE_SWELL * beat))
     };
     let mut stops = order.stops.iter().copied();
     for (mut marker, mut visibility) in &mut markers {
@@ -353,10 +462,75 @@ mod tests {
         );
         assert_eq!(order.remaining(Vec2::ZERO), 30.0);
         assert!(order.runs());
+        for replan in 0..STALL_REPLANS {
+            order.track_progress(0.0, 0.2, 0.5);
+            assert_eq!(order.wants_replan(), None, "not blocked long enough");
+            order.track_progress(0.0, 0.2, 0.5);
+            assert_eq!(
+                order.wants_replan(),
+                Some(Vec2::new(30.0, 0.0)),
+                "blocked legs are pathfound again ({replan})"
+            );
+            order.replace_leg(vec![Vec2::new(0.0, 5.0), Vec2::new(30.0, 0.0)]);
+        }
         order.track_progress(0.0, 0.2, 0.5);
-        assert!(order.target().is_some());
         order.track_progress(0.0, 0.2, 0.5);
-        assert!(order.target().is_none(), "a blocked order is dropped");
+        assert!(
+            order.target().is_none(),
+            "an order still blocked after replanning is dropped"
+        );
+    }
+
+    #[test]
+    fn a_reached_stop_replans_the_next_leg_from_where_the_stalker_stands() {
+        let mut order = MoveOrder::default();
+        order.give(
+            vec![Vec2::new(4.0, 0.0)],
+            Vec2::ZERO,
+            false,
+            STALKER_ARRIVAL,
+        );
+        order.append(
+            vec![Vec2::new(40.0, 0.0), Vec2::new(40.0, 30.0)],
+            Vec2::ZERO,
+        );
+        assert_eq!(order.wants_replan(), None);
+        assert_eq!(order.steer(Vec2::new(4.1, 0.0)), Some(Vec2::X));
+        assert_eq!(order.wants_replan(), Some(Vec2::new(40.0, 30.0)));
+        // A tree streamed in on the way: the new leg ends beside the blocked stop.
+        order.replace_leg(vec![Vec2::new(20.0, 10.0), Vec2::new(40.5, 30.0)]);
+        assert_eq!(order.wants_replan(), None);
+        assert_eq!(
+            order.waypoints,
+            [Vec2::new(20.0, 10.0), Vec2::new(40.5, 30.0)]
+        );
+        assert_eq!(order.stops, [Vec2::new(40.5, 30.0)]);
+        assert!(
+            order.steer(Vec2::new(20.0, 10.1)).is_some(),
+            "on along the new leg"
+        );
+        assert_eq!(order.steer(Vec2::new(40.5, 30.1)), None, "arrives");
+        assert_eq!(order.wants_replan(), None, "nothing left to plan");
+    }
+
+    #[test]
+    fn a_held_route_waits_for_shift_to_be_released() {
+        let mut order = MoveOrder::default();
+        order.hold();
+        assert!(!order.held, "nothing to hold");
+        order.give(
+            vec![Vec2::new(4.0, 0.0)],
+            Vec2::ZERO,
+            false,
+            STALKER_ARRIVAL,
+        );
+        order.hold();
+        order.append(vec![Vec2::new(4.0, 3.0)], Vec2::ZERO);
+        assert_eq!(order.steer(Vec2::ZERO), None, "held in place");
+        order.track_progress(0.0, 0.2, 2.0);
+        assert_eq!(order.target(), Some(Vec2::new(4.0, 3.0)), "not a stall");
+        order.release();
+        assert_eq!(order.steer(Vec2::ZERO), Some(Vec2::X));
     }
 
     #[test]

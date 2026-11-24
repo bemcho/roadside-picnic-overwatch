@@ -36,7 +36,9 @@ use camera::{
     pan_camera,
 };
 pub(crate) use orders::cast_to_ground;
-use orders::{MoveOrder, issue_move_order, prepare_order_markers, sync_order_markers};
+use orders::{
+    MoveOrder, issue_move_order, prepare_order_markers, replan_order, sync_order_markers,
+};
 use vehicle::{
     Driver, Driving, Patrol, Vehicle, drive_patrol, drive_traffic, drive_vehicle, interact_vehicle,
     pose_wheels, spawn_patrol, spawn_traffic, sync_spotlight,
@@ -162,6 +164,7 @@ impl Plugin for PlayerPlugin {
                     orbit_camera,
                     pan_camera,
                     issue_move_order,
+                    replan_order,
                     respawn_player,
                     interact_vehicle,
                     move_player,
