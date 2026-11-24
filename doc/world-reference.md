@@ -41,7 +41,10 @@ still is held until Shift is released (appending to a moving order never stops i
 Scenery colliders stream in only near the stalker, so a far leg is planned
 without them: `replan_order` pathfinds the leg to the next stop again from where
 the mover stands each time a stop is reached, and when the mover stalls (no
-progress for 0.8 s); after two stalls on one leg the order is dropped. The stop
+progress for 0.8 s). After a stall the mover backs away for 1.2 s first: the
+car reverses, swinging its nose toward the new leg, since it cannot turn in
+place against a rock. Two stalls without 5 m of progress between them drop the
+order; a stall farther on meets a new obstacle and starts the count again. The stop
 rings pulse (1.4 s, swelling 25%). A thin line (`player/route.rs`: a gizmo group 2 px wide with a
 small depth bias, in the rings' colour) traces the exact route from the stalker, or
 the car they drive, through every pathfound waypoint still ahead to the last ring:
