@@ -11,6 +11,7 @@
 use std::f32::consts::PI;
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::visibility::VisibilityRange;
 use bevy::gltf::GltfMaterial;
 use bevy::image::ImageLoaderSettings;
 use bevy::light::NotShadowCaster;
@@ -556,8 +557,8 @@ pub(super) fn prepare_cordon(
     commands.insert_resource(Cordon {
         root,
         chunks: wall_chunks(),
-        active: HashMap::default(),
-        centers: Vec::new(),
+        shown: HashMap::default(),
+        solid: HashMap::default(),
         wall: WallPart {
             model: wall,
             paint: materials.add(concrete),
@@ -817,12 +818,25 @@ fn wall_chunks() -> HashMap<IVec2, Vec<Panel>> {
     chunks
 }
 
+/// How far from the camera (to a chunk's center, in meters) the wall shows, and
+/// over how many more it fades out. A Perimeter gun shows to 710 m and stands
+/// within ~70 m of its chunk's center, so its wall is always there under it.
+const WALL_SHOWN: f32 = 800.0;
+const WALL_FADE: f32 = 50.0;
+/// Tiles around the camera's tile whose wall is built: every chunk within
+/// `WALL_SHOWN + WALL_FADE` of the camera.
+const VIEW_TILES: i32 = ((WALL_SHOWN + WALL_FADE) / TILE_SIZE) as i32 + 1;
+/// Tiles around a stream anchor whose wall posts collide.
+const SOLID_TILES: i32 = 2;
+
 #[derive(Resource)]
 pub(super) struct Cordon {
     root: Entity,
     chunks: HashMap<IVec2, Vec<Panel>>,
-    active: HashMap<IVec2, Entity>,
-    centers: Vec<IVec2>,
+    /// The wall drawn around the cameras: each chunk's box, razor wire and sandbags.
+    shown: HashMap<IVec2, Entity>,
+    /// The wall's posts colliding around the stream anchors.
+    solid: HashMap<IVec2, Entity>,
     /// The concrete box, the razor wire on top of it and the sandbags along its foot.
     wall: WallPart,
     wire: WallPart,
@@ -835,34 +849,100 @@ struct WallPart {
     paint: Handle<StandardMaterial>,
 }
 
-pub(super) fn stream_cordon(
+/// Something standing on the Perimeter wall: shown only while the wall chunk
+/// under it is drawn, so it never hangs in the air where the wall is not.
+#[derive(Component)]
+pub(super) struct OnWall(IVec2);
+
+impl OnWall {
+    /// Standing on the wall at `at` (x, z).
+    pub(super) fn at(at: Vec2) -> Self {
+        Self(tile_at(at))
+    }
+}
+
+/// Draws the wall within `VIEW_TILES` of each camera, one chunk a frame nearest
+/// first (a chunk's three meshes take a few ms to build), and drops the rest.
+pub(super) fn stream_wall_view(
     mut commands: Commands,
-    anchors: Query<&Transform, With<StreamAnchor>>,
+    cameras: Query<&Transform, With<Camera3d>>,
     terrain: Res<Terrain>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut cordon: ResMut<Cordon>,
 ) {
-    let centers = anchor_tiles(anchors);
-    if cordon.centers != centers {
-        cordon.centers = centers.clone();
-        cordon.active.retain(|tile, entity| {
-            let keep = near_anchor(*tile, &centers, 2);
-            if !keep {
-                commands.entity(*entity).despawn();
-            }
-            keep
-        });
-    }
-    // One chunk a frame, nearest an anchor first: a chunk's three meshes and its
-    // posts take up to ~4 ms to build, and a step onto a new tile admits several.
-    let next = neighborhoods(&centers, 2)
-        .filter(|tile| !cordon.active.contains_key(tile) && cordon.chunks.contains_key(tile))
-        .min_by_key(|&tile| anchor_distance(tile, &centers));
-    if let Some(tile) = next
-        && let Some(panels) = cordon.chunks.get(&tile)
+    let views = anchor_tiles(cameras);
+    let cordon = &mut *cordon;
+    if let Some(tile) = restream(
+        &mut commands,
+        &mut cordon.shown,
+        &cordon.chunks,
+        &views,
+        VIEW_TILES,
+    ) && let Some(panels) = cordon.chunks.get(&tile)
     {
-        let entity = spawn_wall_chunk(&mut commands, &mut meshes, &terrain, &cordon, tile, panels);
-        cordon.active.insert(tile, entity);
+        let entity = spawn_wall_chunk(&mut commands, &mut meshes, &terrain, cordon, tile, panels);
+        cordon.shown.insert(tile, entity);
+    }
+}
+
+/// Gives the wall's posts colliders within `SOLID_TILES` of each stream anchor,
+/// one chunk a frame nearest first, and drops the rest.
+pub(super) fn stream_wall_solids(
+    mut commands: Commands,
+    anchors: Query<&Transform, With<StreamAnchor>>,
+    terrain: Res<Terrain>,
+    mut cordon: ResMut<Cordon>,
+) {
+    let centers = anchor_tiles(anchors);
+    let cordon = &mut *cordon;
+    if let Some(tile) = restream(
+        &mut commands,
+        &mut cordon.solid,
+        &cordon.chunks,
+        &centers,
+        SOLID_TILES,
+    ) && let Some(panels) = cordon.chunks.get(&tile)
+    {
+        let entity = spawn_wall_posts(&mut commands, &terrain, cordon.root, tile, panels);
+        cordon.solid.insert(tile, entity);
+    }
+}
+
+/// Despawns the chunks in `built` more than `radius` tiles from every tile in
+/// `around`, and says which missing chunk within it to build next, nearest first.
+fn restream(
+    commands: &mut Commands,
+    built: &mut HashMap<IVec2, Entity>,
+    chunks: &HashMap<IVec2, Vec<Panel>>,
+    around: &[IVec2],
+    radius: i32,
+) -> Option<IVec2> {
+    built.retain(|tile, entity| {
+        let keep = near_anchor(*tile, around, radius);
+        if !keep {
+            commands.entity(*entity).despawn();
+        }
+        keep
+    });
+    neighborhoods(around, radius)
+        .filter(|tile| !built.contains_key(tile) && chunks.contains_key(tile))
+        .min_by_key(|&tile| anchor_distance(tile, around))
+}
+
+/// Shows what stands on the wall only where the wall under it is drawn.
+pub(super) fn show_with_wall(
+    cordon: Option<Res<Cordon>>,
+    mut riders: Query<(&OnWall, &mut Visibility)>,
+) {
+    let Some(cordon) = cordon else {
+        return;
+    };
+    for (OnWall(tile), mut visibility) in &mut riders {
+        visibility.set_if_neq(if cordon.shown.contains_key(tile) {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        });
     }
 }
 
@@ -875,11 +955,16 @@ fn spawn_wall_chunk(
     panels: &[Panel],
 ) -> Entity {
     let origin = tile.as_vec2() * TILE_SIZE;
+    let range = VisibilityRange {
+        end_margin: WALL_SHOWN..WALL_SHOWN + WALL_FADE,
+        use_aabb: true,
+        ..default()
+    };
     let mut batched = |part: &WallPart| {
         (
             Mesh3d(meshes.add(part.model.batch(terrain, origin, panels))),
             MeshMaterial3d(part.paint.clone()),
-            detail_range(205.0, 25.0),
+            range.clone(),
         )
     };
     let mut root = commands.spawn((
@@ -903,17 +988,37 @@ fn spawn_wall_chunk(
                 part.insert(NotShadowCaster);
             }
         }
-        for &panel in panels {
-            for at in panel.pillars() {
-                wall.spawn((
-                    Collider(panel.collider(at)),
-                    Unclimbable,
-                    wall_pillar_pose(terrain, at, origin),
-                ));
-            }
-        }
     })
     .id()
+}
+
+/// A collider for every post of the chunk's panels.
+fn spawn_wall_posts(
+    commands: &mut Commands,
+    terrain: &Terrain,
+    root: Entity,
+    tile: IVec2,
+    panels: &[Panel],
+) -> Entity {
+    let origin = tile.as_vec2() * TILE_SIZE;
+    commands
+        .spawn((
+            ChildOf(root),
+            Name::new("Cordon posts"),
+            Transform::from_xyz(origin.x, 0.0, origin.y),
+        ))
+        .with_children(|posts| {
+            for &panel in panels {
+                for at in panel.pillars() {
+                    posts.spawn((
+                        Collider(panel.collider(at)),
+                        Unclimbable,
+                        wall_pillar_pose(terrain, at, origin),
+                    ));
+                }
+            }
+        })
+        .id()
 }
 
 fn wall_pillar_pose(terrain: &Terrain, at: Vec2, origin: Vec2) -> Transform {
@@ -1872,15 +1977,28 @@ mod tests {
     }
 
     #[test]
-    fn walls_and_their_colliders_stream_together_between_the_yard_and_frontier() {
+    fn the_wall_shows_around_the_camera_and_collides_around_the_stalker() {
         let mut app = App::new();
         app.insert_resource(Terrain::new())
             .init_resource::<Assets<Mesh>>()
-            .add_systems(Update, stream_cordon);
+            .add_systems(
+                Update,
+                (stream_wall_view, stream_wall_solids, show_with_wall).chain(),
+            );
         let world = app.world_mut();
         let root = world.spawn(Transform::IDENTITY).id();
+        let yard = Vec3::new(BASE.0, 0.0, BASE.1);
         let player = world
-            .spawn((Player::default(), Transform::from_xyz(BASE.0, 0.0, BASE.1)))
+            .spawn((Player::default(), Transform::from_translation(yard)))
+            .id();
+        let camera = world
+            .spawn((Camera3d::default(), Transform::from_translation(yard)))
+            .id();
+        let gun = world
+            .spawn((
+                OnWall::at(Vec2::new(PERIMETER_X, BASE.1)),
+                Visibility::Hidden,
+            ))
             .id();
         let triangle = |tangents| WallPart {
             model: WallModel {
@@ -1898,58 +2016,97 @@ mod tests {
         world.insert_resource(Cordon {
             root,
             chunks: wall_chunks(),
-            active: HashMap::default(),
-            centers: Vec::new(),
+            shown: HashMap::default(),
+            solid: HashMap::default(),
             wall: triangle(vec![[1.0, 0.0, 0.0, 1.0]; 3]),
             wire: triangle(Vec::new()),
             sandbags: triangle(Vec::new()),
         });
         app.update();
+        let cordon = app.world().resource::<Cordon>();
         assert_eq!(
-            app.world().resource::<Cordon>().active.len(),
-            1,
+            (cordon.shown.len(), cordon.solid.len()),
+            (1, 1),
             "one chunk a frame"
         );
-        for _ in 0..25 {
+        for _ in 0..150 {
             app.update();
         }
-        let original = app.world().resource::<Cordon>().active.clone();
-        assert!(original.len() > 1);
+        let cordon = app.world().resource::<Cordon>();
+        let (shown, solid) = (cordon.shown.clone(), cordon.solid.clone());
+        assert!(
+            solid.len() > 1 && shown.len() > solid.len(),
+            "drawn farther than it collides"
+        );
+        assert!(solid.keys().all(|tile| shown.contains_key(tile)));
+        assert_eq!(
+            app.world().get::<Visibility>(gun),
+            Some(&Visibility::Inherited)
+        );
+
+        // The camera roams to the far edge while the stalker stays in the yard.
+        app.world_mut()
+            .get_mut::<Transform>(camera)
+            .unwrap()
+            .translation
+            .x = EDGE - 5.0;
+        for _ in 0..150 {
+            app.update();
+        }
+        let cordon = app.world().resource::<Cordon>();
+        let view = tile_at(Vec2::new(EDGE - 5.0, BASE.1));
+        assert!(!cordon.shown.is_empty());
+        assert!(
+            cordon
+                .shown
+                .keys()
+                .all(|tile| near_anchor(*tile, &[view], VIEW_TILES))
+        );
+        let left: Vec<_> = shown
+            .iter()
+            .filter(|(tile, _)| !near_anchor(**tile, &[view], VIEW_TILES))
+            .collect();
+        assert!(!left.is_empty(), "the camera left some wall behind");
+        assert!(
+            left.iter()
+                .all(|(_, entity)| app.world().get_entity(**entity).is_err())
+        );
+        assert_eq!(cordon.solid, solid, "the stalker's posts stay");
+        assert_eq!(
+            app.world().get::<Visibility>(gun),
+            Some(&Visibility::Hidden)
+        );
+        for &entity in cordon.shown.values() {
+            assert!(app.world().get::<Mesh3d>(entity).is_some());
+            // The razor wire and the sandbags.
+            let children = app.world().get::<Children>(entity).unwrap();
+            assert_eq!(children.len(), 2);
+            assert!(
+                children
+                    .iter()
+                    .all(|child| app.world().get::<Mesh3d>(child).is_some())
+            );
+        }
+        for &entity in cordon.solid.values() {
+            let posts = app.world().get::<Children>(entity).unwrap();
+            assert!(
+                posts
+                    .iter()
+                    .all(|post| app.world().get::<Collider>(post).is_some())
+            );
+        }
+
+        // The stalker walks there too.
         app.world_mut()
             .get_mut::<Transform>(player)
             .unwrap()
             .translation
             .x = EDGE - 5.0;
-        for _ in 0..25 {
+        for _ in 0..30 {
             app.update();
         }
         let cordon = app.world().resource::<Cordon>();
-        assert!(!cordon.active.is_empty());
-        assert!(
-            cordon
-                .active
-                .keys()
-                .all(|tile| !original.contains_key(tile))
-        );
-        assert!(
-            original
-                .values()
-                .all(|&entity| app.world().get_entity(entity).is_err())
-        );
-        for &entity in cordon.active.values() {
-            assert!(app.world().get::<Mesh3d>(entity).is_some());
-            // The razor wire and the sandbags, and a collider for every post.
-            let children = app.world().get::<Children>(entity).unwrap();
-            let (overlays, posts): (Vec<_>, Vec<_>) = children
-                .iter()
-                .partition(|&child| app.world().get::<Mesh3d>(child).is_some());
-            assert_eq!(overlays.len(), 2);
-            assert!(
-                posts
-                    .iter()
-                    .all(|&child| app.world().get::<Collider>(child).is_some())
-            );
-        }
+        assert!(cordon.solid.keys().all(|tile| !solid.contains_key(tile)));
     }
 
     #[test]

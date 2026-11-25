@@ -29,7 +29,8 @@ const FLOOR_DATUM: f32 = 0.0217;
 const DOOR_Z: f32 = 0.375;
 const DOOR_HALF_WIDTH: f32 = 0.294;
 const HALL_PROBE_INTENSITY: f32 = 8_000.0;
-const PENDANT_POWER: f32 = 4.9e5;
+/// A pendant lamp's light per square meter of the height it hangs over the floor.
+pub(in crate::world) const PENDANT_POWER: f32 = 4.9e5;
 
 /// The hangar's root, posed on its pad.
 #[derive(Component)]
@@ -228,24 +229,51 @@ fn spawn_hall_probe(commands: &mut Commands, hall: Entity, images: &mut Assets<I
     ));
 }
 
+/// The hangar's pendant lamp: a steel housing with a glowing lens under it. The
+/// Institute's lamps (`world/institute.rs`) are the same fixture.
+pub(in crate::world) struct LampKit {
+    pub steel: Handle<StandardMaterial>,
+    pub lens: Handle<StandardMaterial>,
+    pub housing: Handle<Mesh>,
+    pub panel: Handle<Mesh>,
+}
+
+impl LampKit {
+    /// How far the lens sits below the housing's center.
+    pub const LENS_DROP: f32 = 0.072;
+    /// How far the light sits below the housing's center.
+    pub const LIGHT_DROP: f32 = 0.12;
+
+    pub fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
+        Self {
+            steel: materials.add(StandardMaterial {
+                base_color: Color::srgb(0.20, 0.21, 0.22),
+                metallic: 0.58,
+                perceptual_roughness: 0.67,
+                ..default()
+            }),
+            lens: materials.add(StandardMaterial {
+                emissive: LinearRgba::rgb(1.0, 0.88, 0.72) * 42_000.0,
+                ..default()
+            }),
+            housing: meshes.add(Cuboid::new(0.98, 0.14, 0.37)),
+            panel: meshes.add(Cuboid::new(0.83, 0.024, 0.27)),
+        }
+    }
+}
+
 fn spawn_lamps(
     commands: &mut Commands,
     hall: Entity,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
-    let steel = materials.add(StandardMaterial {
-        base_color: Color::srgb(0.20, 0.21, 0.22),
-        metallic: 0.58,
-        perceptual_roughness: 0.67,
-        ..default()
-    });
-    let lens = materials.add(StandardMaterial {
-        emissive: LinearRgba::rgb(1.0, 0.88, 0.72) * 42_000.0,
-        ..default()
-    });
-    let housing = meshes.add(Cuboid::new(0.98, 0.14, 0.37));
-    let panel = meshes.add(Cuboid::new(0.83, 0.024, 0.27));
+    let LampKit {
+        steel,
+        lens,
+        housing,
+        panel,
+    } = LampKit::new(meshes, materials);
     for (x, z, roof) in [
         (0.0, 9.0, 20.60),
         (-8.6, 6.0, 18.00),
@@ -274,7 +302,7 @@ fn spawn_lamps(
             RoofFixture,
             Mesh3d(panel.clone()),
             MeshMaterial3d(lens.clone()),
-            Transform::from_translation(lamp - Vec3::Y * 0.072),
+            Transform::from_translation(lamp - Vec3::Y * LampKit::LENS_DROP),
             ChildOf(hall),
         ));
         commands.spawn((
@@ -292,7 +320,8 @@ fn spawn_lamps(
                 shadow_maps_enabled: z == 9.0,
                 ..default()
             },
-            Transform::from_translation(lamp - Vec3::Y * 0.12).looking_to(Vec3::NEG_Y, Vec3::Z),
+            Transform::from_translation(lamp - Vec3::Y * LampKit::LIGHT_DROP)
+                .looking_to(Vec3::NEG_Y, Vec3::Z),
             ChildOf(hall),
         ));
     }

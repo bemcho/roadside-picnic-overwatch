@@ -215,9 +215,15 @@ the stalker stands still.
   track and the gate; along the patrolled stretch it grows thicker, mostly
   bushes (`bushy`), with trees on both sides (`tree_belt`,
   `canopy::belt_trees`). A separate continuous wall marks the map's edge; the panels
-  follow the rendered terrain and stay above the water. Wall meshes and solid
-  collision stream in nearby terrain tiles, one chunk per frame, nearest an
-  anchor first (a chunk takes up to ~4 ms to build).
+  follow the rendered terrain and stay above the water. The wall is drawn out
+  to 800 m from the camera (`WALL_SHOWN`, fading over the next 50 m): its
+  chunks stream in the terrain tiles within reach of each camera
+  (`stream_wall_view`), one chunk per frame, nearest first (a chunk takes up to
+  ~4 ms to build); the full drawn wall costs about 1 FPS against the old 400 m
+  reach. Its collision posts stream separately, in the tiles around a
+  `StreamAnchor` (`stream_wall_solids`). Anything that stands on the wall
+  carries `OnWall` and is hidden while its tile's wall chunk is not drawn
+  (`show_with_wall`), so nothing hangs in the air past the wall's end.
   Keep the staging area and driveway clear; the tree and bush shelterbelt is
   concentrated behind the hangar and along the sides.
   The wall repeats one baked box thousands of times: an 84-vertex box
@@ -294,7 +300,14 @@ the stalker stands still.
   footprint around any `StreamAnchor`: `stream_full_sites` wants the scan from
   `GpuScans` 40 m before that (`UPLOAD_LEAD`) and shows it once it is on the
   GPU, then drops it 60 m past the range, or if the scan leaves the GPU, and
-  the stand-in shows again. The Institute's Tripo scan came without
+  the stand-in shows again. The Institute is lit like the hangar
+  (`src/world/institute.rs`): the hangar's pendant fixture (`base::LampKit`,
+  same housing, lens and `PENDANT_POWER` spot) hangs on brackets 0.55 m out
+  from the front and back façades at 4.6 m (four each, away from the porches),
+  two hang under each porch canopy (3 m), and a fixture-less floodlight 14 m
+  over each roof helipad lights the pads. Their positions are in the scan's
+  model units, measured from `uhd/institute.glb` and posed with
+  `sites::institute_pose`; none casts shadows. The Institute's Tripo scan came without
   UVs or textures: `tools/prepare_institute_asset.py` (headless Blender) paints
   it with one atlas from its concept image in the workspace (window bays on the
   front and back, precast panels on the sides and roof), then builds its
@@ -450,7 +463,9 @@ the stalker stands still.
   The one that would land in the Institute gate steps to `GATE_CLEAR` (12 m)
   from its middle. Each has a `Collider`, is `Unclimbable` and describes itself
   (`Place::Turret`). The full model shows within 150 m of the camera, the light
-  `low/` one out to 700 m, as do the beam and spot.
+  `low/` one out to 700 m, as do the beam and spot. A gun and its effects
+  (beam, spot and muzzle flash, under one holder) are `OnWall`: they hide
+  while the wall under them is not drawn.
   *Scan:* the head sweeps ±60° about the Zone's heading (-X) with a 26 s
   period while the beam's reach nods between 60 and 400 m with a 37 s period,
   a Lissajous scan from a per-gun phase. The beam is a red additive glow
