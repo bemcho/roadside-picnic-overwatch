@@ -36,9 +36,10 @@ pub const DESKTOP_GB: f32 = 0.6;
 pub const GAME_VRAM_GB: f32 = 2.4;
 /// GPU bytes per file byte of a scan (the five trees: about 700 MB from 428 MB).
 pub const GPU_BYTES_PER_FILE_BYTE: f32 = 1.65;
-/// GiB of the budget that prefill leaves free. The game's VRAM grows in 256 MiB
-/// allocator steps, and one such step in everything else lowers the budget by
-/// as much (0.4 GB measured on the 2060, just after the entry curtain). A
+/// GiB of the budget that prefill leaves free. The game's VRAM grows in
+/// allocator steps (256 MiB before `main` asked wgpu for 8-64 MiB blocks), and
+/// one such step in everything else lowers the budget by as much (0.4 GB
+/// measured on the 2060 with 256 MiB blocks, just after the entry curtain). A
 /// scan nobody wants yet must not sit at the budget's edge, where that dip
 /// evicts it and prefill loads it back. Behind the entry curtain, while the
 /// world's own uploads still land, every admission leaves it free
@@ -46,8 +47,8 @@ pub const GPU_BYTES_PER_FILE_BYTE: f32 = 1.65;
 pub const PREFILL_HEADROOM_GB: f32 = 0.5;
 /// Seconds a dropped scan's bytes may take to leave the driver's usage before
 /// they stop holding room for other scans. Rendering lets go of a scan within
-/// a few frames, but wgpu's allocator keeps freed memory in its 256 MiB blocks
-/// until a block empties, so a free may never show; a scan loaded later
+/// a few frames, but wgpu's allocator keeps freed memory in its blocks (8-64
+/// MiB) until a block empties, so a free may not show; a scan loaded later
 /// usually reuses it, which the reading then shows.
 pub const FREE_WAIT_SECONDS: f32 = 30.0;
 /// GiB the scan budget gives up for the rest of the run each time the GPU runs

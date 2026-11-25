@@ -843,12 +843,15 @@ Important paths:
     (and most parts of the multipart plant scans) stay batched. Load dense
     scans only through `GpuScans` (want, pin, prefill within the live budget)
     rather than outright. A freed buffer goes back to wgpu's allocator, which
-    holds video memory in 256 MiB blocks and returns a block to the driver only
-    once it is empty: `nvidia-smi` drops by a whole block now and then (on the
-    6 GB RTX 2060 it once fell from 2809 to 2553 MiB in a replay roaming the
-    sites) but mostly stays level (in a drive away from the hangar, eight
-    scans, about 1 GB, left and it went from 5439 to 5427 MiB). The
-    driver's usage behaves the same. So `GpuScans::apply_reading` counts a
+    holds video memory in blocks and returns a block to the driver only
+    once it is empty. With wgpu's default 256 MiB blocks `nvidia-smi` dropped
+    by a whole block now and then but mostly stayed level (in a drive away
+    from the hangar, eight scans, about 1 GB, left and it went from 5439 to
+    5427 MiB), and ~1.2 GB of the 2060 sat reserved but unused, enough for the
+    next block to run the GPU out of memory; `main` now asks for 8-64 MiB
+    blocks (`MemoryHints::MemoryUsage`), which leaves ~0.45 GB unused and
+    lets frees reach the driver more often. The driver's usage behaves the
+    same. So `GpuScans::apply_reading` counts a
     dropped scan's bytes as scan memory, not the rest of the game's, until a
     reading shows them freed or reused by a later load, and sizes the budget
     by the most the rest of the game has used this run: a scan that leaves

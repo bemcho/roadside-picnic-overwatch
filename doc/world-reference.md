@@ -706,7 +706,11 @@ the stalker stands still.
   less `MARGIN_GB` (0.5) and the most the rest of the game (all but the
   scans) has used this run. A dropped scan's bytes count as scan memory, not
   the rest of the game, until a reading shows them freed or reused (wgpu
-  keeps freed memory in 256 MiB blocks); after `FREE_WAIT_SECONDS` (30) they
+  keeps freed memory in blocks until they empty; `main.rs` asks for 8-64 MiB
+  blocks, `MemoryHints::MemoryUsage`, as the default 256 MiB ones left ~1.2 GB
+  of the 6 GB card reserved but unused, which is what ran it out of memory;
+  the same night drive uses ~0.43 GB less VRAM at the same frame rate);
+  after `FREE_WAIT_SECONDS` (30) they
   stop holding room for new scans, but a wanted scan that finds no other room
   may still load into them, one at a time within the live budget: the reading
   after it lands frees them if it reused them, or else no scan tries again

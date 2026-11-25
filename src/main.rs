@@ -13,6 +13,8 @@ mod world;
 mod zone;
 
 use bevy::prelude::*;
+use bevy::render::RenderPlugin;
+use bevy::render::settings::{MemoryHints, WgpuSettings};
 
 use assets::gpu_scans::GpuScansPlugin;
 #[cfg(not(target_arch = "wasm32"))]
@@ -31,7 +33,19 @@ fn main() {
     // Asset sources are built with `AssetPlugin`, so the RAM source comes first.
     #[cfg(not(target_arch = "wasm32"))]
     register_ram_source(&mut app, "assets");
-    app.add_plugins(DefaultPlugins)
+    // wgpu's default 256 MiB memory blocks left ~1.2 GB of a 6 GB card
+    // reserved but unused, and a dropped scan freed nothing while its block
+    // held anything else; 8-64 MiB blocks keep ~0.4 GB less in use at the
+    // same frame rate (measured on the RTX 2060).
+    let render = RenderPlugin {
+        render_creation: WgpuSettings {
+            memory_hints: MemoryHints::MemoryUsage,
+            ..default()
+        }
+        .into(),
+        ..default()
+    };
+    app.add_plugins(DefaultPlugins.set(render))
         // Parsed once the log is up, so a bad `--vram` value is reported.
         .insert_resource(LaunchOptions::from_env())
         // After the options: its fallback budget follows `--vram`.
