@@ -60,6 +60,8 @@ pub(crate) struct GroundFog {
     pub(super) clouds: Vec4,
     /// Shroud mask corner (x, z) and one over its extent.
     pub(super) shroud: Vec4,
+    /// Harmont's fog: top range (m) and extinction range (1/m), thin to dense.
+    pub(super) harmont: Vec4,
 }
 
 /// The fog field texture, shared with the render world.

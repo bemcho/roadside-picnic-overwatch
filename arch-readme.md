@@ -331,6 +331,8 @@ Exposure eases from EV 13 by day to EV 9 at night. Each day rolls a sky
 (clear, humid, overcast, rain) with its own temperature curve and dew point.
 Relative humidity (Magnus) therefore peaks late at night and at dawn, and
 `Weather::fog` turns near-saturated air into fog. Days blend across midnight.
+`update_ground_fog` raises that tendency to at least 0.7 every night
+(`night_fog`: it gathers 19:00-21:00 and lifts 07:30-09:30), whatever the day.
 
 The ground fog is a custom render pass (`ground_fog/render.rs`), not Bevy's
 `FogVolume`. A single box cannot follow hills, and Bevy attenuates the sun's
@@ -342,27 +344,35 @@ uniform, the fog field and the shroud mask (`ShroudMask`, extracted from
 `shroud.rs`). `ground_fog.wesl` marches each pixel's ray from the camera to the
 depth buffer:
 
-- It jumps toward the layer's ceiling over rising ground.
+- It jumps toward the local layer's ceiling (the Zone's or Harmont's) over
+  rising ground.
 - It drops through clear air to the local fog top.
-- It crosses the soft top in short, per-pixel jittered steps.
+- It crosses the soft top in short, per-pixel jittered steps (longer ones in
+  Harmont's thin fog).
 - Inside, it follows the fog's mean free path until the scene is hidden.
 - Direct light (shadow, atmosphere, billow self-shadow, phase) is reused over
-  3 m of ray.
+  3 m of ray in the Zone's fog and 10 m in Harmont's.
 - The whole pass costs about 2 ms of GPU time at 1280x720 in the densest dawn
   view on an RTX 2060 (`render/ground_fog/elapsed_gpu`).
 
 The fog field (`ground_fog/field.rs`) is a 513x513 `Rgba16Float` texture
 covering the 4,096 m scenic square at 8 m. `prepare_landscape` fills it from the
 distant tiles' vertices. It stores the surface height (water level where
-flooded, split into coarse and remainder halves for precision) and a fog
-affinity, which is zero except where fog may gather: water and its banks (the
-marsh, the coast and the lake basin), the quarry basin and the three dense
-woods (`canopy::wood`). `sample_fog` multiplies the layer by that place mask,
-frayed by the drifting banks noise, so saturated air (`Weather::fog`) decides
-when fog forms and the field decides where. The layer's top lies between 1.25 and 2.6 m
-above that surface, and visibility inside spans 1 to 5 two-metre ground tiles.
-The hangar hall is a fog-free box. The density fades out above 140-520 m of
-camera height.
+flooded, split into coarse and remainder halves for precision), a fog
+affinity and which side of the Perimeter the texel lies on (alpha: 0 in the
+Zone, 1 on Harmont's side, blended over 60 m across `PERIMETER_X`). The
+affinity is 0.6 on all low ground, falls to zero over 22-45 m of surface height
+so the hills stay clear, and is higher over water and its banks (the marsh, the
+coast and the lake basin), the quarry basin and the three dense woods
+(`canopy::wood`). `sample_fog` multiplies the layer by that place mask, frayed
+by the drifting banks noise, so saturated air decides when fog forms and the
+field decides where. In the Zone a second noise opens small clear patches,
+and the layer's top lies between 1.25 and 2.6 m above the surface with
+visibility inside of 1 to 5 two-metre ground tiles. On Harmont's side (the
+town, the hangar yard, the Institute) the `GroundFog::harmont` uniform gives a
+thinner fog, 90-150 m visibility, densest on the ground and thinning upward,
+whose top rises and falls between 1.5 and 8 m with a 210 m noise. The hangar
+hall is a fog-free box. The density fades out above 140-520 m of camera height.
 
 The same pass marches three cloud layers (`cloud_layer` in `ground_fog.wesl`:
 bases near 170, 450 and 1,050 m, each a slab with its own cell size, drift and
