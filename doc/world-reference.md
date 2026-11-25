@@ -468,7 +468,9 @@ the stalker stands still.
   1.0 (45°), and rides over rocks, logs and other solids up to 1 m high, each
   quarter of its tracks resting on the highest one under it (`Footing`);
   taller ones, more than 0.5 m above its tracks' line under the hull, stop it,
-  though it can still turn in place. Deep water and climbs slow it, to 40% at
+  though it can still turn in place. As with the car, a step whose turn would
+  swing a corner into a solid goes straight instead, if that is free, so nosed
+  against a rock it still backs out at full lock. Deep water and climbs slow it, to 40% at
   its fording depth or steepest grade. Four lamps (two headlamps on the upper
   glacis, 50 m; two shadow-casting floods on the cab roof, 180 m) burn while
   it is out on an expedition or driven, as the car's do while driven
