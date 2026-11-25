@@ -9,6 +9,7 @@ mod ground_fog;
 mod guards;
 mod helicopters;
 mod hydrology;
+mod institute;
 mod landscape;
 mod map;
 mod marsh;
@@ -148,6 +149,7 @@ impl Plugin for WorldPlugin {
                 (weather::start_clock, spawn_sky).chain(),
                 places::start_survey,
                 base::spawn_base,
+                institute::spawn_institute_lights,
                 plants::prepare_plant_looks,
                 tree_fall::start_break_clock,
                 wildlife::spawn_wildlife,
@@ -193,7 +195,12 @@ impl Plugin for WorldPlugin {
                 )
                     .chain(),
                 stream_ground_detail,
-                cordon::stream_cordon,
+                (
+                    cordon::stream_wall_view,
+                    cordon::stream_wall_solids,
+                    cordon::show_with_wall,
+                )
+                    .chain(),
                 sites::stream_full_sites,
             )
                 .run_if(in_state(AppState::InGame)),

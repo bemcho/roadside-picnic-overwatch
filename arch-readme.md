@@ -107,7 +107,7 @@ flowchart LR
 | Places | `src/world/places.rs` | Named places at a point or along a ray, `Describe`, the `Explored` survey grid |
 | Fog of war | `src/world/shroud.rs` | `Shroud` state (V), survey mask texture for the ground fog pass (opaque drifting black smoke, drawn after the sky), culling of shrouded entities |
 | Streaming | `src/world/landscape.rs`, `scenery.rs` | Async terrain build, LOD swaps, 3x3 scenery/collider streaming |
-| Site content | `src/world/sites.rs`, `cordon.rs`, `base/` | Landmarks, wall/yard, hangar, props, vehicles, artifact showcase |
+| Site content | `src/world/sites.rs`, `institute.rs`, `cordon.rs`, `base/` | Landmarks, the Institute's lamps, wall/yard, hangar, props, vehicles, artifact showcase |
 | Cordons | `src/world/cordon.rs` | Yard wall and gap checkpoint, 3× Perimeter built from a baked box with relief parallax, a razor-wire strip and a sandbag row along the foot (`WallModel::batch` shears all three onto the ground, corners lap), the gates' `Boom`s (`Gate::Yard` lifts for the stalker, `Gate::Institute` for an `InstitutePass`), crawl hole (`hole_depth`) and its thicket, shelterbelts and belt trees (`tree_belt`) |
 | Vegetation | `src/world/trees.rs`, `canopy.rs`, `plants.rs` | Imported trees, dense woods and weeds/bushes (no procedural ones), LOD tiers, wind, fall |
 | Map dressing | `src/world/map.rs`, `town.rs`, `railway.rs`, `marsh.rs`, `rocks.rs` | Harmont map projection, New Harmont, kit-laid railway, marsh props, big rocks |
@@ -197,7 +197,7 @@ PreUpdate
   stream_scenery -> unload_stale_tiles -> finish_growing_plants
     -> spawn_grown_plants -> note_growing_plants
   stream_ground_detail
-  stream_cordon
+  stream_wall_view -> stream_wall_solids -> show_with_wall
   stream_full_sites
 
 Update, only while InGamePhase::Running
@@ -285,8 +285,11 @@ system caps its work per frame, so crossing into a new tile never stalls one:
 first, and marks tiles that left `Unloading`; `unload_stale_tiles` despawns
 300 of their children per frame, then the tile. `stream_ground_detail`
 switches one tile to its 2 m mesh per frame (back to the distant mesh at
-once). `stream_cordon` builds one wall chunk per frame (its three sheared
-meshes and its posts, up to ~4 ms), nearest an anchor first. Colliders spawn with the tile; each tile's plant sites are grown by a
+once). `stream_wall_view` builds one drawn wall chunk per frame (its three
+sheared meshes, up to ~4 ms) within 800 m of a camera, nearest first;
+`stream_wall_solids` spawns the wall's collision posts around the anchors, and
+`show_with_wall` hides anything `OnWall` (the Perimeter guns and their effects)
+whose chunk is not drawn. Colliders spawn with the tile; each tile's plant sites are grown by a
 `plants::PendingPlants` task on the async compute pool, `finish_growing_plants`
 turns a finished task into `GrownPlants`, and `spawn_grown_plants` spawns at
 most `PLANTS_PER_FRAME` of them per frame, nearest an anchor first.

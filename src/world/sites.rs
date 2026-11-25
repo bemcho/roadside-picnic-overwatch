@@ -736,6 +736,11 @@ pub(crate) fn institute_top() -> f32 {
     site.pose().transform_point(Vec3::Y * site.model().top).y
 }
 
+/// The Institute's model-to-world pose, scale included.
+pub(super) fn institute_pose() -> Transform {
+    institute().pose()
+}
+
 fn institute() -> Landmark {
     LANDMARKS
         .into_iter()

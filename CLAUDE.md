@@ -79,7 +79,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Vegetation (clusters at landmarks) | `world/trees.rs` |
 | Cordons (yard, Perimeter, gates, crawl hole, belts) | `world/cordon.rs` |
 | Perimeter guns (laser scan, trespass, tracers, downed creatures) | `world/turrets.rs`, `turrets/{scan,fire}.rs`, `wildlife/downed.rs`, `audio/guns.rs` |
-| Sites (Harmont map, 32 scan placements, stand-ins, relief) | `world/{sites,map}.rs` |
+| Sites (Harmont map, 32 scan placements, stand-ins, relief, Institute lights) | `world/{sites,map,institute}.rs` |
 | New Harmont; Railway; Marsh props; Rocks | `world/{town,railway,marsh,rocks}.rs` |
 | Guards; UN patrol; Harmont traffic; Institute carrier; Institute helicopters | `world/{guards,helicopters}.rs`, `player/vehicle/{patrol,traffic,carrier}.rs` |
 | Townsfolk (New Harmont pedestrians, scientists at the Institute) | `world/townsfolk.rs` |

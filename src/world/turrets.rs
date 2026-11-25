@@ -28,7 +28,7 @@ use crate::assets;
 use crate::states::{AppState, InGamePhase};
 
 use super::collision::{Collider, Pillar, Unclimbable};
-use super::cordon::{PERIMETER_GATE, PERIMETER_GATE_HALF, PERIMETER_X, perimeter_top};
+use super::cordon::{OnWall, PERIMETER_GATE, PERIMETER_GATE_HALF, PERIMETER_X, perimeter_top};
 use super::map::METERS_PER_PIXEL;
 use super::places::{Describe, Place};
 use super::sites::{self, Kind as SiteKind};
@@ -291,7 +291,7 @@ fn spawn_turrets(
     };
     for (i, station) in stations().into_iter().enumerate() {
         let base = Vec3::new(PERIMETER_X, perimeter_top(&terrain, station.z), station.z);
-        let effects = spawn_effects(&mut commands, &looks, &far);
+        let effects = spawn_effects(&mut commands, &looks, &far, base);
         let root = commands
             .spawn((
                 WorldRoot,
@@ -306,6 +306,7 @@ fn spawn_turrets(
                 Transform::from_translation(base)
                     .with_rotation(Quat::from_rotation_y(ZONE_HEADING)),
                 Visibility::default(),
+                OnWall::at(base.xz()),
             ))
             .id();
         for (path, range) in station.gun.models().into_iter().zip([&near, &far]) {
@@ -335,12 +336,28 @@ fn spawn_turrets(
     }
 }
 
-/// The beam, its ground spot and the muzzle flash of one gun, posed each frame by `draw_beams`.
-fn spawn_effects(commands: &mut Commands, looks: &Looks, range: &VisibilityRange) -> Effects {
+/// The beam, its ground spot and the muzzle flash of one gun, posed in world space each frame
+/// by `draw_beams`. They hang from a holder at the origin that shows them only with the
+/// gun's wall, as the gun itself (`OnWall`).
+fn spawn_effects(
+    commands: &mut Commands,
+    looks: &Looks,
+    range: &VisibilityRange,
+    base: Vec3,
+) -> Effects {
+    let holder = commands
+        .spawn((
+            WorldRoot,
+            Name::new("Perimeter gun effects"),
+            Transform::IDENTITY,
+            Visibility::default(),
+            OnWall::at(base.xz()),
+        ))
+        .id();
     let mut glow = |(mesh, material): &(Handle<Mesh>, Handle<StandardMaterial>)| {
         commands
             .spawn((
-                WorldRoot,
+                ChildOf(holder),
                 Mesh3d(mesh.clone()),
                 MeshMaterial3d(material.clone()),
                 Transform::default(),
