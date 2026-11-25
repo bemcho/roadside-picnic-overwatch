@@ -16,7 +16,7 @@ state machine, shared asset preloading, and six project plugins:
 - `PlayerPlugin`: stalker, animation, camera, input, collision, and armored vehicle.
 - `ZonePlugin`: the current run's anomaly and collectible-object loop.
 - `UiPlugin`: splash, loading state, entry curtain, HUD, vehicle prompt, pause menu, FPS and the stalker's x, y, z.
-- `SavePlugin` (`src/save.rs`): saved progress (survey, clock, stalker and car).
+- `SavePlugin` (`src/save.rs`): saved progress (survey, clock, stalker, car and a taken carrier).
 
 There is deliberately no separate engine, physics crate or networking layer.
 Most runtime state is local ECS data, and the world is rebuilt

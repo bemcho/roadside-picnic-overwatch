@@ -1,5 +1,6 @@
 //! Saved progress: the ground the stalker has surveyed, the time of day and
-//! where the stalker and their car stand. It is saved on F5, every minute and
+//! where the stalker and their car stand, and the Institute's carrier once
+//! they have taken it. It is saved on F5, every minute and
 //! on quitting, and restored on entering the Zone; `--new` on the command line
 //! starts afresh. The save is a small text file in the platform's data folder
 //! (`progress_path`); the web build keeps none.
@@ -10,7 +11,7 @@ use bevy::prelude::*;
 
 use crate::launch::LaunchOptions;
 use crate::player::Player;
-use crate::player::vehicle::{Driving, Seat, Vehicle};
+use crate::player::vehicle::{Carrier, Driving, Seat, Vehicle};
 use crate::states::AppState;
 use crate::world::{Explored, Terrain, WorldClock};
 
@@ -48,6 +49,9 @@ struct Progress {
     stalker: Vec3,
     car: Vec3,
     car_yaw: f32,
+    /// Where the stalker left the carrier (x, z) and its yaw; none while it
+    /// keeps to the Institute's schedule.
+    carrier: Option<(Vec2, f32)>,
     surveyed: Vec<bool>,
 }
 
@@ -60,25 +64,41 @@ impl Progress {
             .collect();
         let [x, y, z] = self.stalker.to_array();
         let [cx, cy, cz] = self.car.to_array();
+        let carrier = self
+            .carrier
+            .map(|(at, yaw)| format!("carrier {} {} {yaw}\n", at.x, at.y))
+            .unwrap_or_default();
         format!(
-            "{HEADER}\nhours {}\nstalker {x} {y} {z}\ncar {cx} {cy} {cz} {}\nsurveyed {surveyed}\n",
+            "{HEADER}\nhours {}\nstalker {x} {y} {z}\ncar {cx} {cy} {cz} {}\n{carrier}surveyed {surveyed}\n",
             self.hours, self.car_yaw
         )
     }
 
     fn from_text(text: &str) -> Option<Self> {
-        let mut lines = text.lines();
+        let mut lines = text.lines().peekable();
         if lines.next()? != HEADER {
             return None;
         }
-        let mut field = |key: &str| {
-            let (name, value) = lines.next()?.split_once(' ')?;
-            (name == key).then_some(value)
+        let mut field = |key: &str, optional: bool| {
+            let (name, value) = lines.peek()?.split_once(' ')?;
+            if name != key {
+                // A missing optional line leaves the next for its own field.
+                return (!optional).then_some(None)?;
+            }
+            lines.next();
+            Some(Some(value))
         };
-        let [hours] = numbers(field("hours")?)?;
-        let [x, y, z] = numbers(field("stalker")?)?;
-        let [cx, cy, cz, car_yaw] = numbers(field("car")?)?;
-        let surveyed = field("surveyed")?
+        let [hours] = numbers(field("hours", false)??)?;
+        let [x, y, z] = numbers(field("stalker", false)??)?;
+        let [cx, cy, cz, car_yaw] = numbers(field("car", false)??)?;
+        let carrier = match field("carrier", true).flatten() {
+            Some(value) => {
+                let [ax, az, yaw] = numbers(value)?;
+                Some((Vec2::new(ax, az), yaw))
+            }
+            None => None,
+        };
+        let surveyed = field("surveyed", false)??
             .chars()
             .map(|cell| match cell {
                 '0' => Some(false),
@@ -91,6 +111,7 @@ impl Progress {
             stalker: Vec3::new(x, y, z),
             car: Vec3::new(cx, cy, cz),
             car_yaw,
+            carrier,
             surveyed,
         })
     }
@@ -125,15 +146,22 @@ fn read_progress(mut commands: Commands, launch: Res<LaunchOptions>) {
 
 type Stalker<'w, 's> = Query<'w, 's, (&'static mut Transform, Has<Driving>), With<Player>>;
 type Car<'w, 's> = Query<'w, 's, &'static mut Transform, (With<Vehicle>, Without<Player>)>;
+type Carriers<'w, 's> = Query<
+    'w,
+    's,
+    (&'static mut Carrier, &'static mut Transform),
+    (Without<Player>, Without<Vehicle>),
+>;
 
 /// Puts the saved progress into the freshly spawned Zone.
 fn restore_progress(
     mut commands: Commands,
     saved: Res<SavedProgress>,
-    explored: Option<ResMut<Explored>>,
-    clock: Option<ResMut<WorldClock>>,
+    terrain: Res<Terrain>,
+    (explored, clock): (Option<ResMut<Explored>>, Option<ResMut<WorldClock>>),
     mut stalkers: Stalker,
     mut cars: Car,
+    mut carriers: Carriers,
 ) {
     let (Some(mut explored), Some(mut clock), Ok((mut stalker, _)), Ok(mut car)) =
         (explored, clock, stalkers.single_mut(), cars.single_mut())
@@ -148,6 +176,9 @@ fn restore_progress(
     stalker.translation = progress.stalker;
     car.translation = progress.car;
     car.rotation = Quat::from_rotation_y(progress.car_yaw);
+    if let (Some(left), Ok((mut carrier, mut pose))) = (progress.carrier, carriers.single_mut()) {
+        carrier.leave(left, &mut pose, &terrain);
+    }
     commands.remove_resource::<SavedProgress>();
 }
 
@@ -171,11 +202,11 @@ fn save_due(
 
 fn save_progress(
     terrain: Res<Terrain>,
-    explored: Option<Res<Explored>>,
-    clock: Option<Res<WorldClock>>,
+    (explored, clock): (Option<Res<Explored>>, Option<Res<WorldClock>>),
     stalkers: Query<(&Transform, Option<&Driving>), With<Player>>,
     cars: Query<&Transform, (With<Vehicle>, Without<Player>)>,
     seats: Query<(&Transform, &Seat), Without<Player>>,
+    carriers: Query<&Carrier>,
     mut saved: MessageWriter<ProgressSaved>,
 ) {
     let (Some(explored), Some(clock), Ok((stalker, driving)), Ok(car)) =
@@ -184,7 +215,7 @@ fn save_progress(
         return;
     };
     // Saved at the wheel, the stalker comes back standing beside what they
-    // drove (the carrier itself returns to its bay).
+    // drove.
     let stalker = match driving.and_then(|driving| seats.get(driving.0).ok()) {
         Some((at, seat)) => {
             let beside = seat.beside(at);
@@ -201,6 +232,7 @@ fn save_progress(
         stalker,
         car: car.translation,
         car_yaw: forward.x.atan2(forward.z),
+        carrier: carriers.single().ok().and_then(Carrier::left_at),
         surveyed: explored.cells().collect(),
     };
     match write(&progress.to_text()) {
@@ -268,6 +300,7 @@ mod tests {
             stalker: Vec3::new(840.5, 2.25, -113.0),
             car: Vec3::new(-12.0, 0.5, 400.125),
             car_yaw: -1.5,
+            carrier: Some((Vec2::new(-356.0, -588.5), 4.75)),
             surveyed: Explored::default().cells().map(|_| false).collect(),
         }
     }
@@ -277,6 +310,10 @@ mod tests {
         let mut saved = progress();
         saved.surveyed[7] = true;
         saved.surveyed[1000] = true;
+        assert_eq!(Progress::from_text(&saved.to_text()), Some(saved.clone()));
+        // The carrier's line is there only once the stalker has taken it.
+        saved.carrier = None;
+        assert!(!saved.to_text().contains("carrier"));
         assert_eq!(Progress::from_text(&saved.to_text()), Some(saved));
     }
 
@@ -295,10 +332,12 @@ mod tests {
     #[test]
     fn restoring_moves_the_stalker_and_car_and_restores_the_survey() {
         let mut world = World::new();
+        world.insert_resource(Terrain::new());
         world.insert_resource(Explored::default());
         world.insert_resource(WorldClock::default());
         let stalker = world.spawn((Player::default(), Transform::default())).id();
         let car = world.spawn((Vehicle::default(), Transform::default())).id();
+        let carrier = world.spawn((Carrier::new(), Transform::default())).id();
         let mut saved = progress();
         saved.surveyed[0] = true;
         world.insert_resource(SavedProgress(saved.clone()));
@@ -317,5 +356,9 @@ mod tests {
         assert_eq!(parked.translation, saved.car);
         let heading = Vec3::new(saved.car_yaw.sin(), 0.0, saved.car_yaw.cos());
         assert!((parked.rotation * Vec3::Z).distance(heading) < 1e-5);
+        let left = world.get::<Carrier>(carrier).and_then(Carrier::left_at);
+        assert_eq!(left, saved.carrier);
+        let pose = world.get::<Transform>(carrier).copied().unwrap_or_default();
+        assert_eq!(pose.translation.xz(), Vec2::new(-356.0, -588.5));
     }
 }

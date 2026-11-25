@@ -251,7 +251,8 @@ src/
 
 The world is rebuilt deterministically from fixed seeds and placements; there is
 no physics crate or networking. `save.rs` keeps the player's progress: the
-`Explored` survey, the clock and where the stalker and their car stand, in a
+`Explored` survey, the clock and where the stalker, their car and (once taken)
+the Institute carrier stand, in a
 plain text file (`progress.txt` in `$XDG_DATA_HOME/roadside-picnic`,
 `~/.local/share/roadside-picnic`, `%APPDATA%` or `~/Library/Application
 Support`), written atomically on F5, every minute and on quitting, and restored
