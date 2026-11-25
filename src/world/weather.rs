@@ -25,6 +25,10 @@ const START_HOUR: f32 = 6.25;
 const LATITUDE: f32 = 50.0 * PI / 180.0;
 const DECLINATION: f32 = 10.0 * PI / 180.0;
 const SEED: u32 = 0x5EA5_0001;
+/// Days in a week of weather: each brings one spell of overcast or rainy days.
+const WEEK: i32 = 7;
+/// Of a spell's days, the share that rain.
+const RAINY: f32 = 0.45;
 /// Each slot of this many seconds may carry one gust.
 const GUST_SLOT: f32 = 24.0;
 /// Wind speed, in m/s, that bends plants and trees as far as they go.
@@ -150,22 +154,52 @@ struct Day {
     wind: Vec2,
 }
 
+/// Whether day `index` falls in its week's spell of bad weather. A spell
+/// lasts two or three days most weeks, four or five now and then, and once in
+/// a while the whole week. Shorter spells keep off a week's first and last
+/// days and a whole bad week never follows another, so two spells never run
+/// together: none lasts more than a week.
+fn bad_weather(index: i32) -> bool {
+    let (week, weekday) = (index.div_euclid(WEEK), index.rem_euclid(WEEK));
+    let spell = |week| lattice_hash(week, 19, SEED);
+    let length = match spell(week) {
+        r if r < 0.45 => 2,
+        r if r < 0.8 => 3,
+        r if r < 0.9 => 4,
+        r if r < 0.95 || spell(week - 1) >= 0.95 => 5,
+        _ => return true,
+    };
+    // It starts on one of the days 1 to `latest`.
+    let latest = WEEK - 1 - length;
+    let start = 1 + ((lattice_hash(week, 23, SEED) * latest as f32) as i32).min(latest - 1);
+    (start..start + length).contains(&weekday)
+}
+
 impl Day {
     fn of(index: i32) -> Self {
-        // The first day is humid, so the opening morning shows the valley fog.
-        let roll = if index == 0 {
-            0.5
+        let roll = lattice_hash(index, 7, SEED);
+        let sky = if index == 0 {
+            // The first day is humid, so the opening morning shows the valley fog.
+            Sky::Humid
+        } else if bad_weather(index) {
+            if roll < RAINY {
+                Sky::Rain
+            } else {
+                Sky::Overcast
+            }
+        } else if roll < 0.6 {
+            Sky::Clear
         } else {
-            lattice_hash(index, 7, SEED)
+            Sky::Humid
         };
         let warmth = (lattice_hash(index, 11, SEED) - 0.5) * 4.0;
         let heading = lattice_hash(index, 13, SEED) * TAU;
         let breeze = 0.4 + 1.6 * lattice_hash(index, 17, SEED);
-        let (sky, mean, swing, dew_offset, cloud) = match roll {
-            r if r < 0.4 => (Sky::Clear, 14.0, 7.0, -1.6, 0.0),
-            r if r < 0.65 => (Sky::Humid, 16.0, 5.0, 0.3, 0.15),
-            r if r < 0.85 => (Sky::Overcast, 12.0, 3.0, -0.6, 0.65),
-            _ => (Sky::Rain, 10.0, 1.8, 0.0, 0.85),
+        let (mean, swing, dew_offset, cloud) = match sky {
+            Sky::Clear => (14.0, 7.0, -1.6, 0.0),
+            Sky::Humid => (16.0, 5.0, 0.3, 0.15),
+            Sky::Overcast => (12.0, 3.0, -0.6, 0.65),
+            Sky::Rain => (10.0, 1.8, 0.0, 0.85),
         };
         Self {
             sky,
@@ -390,6 +424,36 @@ mod tests {
         assert_eq!(opening.sky, Sky::Humid);
         assert!(opening.weather(START_HOUR).fog > 0.9);
         assert!(opening.weather(3.0).fog > opening.weather(14.0).fog);
+    }
+
+    #[test]
+    fn every_week_brings_two_or_more_bad_days_in_spells_of_up_to_a_week() {
+        let weeks = 2000;
+        let bad: Vec<bool> = (0..weeks * WEEK).map(bad_weather).collect();
+        for week in bad.chunks(WEEK as usize) {
+            assert!(week.iter().filter(|&&day| day).count() >= 2, "{week:?}");
+        }
+        let total = bad.iter().filter(|&&day| day).count() as f32;
+        let per_week = total / weeks as f32;
+        assert!((2.5..3.5).contains(&per_week), "{per_week} a week");
+        let spells: Vec<usize> = bad
+            .split(|&day| !day)
+            .map(<[bool]>::len)
+            .filter(|&length| length > 0)
+            .collect();
+        assert_eq!(spells.iter().max(), Some(&(WEEK as usize)));
+        assert!(spells.iter().filter(|&&length| length <= 3).count() > spells.len() / 2);
+        // Both kinds of bad day come.
+        let skies: Vec<Sky> = (1..200)
+            .filter(|&day| bad_weather(day))
+            .map(|day| Day::of(day).sky)
+            .collect();
+        assert!(skies.contains(&Sky::Rain) && skies.contains(&Sky::Overcast));
+        assert!(
+            skies
+                .iter()
+                .all(|sky| matches!(sky, Sky::Rain | Sky::Overcast))
+        );
     }
 
     #[test]
