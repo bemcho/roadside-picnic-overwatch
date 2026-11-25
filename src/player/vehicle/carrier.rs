@@ -23,8 +23,8 @@ use bevy::world_serialization::WorldInstanceReady;
 
 use crate::assets;
 use crate::world::{
-    BASE, Collider, Crusher, Describe, InstitutePass, Pedestrian, Pillar, Place, TERRAIN_HALF_SIZE,
-    Terrain, Unclimbable, expedition_route,
+    BASE, Body, Collider, Crusher, Describe, InstitutePass, Pedestrian, Pillar, Place,
+    TERRAIN_HALF_SIZE, Terrain, Unclimbable, expedition_route,
 };
 
 use super::super::Player;
@@ -100,6 +100,17 @@ const FORD: f32 = 1.5;
 const MAX_CLIMB: f32 = 1.0;
 const ROCK_STEP: f32 = 1.0;
 const BELLY: f32 = 0.5;
+/// How click orders route it: clear of solids by its hull's half-width (1.8 m)
+/// and a margin for its 7 m length, through the water it fords, and over what
+/// it knocks down.
+pub(in crate::player) const CARRIER_ROUTING: (Body, f32, Crusher) = (
+    Body {
+        radius: 2.3,
+        height: HULL_HEIGHT,
+    },
+    FORD,
+    BODY,
+);
 /// How much of its speed water as deep as `FORD`, and a climb as steep as
 /// `MAX_CLIMB`, take off.
 const WATER_DRAG: f32 = 0.6;

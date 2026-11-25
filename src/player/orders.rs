@@ -13,7 +13,7 @@ use crate::states::AppState;
 use crate::world::{Body, Boom, Collider, InstitutePass, Terrain, Weight, in_zone};
 
 use super::path::find_path;
-use super::vehicle::{CAR, Driving, FORD_DEPTH};
+use super::vehicle::{CAR, CARRIER_ROUTING, Carrier, Driving, FORD_DEPTH};
 use super::{Player, PlayerCamera, STALKER, STANDING};
 
 /// Orders farther than this make the stalker run instead of walk.
@@ -25,7 +25,7 @@ pub(super) const VEHICLE_ARRIVAL: f32 = 3.0;
 const WAYPOINT_SLACK: f32 = 1.7;
 /// Water the stalker can still wade through (matches `move_player`).
 const WADE_DEPTH: f32 = 1.05;
-/// The vehicle's footprint for pathfinding.
+/// The car's footprint for pathfinding.
 const VEHICLE_BODY: Body = Body {
     radius: 1.7,
     height: 2.4,
@@ -299,7 +299,7 @@ pub(super) fn issue_move_order(
     terrain: Res<Terrain>,
     window: Single<&Window, With<PrimaryWindow>>,
     cameras: Query<(&Camera, &GlobalTransform), With<PlayerCamera>>,
-    colliders: Solids,
+    (colliders, carriers): (Solids, Query<(), With<Carrier>>),
     mut players: Query<(&Transform, &mut MoveOrder, Option<&Driving>), With<Player>>,
 ) {
     let Ok((stalker, mut order, driving)) = players.single_mut() else {
@@ -329,7 +329,13 @@ pub(super) fn issue_move_order(
         _ => from,
     };
     let vehicle = driving.map(|driving| driving.0);
-    let Some(path) = route(&terrain, &colliders, vehicle, start, target.xz()) else {
+    let Some(path) = route(
+        &terrain,
+        (&colliders, &carriers),
+        vehicle,
+        start,
+        target.xz(),
+    ) else {
         return;
     };
     if start == from {
@@ -351,7 +357,7 @@ pub(super) fn issue_move_order(
 /// that the scenery colliders around it have streamed in.
 pub(super) fn replan_order(
     terrain: Res<Terrain>,
-    colliders: Solids,
+    (colliders, carriers): (Solids, Query<(), With<Carrier>>),
     mut players: Query<(&Transform, &mut MoveOrder, Option<&Driving>), With<Player>>,
 ) {
     let Ok((stalker, mut order, driving)) = players.single_mut() else {
@@ -363,7 +369,7 @@ pub(super) fn replan_order(
     let vehicle = driving.map(|driving| driving.0);
     match route(
         &terrain,
-        &colliders,
+        (&colliders, &carriers),
         vehicle,
         stalker.translation.xz(),
         stop,
@@ -373,16 +379,17 @@ pub(super) fn replan_order(
     }
 }
 
-/// A path for the stalker, or for the vehicle they drive, around everything
-/// that blocks it.
+/// A path for the stalker, or for the vehicle they drive (the car, or the
+/// wider Institute carrier), around everything that blocks it.
 fn route(
     terrain: &Terrain,
-    colliders: &Solids,
+    (colliders, carriers): (&Solids, &Query<(), With<Carrier>>),
     vehicle: Option<Entity>,
     from: Vec2,
     to: Vec2,
 ) -> Option<Vec<Vec2>> {
     let (body, depth, mover) = match vehicle {
+        Some(carrier) if carriers.contains(carrier) => CARRIER_ROUTING,
         Some(_) => (VEHICLE_BODY, FORD_DEPTH, CAR),
         None => (STANDING, WADE_DEPTH, STALKER),
     };
@@ -483,6 +490,42 @@ pub(crate) fn cast_to_ground(terrain: &Terrain, ray: Ray3d) -> Option<Vec3> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_carrier_is_routed_around_a_gap_the_car_takes() {
+        use crate::world::Pillar;
+        use bevy::ecs::system::SystemState;
+        const POST: [Pillar; 1] = [Pillar {
+            x: 0.0,
+            z: 0.0,
+            radius: 0.5,
+            bottom: -1.0,
+            top: 3.0,
+        }];
+        let terrain = Terrain::new();
+        let mut world = World::new();
+        // A wall of posts across the yard, 1 m apart, with a 4 m gap in it.
+        let gap = Vec2::new(843.0, -70.0);
+        for step in -15_i32..=15 {
+            if step.abs() > 2 {
+                let at = gap + Vec2::Y * step as f32;
+                let y = terrain.height_at(at.x, at.y);
+                world.spawn((Collider(&POST), GlobalTransform::from_xyz(at.x, y, at.y)));
+            }
+        }
+        let car = world.spawn_empty().id();
+        let carrier = world.spawn(Carrier::new()).id();
+        let mut state = SystemState::<(Solids, Query<(), With<Carrier>>)>::new(&mut world);
+        let (colliders, carriers) = state.get(&world).expect("valid queries");
+        let (from, to) = (gap - Vec2::X * 18.0, gap + Vec2::X * 18.0);
+        let widest = |vehicle| {
+            let path = route(&terrain, (&colliders, &carriers), Some(vehicle), from, to)
+                .expect("a way across");
+            path.iter().map(|p| (p.y - gap.y).abs()).fold(0.0, f32::max)
+        };
+        assert!(widest(car) < 2.0, "the car takes the gap");
+        assert!(widest(carrier) > 15.0, "the carrier goes round the wall");
+    }
 
     #[test]
     fn clicks_land_on_the_rendered_ground_and_skip_the_sky() {
