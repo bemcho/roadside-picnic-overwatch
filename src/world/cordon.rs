@@ -279,15 +279,23 @@ impl Gate {
 pub(crate) struct Boom {
     gate: Gate,
     lift: f32,
+    /// Letting the stalker out of the Zone: from when they come near from
+    /// its side until they are away from the gate again.
+    letting_out: bool,
 }
 
 impl Boom {
     fn new(gate: Gate) -> Self {
-        Self { gate, lift: 0.0 }
+        Self {
+            gate,
+            lift: 0.0,
+            letting_out: false,
+        }
     }
 
     /// Whether it lifts for the stalker, or, with `pass`, for someone on
-    /// Institute business: the yard's for both, the Institute's only for the latter.
+    /// Institute business or the stalker leaving the Zone: the yard's for
+    /// both, the Institute's only for the latter.
     pub(crate) fn opens_for(&self, pass: bool) -> bool {
         pass || self.gate == Gate::Yard
     }
@@ -651,7 +659,9 @@ pub(super) fn spawn_booms(
 }
 
 /// Lifts each boom while anyone it opens for is near its gate and lowers it
-/// again after them; only the lowered arm stops anyone.
+/// again after them; only the lowered arm stops anyone. Either lets the
+/// stalker out of the Zone on foot, however they got in: it lifts once they
+/// come near from the Zone's side and stays up until they are away.
 pub(super) fn lift_booms(
     time: Res<Time>,
     passes: Query<&GlobalTransform, With<InstitutePass>>,
@@ -662,8 +672,14 @@ pub(super) fn lift_booms(
     for (mut boom, mut collider, children) in &mut booms {
         let opening = boom.gate.opening();
         let near = |pose: &GlobalTransform| pose.translation().xz().distance(opening) < BOOM_REACH;
+        let (mut stalker_near, mut from_zone) = (false, false);
+        for pose in stalkers.iter().filter(|&pose| near(pose)) {
+            stalker_near = true;
+            from_zone |= in_zone(pose.translation().xz());
+        }
+        boom.letting_out = from_zone || (boom.letting_out && stalker_near);
         let business =
-            passes.iter().any(near) || (boom.opens_for(false) && stalkers.iter().any(near));
+            passes.iter().any(near) || boom.letting_out || (boom.opens_for(false) && stalker_near);
         let step = BOOM_RATE * time.delta_secs() * if business { 1.0 } else { -1.0 };
         boom.lift = (boom.lift + step).clamp(0.0, 1.0);
         let solid = if boom.lift < BOOM_OPEN {
@@ -1939,6 +1955,41 @@ mod tests {
             app.world().get::<Collider>(boom).unwrap().0.len(),
             BOOM_PILLARS.len()
         );
+    }
+
+    #[test]
+    fn the_gate_boom_lets_the_stalker_out_of_the_zone_on_foot() {
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .add_systems(Update, lift_booms);
+        let world = app.world_mut();
+        let arm = world.spawn((BoomArm, Transform::IDENTITY)).id();
+        let boom = world
+            .spawn((
+                Boom::new(Gate::Institute),
+                Collider(BOOM_PILLARS),
+                GlobalTransform::default(),
+            ))
+            .add_child(arm)
+            .id();
+        let at = |offset: f32| {
+            GlobalTransform::from_xyz(PERIMETER_GATE.x + offset, 0.0, PERIMETER_GATE.y)
+        };
+        let stalker = world.spawn((Player::default(), at(-8.0))).id();
+        let walk_to = |app: &mut App, offset: f32| {
+            *app.world_mut().get_mut::<GlobalTransform>(stalker).unwrap() = at(offset);
+            for _ in 0..60 {
+                app.update();
+            }
+            app.world().get::<Collider>(boom).unwrap().0.is_empty()
+        };
+        assert!(walk_to(&mut app, -8.0), "it lifts for them in the Zone");
+        assert!(walk_to(&mut app, 8.0), "and stays up as they walk out");
+        assert!(!walk_to(&mut app, 60.0), "then lowers behind them");
+        assert!(!walk_to(&mut app, 8.0), "and stays down coming back in");
     }
 
     #[test]

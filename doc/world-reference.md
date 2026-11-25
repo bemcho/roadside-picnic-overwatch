@@ -215,8 +215,12 @@ the stalker stands still.
   the Zone at three times the panel's height (`PERIMETER_RISE`); `in_zone`
   tells the sides apart. Its one gate is the Institute's on the highway,
   narrowed to the road and closed by a red-and-white boom (`Boom`) that lifts
-  only for a body carrying an `InstitutePass` (the stalkers' car, on Institute
-  papers) and lowers once it has passed (`Gate::Institute`); a second
+  for a body carrying an `InstitutePass` (the stalkers' car, on Institute
+  papers, and the Institute's carrier) and lowers once it has passed
+  (`Gate::Institute`). It also lets the stalker out of the Zone on foot,
+  however they got in (`Boom::letting_out`): it lifts once they come near from
+  the Zone's side and stays up until they are 40 m away; coming in on foot it
+  stays down. Click orders route a stalker walking out through it. A second
   checkpoint guards it. The
   old breach on the Chapter 4 track is walled up. The only other way through
   is the crawl hole (`CRAWL_HOLE`): the ground is dug a metre under the wall
@@ -469,8 +473,9 @@ the stalker stands still.
   glacis, 50 m; two shadow-casting floods on the cab roof, 180 m) burn while
   it is out on an expedition or driven, as the car's do while driven
   (`Lamp`, `mount_spotlights`). Its engine plays the car's engine sound. E puts the stalker down
-  beside it (`Seat`, shared with the car); saved at its wheel, they come back
-  beside it while the carrier itself returns to its bay.
+  beside it (`Seat`, shared with the car). Once taken it is saved where they
+  left it (a `carrier x z yaw` line in the save) and stands there again on the
+  next start; saved at its wheel, they come back beside it.
 - **Institute helicopters** (`src/world/helicopters.rs`): two helicopters
   (`INSTITUTE_HELICOPTER`, `MILITARY_HELICOPTER`) rest on pads on the
   Institute roof's two wings (`sites::institute_helipads`, model units

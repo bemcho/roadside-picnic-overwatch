@@ -10,7 +10,7 @@ use bevy::prelude::*;
 use bevy::window::PrimaryWindow;
 
 use crate::states::AppState;
-use crate::world::{Body, Boom, Collider, InstitutePass, Terrain, Weight};
+use crate::world::{Body, Boom, Collider, InstitutePass, Terrain, Weight, in_zone};
 
 use super::path::find_path;
 use super::vehicle::{CAR, Driving, FORD_DEPTH};
@@ -387,10 +387,12 @@ fn route(
         None => (STANDING, WADE_DEPTH, STALKER),
     };
     // The driven vehicle must not block its own route, nor anything lighter,
-    // nor a gate's boom that lifts for it (the yard's always does).
-    let pass = vehicle
-        .and_then(|car| colliders.get(car).ok())
-        .is_some_and(|(.., pass)| pass);
+    // nor a gate's boom that lifts for it (the yard's always does; the
+    // Institute's for its vehicles and for the stalker walking out of the Zone).
+    let pass = match vehicle {
+        Some(car) => colliders.get(car).is_ok_and(|(.., pass)| pass),
+        None => in_zone(from),
+    };
     let obstacles = colliders
         .iter()
         .filter(|&(entity, _, _, weight, boom, _)| {

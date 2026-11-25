@@ -38,7 +38,6 @@ pub use collision::{
     Body, Collider, Crusher, Pillar, Unclimbable, Weight, climb_top, fence_out, push_out,
     support_height,
 };
-#[cfg(test)]
 pub(crate) use cordon::in_zone;
 pub(crate) use cordon::{Boom, InstitutePass, PATROL_RADIUS, PATROL_TURNS};
 pub(crate) use ground_fog::{CAMERA_FAR, camera_distance_fog, camera_fog};

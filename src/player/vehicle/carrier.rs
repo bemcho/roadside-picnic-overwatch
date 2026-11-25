@@ -11,8 +11,7 @@
 //!
 //! The stalker can take it whenever it stands still, in its bay or waiting
 //! out in the Zone (`steer_carrier`): it then drives on its tracks, turning on
-//! the spot when stopped, and stays wherever they leave it for the rest of
-//! the run. Off road it fords swamp water up to `FORD` deep, climbs grades up
+//! the spot when stopped, and stays wherever they leave it, in the save too. Off road it fords swamp water up to `FORD` deep, climbs grades up
 //! to `MAX_CLIMB` and rides over rocks and logs up to `ROCK_STEP` high, slowing
 //! in deep water and on climbs. Its four lamps (two headlamps, two roof
 //! floods) burn while it is out on an expedition or driven.
@@ -262,7 +261,8 @@ pub(crate) struct Carrier {
 }
 
 impl Carrier {
-    fn new() -> Self {
+    /// Parked in its bay, at the start of its schedule.
+    pub(crate) fn new() -> Self {
         Self {
             paths: Paths::new(),
             leg: Leg::Parked,
@@ -311,6 +311,28 @@ impl Carrier {
             self.leg = Leg::Taken { at: self.at() };
             self.speed = 0.0;
         }
+    }
+
+    /// Where the stalker left it and the way it faces (its yaw), once they
+    /// have taken it.
+    pub(crate) fn left_at(&self) -> Option<(Vec2, f32)> {
+        match self.leg {
+            Leg::Taken { at } => Some((at, self.yaw)),
+            _ => None,
+        }
+    }
+
+    /// Stands it, the stalker's, at `at` facing `yaw`, as a save left it.
+    pub(crate) fn leave(
+        &mut self,
+        (at, yaw): (Vec2, f32),
+        pose: &mut Transform,
+        terrain: &Terrain,
+    ) {
+        self.leg = Leg::Taken { at };
+        self.yaw = yaw;
+        self.speed = 0.0;
+        place(self, pose, terrain, &[]);
     }
 
     /// Whether it is out on an expedition, rather than parked or the stalker's.
