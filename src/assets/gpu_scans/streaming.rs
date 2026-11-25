@@ -8,6 +8,7 @@ use bevy::asset::{LoadState, RecursiveDependencyLoadState, RenderAssetUsages};
 use bevy::ecs::system::SystemParam;
 use bevy::gltf::{Gltf, GltfLoaderSettings, GltfMaterial, GltfMesh};
 use bevy::prelude::*;
+use bevy::render::error_handler::RenderErrorHandler;
 use bevy::render::{Render, RenderApp, RenderSystems};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -18,6 +19,7 @@ use crate::assets::uhd;
 use crate::launch::{DEFAULT_VRAM_GB, LaunchOptions};
 use crate::states::AppState;
 
+use super::recovery::handle_render_error;
 use super::residency::{ScanParts, ScanResidency, publish_scan_residency, scan_bytes};
 use super::vram::track_vram_budget;
 use super::{GpuScans, State, gb, scan_budget};
@@ -38,6 +40,7 @@ impl Plugin for GpuScansPlugin {
         let residency = ScanResidency::default();
         app.insert_resource(GpuScans::entering(scan_budget(vram_gb)))
             .insert_resource(residency.clone())
+            .insert_resource(RenderErrorHandler(handle_render_error))
             .add_systems(
                 First,
                 (track_vram_budget, note_resident_scans).run_if(in_state(AppState::InGame)),

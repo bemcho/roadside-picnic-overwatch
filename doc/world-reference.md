@@ -718,7 +718,18 @@ the stalker stands still.
   least recently shown unwanted one leaves, unpinned before pinned
   (`UHD scan … left the GPU` in the log). Where the driver cannot report
   VRAM, the budget is `--vram` (6 GB without it) less `DESKTOP_GB` (0.6),
-  `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060 (with five tree species): peak RSS
+  `GAME_VRAM_GB` and the margin. If the GPU runs out of memory anyway (a
+  spike between two readings), the game does not quit as Bevy would
+  (`gpu_scans/recovery.rs`, the `RenderErrorHandler`): it drops every scan on
+  or bound for the GPU, gives up `OOM_SQUEEZE_GB` (0.5) more of the scan
+  budget for the rest of the run, drops the render world's per-frame textures
+  (`TextureCache`, where the failed shadow map would otherwise be reused) and
+  renders on; the scans come back as the smaller budget allows (`The GPU ran
+  out of memory` in the log). A validation error within 2 s of one is its
+  echo and recovers too. Any other render error, or a fourth recovery within a
+  minute, quits as before, so a lasting error cannot make the screen flash. A
+  full device recovery is not an option: the terrain, roads and scenery
+  meshes are render-only and could not be uploaded again. Measured on the 6 GB RTX 2060 (with five tree species): peak RSS
   9.3–11.7 GiB, the fill 3.3 GB in 10–14 s warm or cold, 1.4–2.1 GB of scans
   on the GPU. All 42 scans of then would take about 4.4 GiB on the GPU, so every one
   would stay from a driver budget of about 7.4 GiB (a 10 GB card); that is an
