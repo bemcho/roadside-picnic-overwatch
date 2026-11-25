@@ -448,6 +448,17 @@ the stalker stands still.
   commands); the split model is slimmed with `tools/slim_dense_model.py`
   (1.8M to 372k triangles, maps capped at 2048 px; see Perimeter guns) and
   finished with `tools/compress_glb_textures.py`.
+  The stalker can take it with E whenever it stands still (in its bay, waiting
+  out in the Zone, or where they left it): its expedition stops for the rest of
+  the run and it drives on its tracks (W/S up to 10 m/s ahead and 3 m/s astern
+  at 3 m/s², braking at 8 m/s²; A/D turn it at 0.6 rad/s, on the spot when it
+  stands, the other way backing up), or to a clicked point by the car's
+  autopilot. It weighs 18 t (`Crusher`, footprint 3.6 × 7 m), so it flattens
+  plants and knocks down what is lighter; it fords what the car fords, climbs
+  grades up to 0.6 and stops at heavier solids, where it can still turn in
+  place. Its engine plays the car's engine sound. E puts the stalker down
+  beside it (`Seat`, shared with the car); saved at its wheel, they come back
+  beside it while the carrier itself returns to its bay.
 - **Institute helicopters** (`src/world/helicopters.rs`): two helicopters
   (`INSTITUTE_HELICOPTER`, `MILITARY_HELICOPTER`) rest on pads on the
   Institute roof's two wings (`sites::institute_helipads`, model units

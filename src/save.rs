@@ -10,14 +10,12 @@ use bevy::prelude::*;
 
 use crate::launch::LaunchOptions;
 use crate::player::Player;
-use crate::player::vehicle::{Driving, Vehicle};
+use crate::player::vehicle::{Driving, Seat, Vehicle};
 use crate::states::AppState;
 use crate::world::{Explored, Terrain, WorldClock};
 
 const HEADER: &str = "roadside-picnic progress 1";
 const AUTOSAVE_SECONDS: f32 = 60.0;
-/// A stalker saved at the wheel is put back on foot this far to the car's left.
-const STEP_OUT: f32 = 3.5;
 
 pub struct SavePlugin;
 
@@ -175,8 +173,9 @@ fn save_progress(
     terrain: Res<Terrain>,
     explored: Option<Res<Explored>>,
     clock: Option<Res<WorldClock>>,
-    stalkers: Query<(&Transform, Has<Driving>), With<Player>>,
+    stalkers: Query<(&Transform, Option<&Driving>), With<Player>>,
     cars: Query<&Transform, (With<Vehicle>, Without<Player>)>,
+    seats: Query<(&Transform, &Seat), Without<Player>>,
     mut saved: MessageWriter<ProgressSaved>,
 ) {
     let (Some(explored), Some(clock), Ok((stalker, driving)), Ok(car)) =
@@ -184,14 +183,17 @@ fn save_progress(
     else {
         return;
     };
-    let stalker = if driving {
-        let beside = car.translation + car.rotation * Vec3::X * STEP_OUT;
-        beside
-            .xz()
-            .extend(terrain.height_at(beside.x, beside.z))
-            .xzy()
-    } else {
-        stalker.translation
+    // Saved at the wheel, the stalker comes back standing beside what they
+    // drove (the carrier itself returns to its bay).
+    let stalker = match driving.and_then(|driving| seats.get(driving.0).ok()) {
+        Some((at, seat)) => {
+            let beside = seat.beside(at);
+            beside
+                .xz()
+                .extend(terrain.height_at(beside.x, beside.z))
+                .xzy()
+        }
+        None => stalker.translation,
     };
     let forward = car.rotation * Vec3::Z;
     let progress = Progress {

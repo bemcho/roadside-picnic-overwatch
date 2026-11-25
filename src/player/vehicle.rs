@@ -1,11 +1,13 @@
-//! Driving, collision, and wheel posing for the armored vehicle.
+//! Driving, collision, and wheel posing for the armored vehicle, and getting
+//! in and out of it or the Institute's carrier (`Seat`).
 
 mod carrier;
 mod contact;
 mod patrol;
 mod traffic;
 
-pub(super) use carrier::{drive_carrier, spawn_carrier};
+pub(crate) use carrier::Carrier;
+pub(super) use carrier::{drive_carrier, spawn_carrier, steer_carrier};
 pub(super) use patrol::{Patrol, drive_patrol, spawn_patrol};
 pub(super) use traffic::{drive_traffic, flash_beacons, spawn_traffic};
 
@@ -46,6 +48,8 @@ const HALF_EXTENTS: Vec2 = Vec2::new(0.283 * MODEL_SCALE, 0.5 * MODEL_SCALE);
 const HULL_HEIGHT: f32 = 0.47 * MODEL_SCALE;
 const GROUND_CLEARANCE: f32 = 0.035;
 const ENTRY_REACH: f32 = 1.65;
+/// How far beside a seat the stalker is put when saved while driving.
+const STEP_OUT: f32 = 2.0;
 pub(super) const FORD_DEPTH: f32 = 0.60;
 const MAX_GRIP_GRADE: f32 = 0.66;
 const CONTACT_SNAP: f32 = 0.014;
@@ -72,6 +76,7 @@ type Solids<'w, 's> = Query<
 >;
 
 #[derive(Component)]
+#[require(Seat = Seat::CAR)]
 pub(crate) struct Vehicle {
     speed: f32,
     throttle: f32,
@@ -102,6 +107,46 @@ impl Default for Vehicle {
 
 #[derive(Component)]
 pub(crate) struct Driving(pub(crate) Entity);
+
+/// Something the stalker can climb into and drive: its footprint, which
+/// they reach for its door and step out beside, and whether it stands still
+/// for them to get in.
+#[derive(Component, Clone, Copy)]
+pub(crate) struct Seat {
+    half_extents: Vec2,
+    pub(crate) open: bool,
+}
+
+impl Seat {
+    pub(crate) const CAR: Self = Self::new(HALF_EXTENTS);
+
+    pub(crate) const fn new(half_extents: Vec2) -> Self {
+        Self {
+            half_extents,
+            open: true,
+        }
+    }
+
+    /// How far `point` is from the footprint posed at `at`.
+    pub(crate) fn distance(&self, at: &Transform, point: Vec3) -> f32 {
+        let offset = at.rotation.inverse() * (point - at.translation);
+        if offset.y.abs() >= 1.2 {
+            return f32::INFINITY;
+        }
+        (offset.xz().abs() - self.half_extents)
+            .max(Vec2::ZERO)
+            .length()
+    }
+
+    pub(crate) fn can_enter(&self, locomotion: &Locomotion, at: &Transform, point: Vec3) -> bool {
+        self.open && locomotion.grounded && self.distance(at, point) <= ENTRY_REACH
+    }
+
+    /// A spot a stride out from its left side, on the ground plane.
+    pub(crate) fn beside(&self, at: &Transform) -> Vec3 {
+        at.translation + at.rotation * Vec3::X * (self.half_extents.x + STEP_OUT)
+    }
+}
 
 pub(super) type Driver<'w, 's> = Query<
     'w,
@@ -282,24 +327,14 @@ fn attach_wheels(
     }
 }
 
-pub(crate) fn vehicle_distance(at: &Transform, point: Vec3) -> f32 {
-    let offset = at.rotation.inverse() * (point - at.translation);
-    if offset.y.abs() >= 1.2 {
-        return f32::INFINITY;
-    }
-    (offset.xz().abs() - HALF_EXTENTS).max(Vec2::ZERO).length()
-}
-
-pub(crate) fn can_enter_vehicle(locomotion: &Locomotion, at: &Transform, point: Vec3) -> bool {
-    locomotion.grounded && vehicle_distance(at, point) <= ENTRY_REACH
-}
-
+/// Gets the stalker into the nearest open seat they can reach, or out of the
+/// one they drive, on E.
 pub(super) fn interact_vehicle(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     terrain: Res<Terrain>,
     colliders: Solids,
-    mut vehicles: Query<(Entity, &mut Vehicle, &Transform), Without<Player>>,
+    mut seats: Query<(Entity, &Seat, &Transform, Option<&mut Vehicle>), Without<Player>>,
     mut players: Driver,
     mut cameras: Query<&mut OrbitCamera>,
 ) {
@@ -311,11 +346,11 @@ pub(super) fn interact_vehicle(
         return;
     };
     if let Some(driving) = driving {
-        let Ok((entity, mut vehicle, at)) = vehicles.get_mut(driving.0) else {
+        let Ok((entity, seat, at, mut vehicle)) = seats.get_mut(driving.0) else {
             return;
         };
-        if vehicle.grounded
-            && let Some(exit) = exit_position(at, &terrain, |point| {
+        if vehicle.as_ref().is_none_or(|vehicle| vehicle.grounded)
+            && let Some(exit) = exit_position(at, seat.half_extents, &terrain, |point| {
                 push_out(
                     point.xz(),
                     point.y,
@@ -324,7 +359,9 @@ pub(super) fn interact_vehicle(
                 ) == point.xz()
             })
         {
-            vehicle.park();
+            if let Some(vehicle) = vehicle.as_mut() {
+                vehicle.park();
+            }
             feet.translation = exit;
             *locomotion = grounded_idle();
             *visibility = Visibility::Inherited;
@@ -333,11 +370,13 @@ pub(super) fn interact_vehicle(
                 orbit.cancel_assist();
             }
         }
-    } else if let Some((entity, _, at)) = vehicles
+    } else if let Some((entity, _, at, _)) = seats
         .iter()
-        .filter(|(_, _, at)| can_enter_vehicle(&locomotion, at, feet.translation))
-        .min_by(|(_, _, a), (_, _, b)| {
-            vehicle_distance(a, feet.translation).total_cmp(&vehicle_distance(b, feet.translation))
+        .filter(|(_, seat, at, _)| seat.can_enter(&locomotion, at, feet.translation))
+        .min_by(|(_, a_seat, a, _), (_, b_seat, b, _)| {
+            a_seat
+                .distance(a, feet.translation)
+                .total_cmp(&b_seat.distance(b, feet.translation))
         })
     {
         *locomotion = grounded_idle();
@@ -357,8 +396,13 @@ fn grounded_idle() -> Locomotion {
     }
 }
 
-fn exit_position(at: &Transform, terrain: &Terrain, clear: impl Fn(Vec3) -> bool) -> Option<Vec3> {
-    let (side, end) = (HALF_EXTENTS.x, HALF_EXTENTS.y);
+fn exit_position(
+    at: &Transform,
+    half_extents: Vec2,
+    terrain: &Terrain,
+    clear: impl Fn(Vec3) -> bool,
+) -> Option<Vec3> {
+    let (side, end) = (half_extents.x, half_extents.y);
     let heading = contact::heading(at.rotation);
     [
         Vec3::X * side,
@@ -383,6 +427,24 @@ fn exit_position(at: &Transform, terrain: &Terrain, clear: impl Fn(Vec3) -> bool
     })
 }
 
+/// The keys that drive whatever the stalker sits in.
+const DRIVE_KEYS: [KeyCode; 5] = [
+    KeyCode::KeyW,
+    KeyCode::KeyS,
+    KeyCode::KeyA,
+    KeyCode::KeyD,
+    KeyCode::Space,
+];
+
+/// What the held keys ask of the vehicle the stalker drives.
+fn key_input(keys: &ButtonInput<KeyCode>) -> DriveInput {
+    DriveInput {
+        throttle: axis(keys, KeyCode::KeyW, KeyCode::KeyS),
+        steering: axis(keys, KeyCode::KeyA, KeyCode::KeyD),
+        brake: keys.pressed(KeyCode::Space),
+    }
+}
+
 pub(crate) fn drive_vehicle(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
@@ -394,13 +456,7 @@ pub(crate) fn drive_vehicle(
 ) {
     let mut driver = players.single_mut().ok();
     let dt = time.delta_secs();
-    let manual = keys.any_pressed([
-        KeyCode::KeyW,
-        KeyCode::KeyS,
-        KeyCode::KeyA,
-        KeyCode::KeyD,
-        KeyCode::Space,
-    ]);
+    let manual = keys.any_pressed(DRIVE_KEYS);
     for (entity, mut vehicle, mut at) in &mut vehicles {
         let mut order = driver
             .as_mut()
@@ -413,18 +469,14 @@ pub(crate) fn drive_vehicle(
         let autopilot = order
             .as_mut()
             .and_then(|order| autopilot(order, &at, vehicle.speed));
-        let input = autopilot.unwrap_or(DriveInput {
-            brake: !occupied || keys.pressed(KeyCode::Space),
-            throttle: if occupied {
-                axis(&keys, KeyCode::KeyW, KeyCode::KeyS)
-            } else {
-                0.0
-            },
-            steering: if occupied {
-                axis(&keys, KeyCode::KeyA, KeyCode::KeyD)
-            } else {
-                0.0
-            },
+        let input = autopilot.unwrap_or(if occupied {
+            key_input(&keys)
+        } else {
+            DriveInput {
+                throttle: 0.0,
+                steering: 0.0,
+                brake: true,
+            }
         });
         let from = at.translation.xz();
         // Bound travel per sweep even at the higher top speed and when sliding.
@@ -747,8 +799,21 @@ fn other_colliders<'a>(
         .map(|(_, collider, transform, _)| (collider, transform))
 }
 
+/// Whether the armored car posed at `at` would stand in one of `colliders`.
 pub(crate) fn blocked<'a>(
     at: &Transform,
+    colliders: impl Iterator<Item = (&'a Collider, &'a GlobalTransform)>,
+) -> bool {
+    hull_blocked(at, HALF_EXTENTS, HULL_HEIGHT, colliders)
+}
+
+/// Whether a hull of `half_extents` and `height` posed at `at` would stand in
+/// one of `colliders`: it steps over what is lower than `STEP_HEIGHT` and
+/// passes under what is higher than itself.
+fn hull_blocked<'a>(
+    at: &Transform,
+    half_extents: Vec2,
+    height: f32,
     colliders: impl Iterator<Item = (&'a Collider, &'a GlobalTransform)>,
 ) -> bool {
     let heading = contact::heading(at.rotation);
@@ -759,19 +824,19 @@ pub(crate) fn blocked<'a>(
         collider.0.iter().any(|pillar| {
             let center = transform.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
             let local = (world_to_vehicle * (center - at.translation)).xz();
-            if (local.abs() - HALF_EXTENTS)
+            if (local.abs() - half_extents)
                 .max(Vec2::ZERO)
                 .length_squared()
                 >= (pillar.radius * scale.x).powi(2)
             {
                 return false;
             }
-            let p = local.clamp(-HALF_EXTENTS, HALF_EXTENTS);
+            let p = local.clamp(-half_extents, half_extents);
             let offset = heading * Vec3::new(p.x, 0.0, p.y);
             let base = at.translation.y - up.dot(offset) / up.y;
             let top = center.y + pillar.top * scale.y;
             let bottom = center.y + pillar.bottom * scale.y;
-            top > base + STEP_HEIGHT && bottom < base + HULL_HEIGHT
+            top > base + STEP_HEIGHT && bottom < base + height
         })
     })
 }
@@ -1123,7 +1188,7 @@ mod tests {
             .get::<Transform>(player)
             .expect("player")
             .translation;
-        assert!(vehicle_distance(&driven, feet) >= STANDING.radius);
+        assert!(Seat::CAR.distance(&driven, feet) >= STANDING.radius);
         assert_eq!(app.world().get::<Transform>(vehicle), Some(&driven));
     }
 
@@ -1563,9 +1628,11 @@ mod tests {
         let terrain = Terrain::new();
         let y = terrain.height_at(BASE.0, BASE.1);
         let at = Transform::from_xyz(BASE.0, y, BASE.1);
-        let exit = exit_position(&at, &terrain, |point| point.x < at.translation.x);
+        let exit = exit_position(&at, HALF_EXTENTS, &terrain, |point| {
+            point.x < at.translation.x
+        });
         assert!(exit.is_some_and(|point| point.x < at.translation.x - HALF_EXTENTS.x));
-        assert!(exit_position(&at, &terrain, |_| false).is_none());
+        assert!(exit_position(&at, HALF_EXTENTS, &terrain, |_| false).is_none());
     }
 
     fn press(app: &mut App, key: KeyCode) {

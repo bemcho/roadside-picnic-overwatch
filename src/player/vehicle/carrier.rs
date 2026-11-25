@@ -8,22 +8,32 @@
 //! stop for it. Its road wheels, sprocket and idler are separate nodes
 //! (`tools/split_moving_parts.py`) that roll with the tracks, the two sides
 //! turning against each other while it pivots.
+//!
+//! The stalker can take it whenever it stands still, in its bay or waiting
+//! out in the Zone (`steer_carrier`): it then drives on its tracks, turning on
+//! the spot when stopped, and stays wherever they leave it for the rest of
+//! the run.
 
-use std::f32::consts::PI;
+use std::f32::consts::{PI, TAU};
 
 use bevy::prelude::*;
 use bevy::world_serialization::WorldInstanceReady;
 
 use crate::assets;
 use crate::world::{
-    BASE, Collider, Describe, InstitutePass, Pedestrian, Pillar, Place, Terrain, Unclimbable,
-    expedition_route,
+    BASE, Collider, Crusher, Describe, InstitutePass, Pedestrian, Pillar, Place, TERRAIN_HALF_SIZE,
+    Terrain, Unclimbable, expedition_route,
 };
 
 use super::super::Player;
-use super::Vehicle;
+use super::super::camera::OrbitCamera;
+use super::super::orders::{MoveOrder, Turning};
 use super::patrol::{Patrol, in_the_way};
 use super::traffic::{Traffic, keep_right, round_corners, settle_footprint};
+use super::{
+    AUTOPILOT_MIN_SPEED, DRIVE_KEYS, DriveInput, Driving, FORD_DEPTH, Seat, Solids, Vehicle,
+    autopilot, hull_blocked, key_input, other_colliders,
+};
 
 /// Meters per model unit: the carrier is 7 m long.
 const SCALE: f32 = 7.0;
@@ -64,6 +74,24 @@ const PARKED: f32 = 150.0;
 const AWAY: f32 = 90.0;
 /// Two rows of pillars down its flanks, in model units.
 const COLLISION: &[Pillar] = &hull();
+/// Its footprint and hull height, in meters, around those pillars.
+const HULL_HALF: Vec2 = Vec2::new(0.26 * SCALE, 0.5 * SCALE);
+const HULL_HEIGHT: f32 = 0.56 * SCALE;
+/// Its weight and footprint: it flattens plants and knocks down what weighs
+/// less, as the stalkers' car does.
+const BODY: Crusher = Crusher {
+    mass: 18_000.0,
+    half_size: HULL_HALF,
+};
+/// Driven by the stalker: its top speeds ahead and astern (m/s), how hard it
+/// speeds up and brakes (m/s²), how fast its tracks turn it (rad/s) and the
+/// steepest grade they climb.
+const DRIVEN_TOP: f32 = 10.0;
+const DRIVEN_REVERSE: f32 = 3.0;
+const DRIVEN_ACCELERATION: f32 = 3.0;
+const DRIVEN_BRAKING: f32 = 8.0;
+const DRIVEN_TURN: f32 = 0.6;
+const MAX_CLIMB: f32 = 0.6;
 
 const fn hull() -> [Pillar; 8] {
     let mut pillars = [Pillar {
@@ -149,7 +177,7 @@ impl Paths {
             Leg::Out => Some((&self.out, 1.0)),
             Leg::Home => Some((&self.home, 1.0)),
             Leg::Backing => Some((&self.bay, -1.0)),
-            Leg::Parked | Leg::Away | Leg::Pivot { .. } => None,
+            Leg::Parked | Leg::Away | Leg::Pivot { .. } | Leg::Taken { .. } => None,
         }
     }
 
@@ -191,6 +219,10 @@ enum Leg {
     Home,
     /// Backing into the bay.
     Backing,
+    /// The stalker's, standing or driven, off its expedition for good.
+    Taken {
+        at: Vec2,
+    },
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -200,7 +232,7 @@ enum Next {
 }
 
 #[derive(Component)]
-#[require(Unclimbable)]
+#[require(Unclimbable, Seat = Seat::new(HULL_HALF))]
 pub(crate) struct Carrier {
     paths: Paths,
     leg: Leg,
@@ -250,7 +282,73 @@ impl Carrier {
                 let (path, _) = self.path().expect("a driving leg has a path");
                 path.point(self.along)
             }
+            Leg::Taken { at } => at,
         }
+    }
+
+    /// Whether the stalker can get in: it stands still, parked, waiting out in
+    /// the Zone or where they left it.
+    fn boardable(&self) -> bool {
+        matches!(self.leg, Leg::Parked | Leg::Away | Leg::Taken { .. })
+    }
+
+    /// Takes it off its expedition where it stands, for the stalker to drive.
+    fn take(&mut self) {
+        if !matches!(self.leg, Leg::Taken { .. }) {
+            self.leg = Leg::Taken { at: self.at() };
+            self.speed = 0.0;
+        }
+    }
+
+    /// How hard its engine works while the stalker drives it (0-1).
+    pub(crate) fn engine_load(&self) -> f32 {
+        (self.speed.abs() / DRIVEN_TOP).min(1.0)
+    }
+
+    /// Drives it by `input` for `dt` seconds while it is the stalker's; `fits`
+    /// tells whether it may stand at a spot facing a way. Like the car, it
+    /// turns the other way backing up; standing, its tracks turn it on the
+    /// spot. Returns how far it turned.
+    fn steer(&mut self, input: DriveInput, dt: f32, fits: impl Fn(Vec2, Vec2) -> bool) -> f32 {
+        let Leg::Taken { at } = self.leg else {
+            return 0.0;
+        };
+        let target = if input.brake {
+            0.0
+        } else if input.throttle >= 0.0 {
+            input.throttle * DRIVEN_TOP
+        } else {
+            input.throttle * DRIVEN_REVERSE
+        };
+        let rate = if input.brake || target * self.speed < 0.0 {
+            DRIVEN_BRAKING
+        } else {
+            DRIVEN_ACCELERATION
+        };
+        self.speed += (target - self.speed).clamp(-rate * dt, rate * dt);
+        let astern = self.speed < -0.1 || (self.speed.abs() <= 0.1 && input.throttle < 0.0);
+        let turn = input.steering * DRIVEN_TURN * dt * if astern { -1.0 } else { 1.0 };
+        let yaw = self.yaw + turn;
+        let facing = Vec2::new(yaw.sin(), yaw.cos());
+        let step = self.speed * dt;
+        let ahead = at + facing * step;
+        let (to, step) = if fits(ahead, facing) {
+            (ahead, step)
+        } else if turn != 0.0 && fits(at, facing) {
+            // Blocked ahead, it can still turn where it stands.
+            self.speed = 0.0;
+            (at, 0.0)
+        } else {
+            self.speed = 0.0;
+            return 0.0;
+        };
+        // Turning left (+yaw), the left track runs back, the right forward.
+        let run = turn * HALF_TRACK * SCALE;
+        self.tracks[0] += step - run;
+        self.tracks[1] += step + run;
+        self.yaw = yaw.rem_euclid(TAU);
+        self.leg = Leg::Taken { at: to };
+        turn
     }
 
     /// The way it faces.
@@ -262,6 +360,7 @@ impl Carrier {
     /// in the way it would move from `at` heading `toward`.
     fn advance(&mut self, dt: f32, blocked: impl Fn(Vec2, Vec2) -> bool) {
         match self.leg {
+            Leg::Taken { .. } => {}
             Leg::Parked | Leg::Away => {
                 self.wait -= dt;
                 if self.wait <= 0.0 {
@@ -382,6 +481,7 @@ pub(crate) fn spawn_carrier(
             Name::new("Institute carrier"),
             carrier,
             Collider(COLLISION),
+            BODY,
             InstitutePass,
             Describe {
                 place: Place::Carrier,
@@ -421,20 +521,27 @@ fn attach_carrier_wheels(
 
 /// Sets the carrier on the ground where it stands, tilted to its tracks.
 fn place(carrier: &Carrier, pose: &mut Transform, terrain: &Terrain) {
-    let (at, facing) = (carrier.at(), carrier.facing());
+    let settled = settled_at(carrier.at(), carrier.facing(), terrain);
+    pose.translation = settled.translation;
+    pose.rotation = settled.rotation;
+}
+
+/// Its pose standing at `at` facing `facing`, tilted to its tracks.
+fn settled_at(at: Vec2, facing: Vec2, terrain: &Terrain) -> Transform {
     let ends = (TRACK_ENDS.0 * SCALE, TRACK_ENDS.1 * SCALE);
+    let (height, rotation) =
+        settle_footprint(at, facing, ends, HALF_TRACK * SCALE, |p| ground(p, terrain));
+    Transform::from_translation(at.extend(height).xzy()).with_rotation(rotation)
+}
+
+/// The ground under `p`: the hall's level floor inside the hangar door.
+fn ground(p: Vec2, terrain: &Terrain) -> f32 {
     let base = Vec2::from(BASE);
-    let floor = terrain.height_at(base.x, base.y);
-    let ground = |p: Vec2| {
-        if p.y - base.y < DOOR_Z && (p.x - base.x).abs() < 20.0 {
-            floor
-        } else {
-            terrain.mesh_height_at(p)
-        }
-    };
-    let (height, rotation) = settle_footprint(at, facing, ends, HALF_TRACK * SCALE, ground);
-    pose.translation = at.extend(height).xzy();
-    pose.rotation = rotation;
+    if p.y - base.y < DOOR_Z && (p.x - base.x).abs() < 20.0 {
+        terrain.height_at(base.x, base.y)
+    } else {
+        terrain.mesh_height_at(p)
+    }
 }
 
 /// What the carrier stops for: the stalker, their car, the patrols and traffic.
@@ -468,27 +575,95 @@ type Wheels<'w, 's> = Query<
     ),
 >;
 
-/// Runs the carrier's expedition over the rendered ground and rolls its wheels.
+/// Runs the carrier's expedition over the rendered ground, unless the stalker
+/// has taken it, and rolls its wheels.
 pub(crate) fn drive_carrier(
     time: Res<Time>,
     terrain: Res<Terrain>,
     others: InTheWay,
-    mut carriers: Query<(&mut Carrier, &mut Transform)>,
+    mut carriers: Query<(&mut Carrier, &mut Transform, &mut Seat)>,
     mut wheels: Wheels,
 ) {
     let dt = time.delta_secs();
-    let Ok((mut carrier, mut pose)) = carriers.single_mut() else {
+    let Ok((mut carrier, mut pose, mut seat)) = carriers.single_mut() else {
         return;
     };
-    carrier.advance(dt, |at, toward| {
-        others
-            .iter()
-            .any(|other| in_the_way(at, toward, other.translation.xz()))
-    });
-    place(&carrier, &mut pose, &terrain);
+    if !matches!(carrier.leg, Leg::Taken { .. }) {
+        carrier.advance(dt, |at, toward| {
+            others
+                .iter()
+                .any(|other| in_the_way(at, toward, other.translation.xz()))
+        });
+        place(&carrier, &mut pose, &terrain);
+    }
+    seat.open = carrier.boardable();
     for (wheel, mut transform) in &mut wheels {
         let roll = carrier.tracks[wheel.side] / (wheel.radius * SCALE);
         transform.rotation = Quat::from_rotation_x(roll);
+    }
+}
+
+/// The stalker at the carrier's wheel, carried along with it.
+type CarrierDriver<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Driving,
+        &'static mut Transform,
+        &'static mut MoveOrder,
+    ),
+    (With<Player>, Without<Carrier>),
+>;
+
+/// Drives the carrier the stalker sits in, by the keys or a point-and-click
+/// order, and carries them along.
+pub(crate) fn steer_carrier(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    terrain: Res<Terrain>,
+    colliders: Solids,
+    mut drivers: CarrierDriver,
+    mut carriers: Query<(Entity, &mut Carrier, &mut Transform)>,
+    mut cameras: Query<&mut OrbitCamera>,
+) {
+    let Ok((driving, mut stalker, mut order)) = drivers.single_mut() else {
+        return;
+    };
+    let Ok((entity, mut carrier, mut pose)) = carriers.get_mut(driving.0) else {
+        return;
+    };
+    carrier.take();
+    let dt = time.delta_secs();
+    if keys.any_pressed(DRIVE_KEYS) {
+        order.cancel();
+    }
+    let autopilot = autopilot(&mut order, &pose, carrier.speed);
+    let from = carrier.at();
+    let fits = |at: Vec2, facing: Vec2| {
+        at.abs().max_element() <= TERRAIN_HALF_SIZE - HULL_HALF.length()
+            && terrain.can_wade(from, at, FORD_DEPTH)
+            && ground(at, &terrain) - ground(from, &terrain) <= MAX_CLIMB * at.distance(from) + 0.05
+            && !hull_blocked(
+                &settled_at(at, facing, &terrain),
+                HULL_HALF,
+                HULL_HEIGHT,
+                other_colliders(&colliders, entity, BODY),
+            )
+    };
+    let turned = carrier.steer(autopilot.unwrap_or_else(|| key_input(&keys)), dt, fits);
+    order.track_progress(
+        carrier.at(),
+        carrier.at().distance(from),
+        AUTOPILOT_MIN_SPEED * dt,
+        dt,
+        Turning::Reversing,
+    );
+    place(&carrier, &mut pose, &terrain);
+    stalker.translation = pose.translation;
+    if autopilot.is_none()
+        && let Ok(mut orbit) = cameras.single_mut()
+    {
+        orbit.record_turn(turned);
     }
 }
 
@@ -527,6 +702,73 @@ mod tests {
         assert!(carrier.at().distance(bay) < 0.01);
         // Back in its bay facing the door, ready to leave again.
         assert!(carrier.facing().y > 0.999, "{}", carrier.facing());
+    }
+
+    fn drive(carrier: &mut Carrier, seconds: f32, throttle: f32, steering: f32) -> f32 {
+        let dt = 0.05;
+        let input = DriveInput {
+            throttle,
+            steering,
+            brake: false,
+        };
+        (0..(seconds / dt) as usize)
+            .map(|_| carrier.steer(input, dt, |_, _| true))
+            .sum()
+    }
+
+    #[test]
+    fn the_stalker_takes_it_only_standing_and_it_stays_where_left() {
+        let mut carrier = Carrier::new();
+        assert!(carrier.boardable(), "parked in its bay");
+        run(&mut carrier, PARKED + 5.0, false);
+        assert!(!carrier.boardable(), "not while it drives out");
+
+        let mut carrier = Carrier::new();
+        let bay = carrier.at();
+        carrier.take();
+        // Its expedition no longer runs; it stays where it stands.
+        run(&mut carrier, PARKED + 30.0, false);
+        assert_eq!(carrier.at(), bay);
+        assert!(carrier.boardable());
+    }
+
+    #[test]
+    fn driven_it_runs_on_its_tracks_and_turns_on_the_spot() {
+        let mut carrier = Carrier::new();
+        carrier.take();
+        let bay = carrier.at();
+        // Ahead, out of the door (+z), up to its top speed.
+        drive(&mut carrier, 6.0, 1.0, 0.0);
+        assert!(carrier.at().y > bay.y + 20.0, "{}", carrier.at());
+        assert!((carrier.speed - DRIVEN_TOP).abs() < 0.01);
+        assert!(carrier.tracks[0] > 20.0 && carrier.tracks[0] == carrier.tracks[1]);
+        // Standing, A turns it left on the spot, its tracks running apart.
+        drive(&mut carrier, 6.0, 0.0, 0.0);
+        let (at, tracks) = (carrier.at(), carrier.tracks);
+        let turned = drive(&mut carrier, 1.0, 0.0, 1.0);
+        assert!((turned - DRIVEN_TURN).abs() < 0.01, "{turned}");
+        assert_eq!(carrier.at(), at);
+        assert!(carrier.tracks[0] < tracks[0] && carrier.tracks[1] > tracks[1]);
+        // Astern it is slower.
+        drive(&mut carrier, 6.0, -1.0, 0.0);
+        assert!((carrier.speed + DRIVEN_REVERSE).abs() < 0.01);
+    }
+
+    #[test]
+    fn driven_it_stops_at_what_it_cannot_cross() {
+        let mut carrier = Carrier::new();
+        carrier.take();
+        let bay = carrier.at();
+        let input = DriveInput {
+            throttle: 1.0,
+            steering: 0.0,
+            brake: false,
+        };
+        for _ in 0..40 {
+            carrier.steer(input, 0.05, |at, _| at.y < bay.y + 1.0);
+        }
+        assert!(carrier.at().y < bay.y + 1.0);
+        assert_eq!(carrier.speed, 0.0);
     }
 
     #[test]

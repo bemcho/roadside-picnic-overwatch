@@ -115,7 +115,7 @@ flowchart LR
 | Townsfolk | `src/world/townsfolk.rs` | Fifteen rigged pedestrians on New Harmont's sidewalks; scientists walk to the Institute's door, hide inside and come back. `watch_the_way` → `walk_townsfolk` → `show_townsfolk` → `animate_townsfolk` in Update while running; `Place::Townsfolk(Role)` |
 | UN patrol | `src/player/vehicle/patrol.rs` | Four white armored cars lapping the Perimeter wall, flank plates, shared `CarWheel`/`in_the_way` |
 | Harmont traffic | `src/player/vehicle/traffic.rs` | Sweeper, sedans, ambulance, fire engine and panel van on `roads::traffic_routes`: right-hand lanes, U-turns, right of way, flashing roof beacons |
-| Institute carrier | `src/player/vehicle/carrier.rs` | Tracked carrier's expedition cycle (bay → Zone → pivot → home → back in), `InstitutePass`, counter-rolling track wheels; patrols and traffic stop for it |
+| Institute carrier | `src/player/vehicle/carrier.rs` | Tracked carrier's expedition cycle (bay → Zone → pivot → home → back in), `InstitutePass`, counter-rolling track wheels; patrols and traffic stop for it. The stalker can take it standing still (`Leg::Taken`, `steer_carrier`): tracked driving, its expedition over for the run |
 | Institute helicopters | `src/world/helicopters.rs` | Two helicopters: rotor spin-up, climb from the Institute's roof pads, survey passes over the Zone, landing; `fly_helicopters` → `spin_rotors` in PostUpdate before propagation |
 | Wildlife | `src/world/wildlife/` | Shared rigs, gaits, flyers, predator/mutant AI, spatial cues, the Perimeter herd, `Downed` creatures |
 | Perimeter guns | `src/world/turrets.rs`, `turrets/{scan,fire}.rs` | `TurretPlugin`: twelve guns on the Perimeter wall, Lissajous laser scan, beam-touch detection, `Trespasser` marking, lock/spin/burst fire, pooled tracers, `GunSound` |
@@ -674,7 +674,8 @@ Useful query relationships:
 - the HUD reads `ZoneRun`,
 - FPS reads Bevy's smoothed frame-time diagnostic,
 - the position line reads the `Player` transform (the car carries it while driving),
-- the vehicle prompt checks `can_enter_vehicle`,
+- the vehicle prompt checks `Seat::can_enter` (the car and the Institute
+  carrier both carry a `Seat`; `interact_vehicle` boards the nearest open one),
 - controls change with `Driving` and `AudioMode`,
 - pause UI follows `InGamePhase`, not the world lifetime,
 - the weather line reads `WorldClock` and `Weather`,
