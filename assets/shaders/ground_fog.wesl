@@ -45,6 +45,8 @@ struct GroundFog {
     clouds: vec4<f32>,
     // Shroud mask corner (x, z) and one over its extent.
     shroud: vec4<f32>,
+    // Harmont's fog: top range (m) and extinction range (1/m), thin to dense.
+    harmont: vec4<f32>,
 }
 
 @group(1) @binding(0) var<uniform> ground: GroundFog;
@@ -52,7 +54,7 @@ struct GroundFog {
 @group(1) @binding(1) var depth_texture: texture_depth_multisampled_2d;
 @else
 @group(1) @binding(1) var depth_texture: texture_depth_2d;
-// r + g: surface height; b: fog affinity.
+// r + g: surface height; b: fog affinity; a: 1 on Harmont's side, 0 in the Zone.
 @group(1) @binding(2) var field_texture: texture_2d<f32>;
 @group(1) @binding(3) var field_sampler: sampler;
 // r: 1 where surveyed, 0 under the shroud.
@@ -65,8 +67,9 @@ const FAR: f32 = 6000.0;
 // Steepest terrain rise assumed when jumping toward the layer.
 const SLOPE: f32 = 0.9;
 const ALBEDO: vec3<f32> = vec3(0.93, 0.95, 0.97);
-// Distance along the ray over which one direct-light evaluation is reused.
-const LIGHT_REUSE: f32 = 3.0;
+// Distance along the ray over which one direct-light evaluation is reused, in
+// the Zone's dense fog and in Harmont's thin fog.
+const LIGHT_REUSE: vec2<f32> = vec2(3.0, 10.0);
 
 // A layer of clouds: base and depth above sea level, the spacing of its
 // clouds, how much faster than the ground wind it drifts, its share of the
@@ -157,14 +160,19 @@ fn outside_hall(xz: vec2<f32>) -> f32 {
     return smoothstep(-1.0, 1.0, max(d.x, d.y));
 }
 
-// Fog at `p`, `h` meters above the surface, where the field's affinity is
-// `affinity`. Fog forms only where the field allows it (water and its banks,
-// the quarry, the woods) and only in moist air; drifting banks break it up
-// and fray its edges, and billows roughen the top.
-fn sample_fog(p: vec3<f32>, h: f32, affinity: f32) -> FogSample {
+// Fog at `p`, `h` meters above the surface, where the field holds `site`
+// (affinity, Harmont's side). Fog forms only where the field allows it and
+// only in moist air; drifting banks break it up and fray its edges, and
+// billows roughen the top. The Zone's thin layer opens in small clear
+// patches; Harmont's is thinner and its top rises and falls.
+fn sample_fog(p: vec3<f32>, h: f32, site: vec2<f32>) -> FogSample {
+    let affinity = site.x;
+    let harmont = site.y;
     let w = p.xz + ground.wind.xy;
     let banks = noise2(w / 90.0) * 0.65 + noise2(w / 31.0) * 0.35;
-    let place = smoothstep(0.15, 0.55, affinity + 0.25 * (banks - 0.5));
+    let clearing = noise2(w / 30.0 + 23.5) * 0.7 + noise2(w / 11.0 + 5.1) * 0.3;
+    let gap = smoothstep(0.58, 0.70, clearing) * (1.0 - harmont);
+    let place = smoothstep(0.15, 0.55, affinity + 0.25 * (banks - 0.5)) * (1.0 - gap);
     // Water gets the thickest layer.
     let moist = ground.weather.x + 0.2 * (affinity - 0.5);
     let coverage = place * smoothstep(0.12, 0.5, moist + 0.4 * (banks - 0.5));
@@ -174,14 +182,24 @@ fn sample_fog(p: vec3<f32>, h: f32, affinity: f32) -> FogSample {
     let churn = vec3(0.0, ground.wind.z, 0.0);
     let curl = noise3(vec3(w.x, p.y * 1.7, w.y) / 3.2 + churn);
     let billow = (curl - 0.5) * 0.8 + (noise3(vec3(w.x, p.y, w.y) / 9.0 - churn) - 0.5) * 0.9;
+    let rise = smoothstep(0.25, 0.75, noise2(w / 210.0 + 7.3));
     var out: FogSample;
-    out.top = mix(ground.shape.x, ground.shape.y, thickness) + billow;
-    let profile = smoothstep(-1.6, -0.2, h) * (1.0 - smoothstep(out.top - 0.6, out.top + 0.15, h));
+    out.top = mix(
+        mix(ground.shape.x, ground.shape.y, thickness),
+        mix(ground.harmont.x, ground.harmont.y, rise),
+        harmont,
+    ) + billow;
+    // Harmont's fog is densest on the ground and thins out toward its top.
+    let thinning = mix(1.0, 1.5 * clamp(1.0 - h / max(out.top, 0.5), 0.0, 1.0), harmont);
+    let soft = mix(0.6, 2.0, harmont);
+    let profile = smoothstep(-1.6, -0.2, h) * (1.0 - smoothstep(out.top - soft, out.top + 0.15, h))
+        * thinning;
     let puffs = 0.55 + 0.9 * curl;
+    let dense = clamp(thickness * 0.75 + (banks - 0.5) * 0.8, 0.0, 1.0);
     let density = mix(
-        ground.shape.z,
-        ground.shape.w,
-        clamp(thickness * 0.75 + (banks - 0.5) * 0.8, 0.0, 1.0),
+        mix(ground.shape.z, ground.shape.w, dense),
+        mix(ground.harmont.z, ground.harmont.w, banks),
+        harmont,
     );
     out.extinction = coverage * profile * density * puffs * outside_hall(p.xz) * ground.weather.y;
     return out;
@@ -220,7 +238,7 @@ struct Direct {
 // Direct light at `p`: through the atmosphere, the shadow cascades, and the
 // billow between `p` and the light, which shades the side of each billow
 // facing away from it. Forward scattering brightens fog toward the light.
-fn direct_light(p: vec3<f32>, h: f32, affinity: f32, ray: vec3<f32>) -> Direct {
+fn direct_light(p: vec3<f32>, h: f32, site: vec2<f32>, ray: vec3<f32>) -> Direct {
     var out: Direct;
     out.light = vec3(0.0);
     out.slant = 1.0;
@@ -243,7 +261,7 @@ fn direct_light(p: vec3<f32>, h: f32, affinity: f32, ray: vec3<f32>) -> Direct {
                     local.xy, local.z, i32((*light).depth_texture_base_index + cascade));
             }
         }
-        let shoulder = sample_fog(p + to_light * 1.2, h + to_light.y * 1.2, affinity).extinction;
+        let shoulder = sample_fog(p + to_light * 1.2, h + to_light.y * 1.2, site).extinction;
         let phase = 0.7 + 0.3 * 4.0 * PI * henyey_greenstein(dot(to_light, ray), 0.6);
         let reaching = radiance * (lit * phase / PI * exp(-shoulder * 0.36));
         out.light += reaching;
@@ -371,7 +389,6 @@ fn march_ground_fog(camera: vec3<f32>, ray: vec3<f32>, end: f32, jitter: f32) ->
     if ground.weather.x * ground.weather.y <= 0.0 {
         return vec4(scattered, transmittance);
     }
-    let ceiling = ground.shape.y + 0.6;
     // Most clearance the ray can lose per meter over rising ground.
     let descent = SLOPE * length(ray.xz) - ray.y;
     var t = 0.0;
@@ -389,6 +406,7 @@ fn march_ground_fog(camera: vec3<f32>, ray: vec3<f32>, end: f32, jitter: f32) ->
         }
         let cell = textureSampleLevel(field_texture, field_sampler, uv, 0.0);
         let h = p.y - (cell.r + cell.g);
+        let ceiling = mix(ground.shape.y, ground.harmont.y, cell.a) + 0.6;
         if h > ceiling {
             if descent <= 0.0 {
                 break;
@@ -396,7 +414,7 @@ fn march_ground_fog(camera: vec3<f32>, ray: vec3<f32>, end: f32, jitter: f32) ->
             t += max((h - ceiling) / descent, 0.5);
             continue;
         }
-        let fog = sample_fog(p, h, cell.b);
+        let fog = sample_fog(p, h, cell.ba);
         let above = h - fog.top;
         var step = clamp(0.9 / max(fog.extinction, 0.06), 0.3, 6.0);
         if above > 0.15 {
@@ -405,8 +423,9 @@ fn march_ground_fog(camera: vec3<f32>, ray: vec3<f32>, end: f32, jitter: f32) ->
                 step = clamp((above - 0.1) / -ray.y, 0.3, 6.0);
             }
         } else if above > -0.8 {
-            // Cross the fog's soft top in short steps so it does not band.
-            step = min(step, max(0.2 / max(abs(ray.y), 0.04), 0.3));
+            // Cross the fog's soft top in short steps so it does not band;
+            // Harmont's thin fog takes longer ones.
+            step = min(step, max(mix(0.2, 1.0, cell.a) / max(abs(ray.y), 0.04), 0.3));
         }
         if !entered && above <= 0.15 {
             // Stagger the first sample in the fog per pixel so its top does not band.
@@ -415,8 +434,8 @@ fn march_ground_fog(camera: vec3<f32>, ray: vec3<f32>, end: f32, jitter: f32) ->
         }
         let span = min(step, end - t);
         if fog.extinction > 1.0e-4 {
-            if t - lit_at > LIGHT_REUSE {
-                direct = direct_light(p, h, cell.b, ray);
+            if t - lit_at > mix(LIGHT_REUSE.x, LIGHT_REUSE.y, cell.a) {
+                direct = direct_light(p, h, cell.ba, ray);
                 lit_at = t;
             }
             let kept = exp(-fog.extinction * span);

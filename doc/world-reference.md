@@ -113,11 +113,19 @@ the stalker stands still.
   between half the armored car's height and its roof (1.25–2.6 m), and visibility
   inside ranges 1–5 two-metre ground tiles, so a crawling stalker disappears while
   a standing one shows chest-up. The fog field texture, built from the distant
-  terrain tiles while the landscape loads, stores the surface height and where
-  fog may gather: over water and its banks (the marsh, the coast and the lake),
-  in the quarry basin and in the three dense woods. Saturated air
-  (`Weather::fog`) spreads it there; the rest of the map stays clear even in
-  saturated air. Drifting banks fray its edges, and billows and wind break it up.
+  terrain tiles while the landscape loads, stores the surface height, how
+  readily fog gathers and which side of the Perimeter each spot lies on. In the
+  Zone it gathers on all low ground and thickest over water and its banks (the
+  marsh, the coast and the lake), in the quarry basin and in the three dense
+  woods; the hills (over 22-45 m) stay clear, and small clear patches, 10-30 m
+  across, drift through it. Saturated air (`Weather::fog`) brings it, and every
+  night does whatever the weather (`night_fog`: it gathers from 19:00 to 21:00
+  and lifts from 07:30 to 09:30, so dawn is foggy). Harmont, the hangar yard
+  and the Institute get a thinner fog of their own: 90-150 m visibility to 2%
+  contrast (a house 50 m away still shows at about a quarter of its contrast),
+  densest on the ground and thinning upward, its top rising and falling
+  between 1.5 and 8 m; the two blend over 60 m across the Perimeter. Drifting
+  banks fray its edges, and billows and wind break it up.
   The sun and moon light it through the atmosphere with shadows and forward
   scattering. The hangar hall stays clear, and the fog thins out above ~140 m of
   camera height. The same pass marches three layers of cumulus whose bases lie

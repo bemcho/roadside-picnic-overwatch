@@ -1,8 +1,10 @@
 //! The ground fog's map of the Zone: the surface the fog rests on (land or
-//! open water) and where fog gathers: over water and its banks (the marsh,
-//! the coast and the lake), in the quarry basin and in the three dense woods.
-//! The rest of the map stays clear, even in saturated air. Sampled from the
-//! distant terrain tiles while the landscape is prepared.
+//! open water), how readily fog gathers there and which side of the Perimeter
+//! it lies on. In the Zone fog spreads over all low ground and thickens over
+//! water and its banks (the marsh, the coast and the lake), in the quarry
+//! basin and in the three dense woods; the high ground stays clear. Harmont,
+//! the hangar and the Institute get a thinner, taller fog of their own.
+//! Sampled from the distant terrain tiles while the landscape is prepared.
 
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::VertexAttributeValues;
@@ -10,6 +12,7 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use super::super::canopy::wood;
+use super::super::cordon::PERIMETER_X;
 use super::super::terrain::{
     QUARRY_CENTER, QUARRY_RADII, SCENIC_TILE_RADIUS, TILE_SIZE, TerrainGrid, WaterVertex,
     smoothstep,
@@ -25,6 +28,14 @@ const UNMAPPED: f32 = -1.0e3;
 /// Heights are split into a coarse step and a remainder so half floats keep
 /// centimeter precision; both halves still interpolate linearly.
 const HEIGHT_STEP: f32 = 16.0;
+/// Affinity of the Zone's low ground and of Harmont's: enough for fog to
+/// gather in moist air, below the water's, the quarry's and the woods'.
+const LOWLAND_AFFINITY: f32 = 0.6;
+/// Surface heights over which the lowland fog thins out to clear hills.
+const HILLS: (f32, f32) = (22.0, 45.0);
+/// Half the width of the blend from the Zone's fog to Harmont's, across the
+/// Perimeter.
+const PERIMETER_BLEND: f32 = 30.0;
 
 pub(super) fn origin() -> Vec2 {
     Vec2::splat(-EXTENT * 0.5)
@@ -77,8 +88,8 @@ impl FogField {
         }
     }
 
-    /// Per texel: surface height (coarse, remainder) and fog affinity, 0
-    /// wherever fog must not form.
+    /// Per texel: surface height (coarse, remainder), fog affinity (0 wherever
+    /// fog must not form) and how far it lies on Harmont's side (0 in the Zone).
     fn texels(&self) -> Vec<[f32; 4]> {
         let damp = box_blur(&self.wet, 4);
         (0..SIZE * SIZE)
@@ -87,9 +98,15 @@ impl FogField {
                 let cell = Vec2::new((index % SIZE) as f32, (index / SIZE) as f32);
                 let at = origin() + cell * SPACING;
                 let water = self.wet[index].max(damp[index] * 1.6).min(1.0);
-                let affinity = water.max(quarry_basin(at)).max(0.8 * wood(at));
+                let lowland = LOWLAND_AFFINITY * (1.0 - smoothstep(HILLS.0, HILLS.1, surface));
+                let affinity = water.max(quarry_basin(at)).max(0.8 * wood(at)).max(lowland);
+                let harmont = smoothstep(
+                    PERIMETER_X - PERIMETER_BLEND,
+                    PERIMETER_X + PERIMETER_BLEND,
+                    at.x,
+                );
                 let coarse = (surface / HEIGHT_STEP).round() * HEIGHT_STEP;
-                [coarse, surface - coarse, affinity, 1.0]
+                [coarse, surface - coarse, affinity, harmont]
             })
             .collect()
     }
@@ -184,6 +201,9 @@ mod tests {
             .collect()
     }
 
+    /// Dry, open low ground in the Zone, between the Perimeter and the marsh.
+    const ZONE_LOWLAND: Vec2 = Vec2::new(520.0, -300.0);
+
     /// The deepest of the marsh's pools.
     fn marsh_pool(terrain: &Terrain) -> Vec2 {
         let depth = |at: Vec2| terrain.water_depth_at(at.x, at.y);
@@ -204,26 +224,32 @@ mod tests {
     }
 
     #[test]
-    fn fog_gathers_only_over_water_the_quarry_and_the_woods() {
+    fn fog_gathers_on_low_ground_most_over_water_and_never_on_the_hills() {
         let terrain = Terrain::new();
-        let foggy = [
+        let places = [
             ("marsh pool", marsh_pool(&terrain)),
             ("quarry floor", Vec2::from(QUARRY_CENTER)),
             ("north wood", WOODS[2].0),
-        ];
-        let clear = [
+            ("Zone lowland", ZONE_LOWLAND),
             ("mountain summit", Vec2::new(-744.0, 400.0)),
             ("hangar", Vec2::from(BASE)),
             ("town plaza", PLAZA),
         ];
-        let points: Vec<_> = foggy.iter().chain(&clear).map(|(_, at)| *at).collect();
+        let points: Vec<_> = places.iter().map(|(_, at)| *at).collect();
         let texels = texels_at(&terrain, &points);
-        for ((name, _), texel) in foggy.iter().zip(&texels) {
-            assert!(texel[2] > 0.5, "{name} should gather fog: {texel:?}");
+        let [pool, quarry, wood, lowland, summit, hangar, plaza] = texels[..] else {
+            unreachable!("seven points in, seven texels out");
+        };
+        for (name, texel) in [("pool", pool), ("quarry", quarry), ("wood", wood)] {
+            assert!(texel[2] > lowland[2], "{name} gathers more fog: {texel:?}");
         }
-        for ((name, _), texel) in clear.iter().zip(&texels[foggy.len()..]) {
-            assert!(texel[2] < 0.05, "{name} should stay clear: {texel:?}");
+        assert!((lowland[2] - LOWLAND_AFFINITY).abs() < 0.05, "{lowland:?}");
+        assert!(summit[2] < 0.05, "the hills stay clear: {summit:?}");
+        for texel in [hangar, plaza] {
+            assert!(texel[2] > 0.5, "Harmont gathers fog too: {texel:?}");
+            assert_eq!(texel[3], 1.0, "on Harmont's side: {texel:?}");
         }
+        assert_eq!(lowland[3], 0.0, "in the Zone: {lowland:?}");
     }
 
     #[test]

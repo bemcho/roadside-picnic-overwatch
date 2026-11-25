@@ -1,7 +1,10 @@
 //! Fog. A thin, terrain-hugging ground fog, from half the armored car's height
-//! to its roof, gathers over water, vegetation and low ground at night, at
-//! dawn, and on humid or rainy days ([`render`] raymarches it over the fog
-//! [`field`]). The same pass marches three layers of cloud at different
+//! to its roof, gathers over the Zone's low ground every night and dawn, and on
+//! humid or rainy days, thickest over water and in the woods, with clear
+//! patches between its banks. Harmont, the hangar and the Institute get a
+//! thinner fog whose top rises and falls between a man's height and a house's
+//! ([`render`] raymarches both over the fog [`field`]). The same pass marches
+//! three layers of cloud at different
 //! heights, whose cover follows the weather. Bevy's distance fog adds a cloud
 //! shelf over the far lowlands.
 
@@ -45,6 +48,17 @@ const GROUND_TILE: f32 = 2.0;
 const VISIBILITY_TILES: (f32, f32) = (1.0, 5.0);
 /// Height of the fog's top above the ground: half the armored car, up to its roof.
 const FOG_TOP: (f32, f32) = (1.25, 2.6);
+/// Harmont's fog, from its thinnest to its densest banks: visibility (m, to
+/// 2% contrast; a house 50 m away still shows at about a quarter of its
+/// contrast) and the height of its top above the ground (m).
+const HARMONT_VISIBILITY: (f32, f32) = (150.0, 90.0);
+const HARMONT_TOP: (f32, f32) = (1.5, 8.0);
+/// The fog tendency every night brings, whatever the day's weather.
+const NIGHT_FOG: f32 = 0.7;
+/// Hours over which the night's fog gathers in the evening, and over which it
+/// lifts after dawn.
+const NIGHT_FOG_GATHERS: (f32, f32) = (19.0, 21.0);
+const NIGHT_FOG_LIFTS: (f32, f32) = (7.5, 9.5);
 /// The hangar hall stays clear of fog.
 const HALL_HALF_EXTENTS: Vec2 = Vec2::new(18.5, 20.5);
 /// Diffuse skylight on a clear day, in lux.
@@ -56,14 +70,21 @@ const CLOUD_COVER: (f32, f32) = (0.3, 0.6);
 
 pub(crate) fn camera_fog() -> GroundFog {
     // Koschmieder: visibility = 3.912 / extinction.
-    let extinction = |tiles: f32| 3.912 / (tiles * GROUND_TILE);
+    let extinction = |meters: f32| 3.912 / meters;
+    let tiles = |tiles: f32| extinction(tiles * GROUND_TILE);
     GroundFog {
         field: field::origin().extend(1.0 / field::EXTENT).extend(0.0),
         shape: Vec4::new(
             FOG_TOP.0,
             FOG_TOP.1,
-            extinction(VISIBILITY_TILES.1),
-            extinction(VISIBILITY_TILES.0),
+            tiles(VISIBILITY_TILES.1),
+            tiles(VISIBILITY_TILES.0),
+        ),
+        harmont: Vec4::new(
+            HARMONT_TOP.0,
+            HARMONT_TOP.1,
+            extinction(HARMONT_VISIBILITY.0),
+            extinction(HARMONT_VISIBILITY.1),
         ),
         clear_box: Vec4::new(BASE.0, BASE.1, HALL_HALF_EXTENTS.x, HALL_HALF_EXTENTS.y),
         shroud: super::shroud::mask_bounds(),
@@ -105,7 +126,8 @@ pub(super) fn update_ground_fog(
     for (mut fog, camera, exposure) in &mut cameras {
         let height = (camera.translation.y - ground).max(0.0);
         let fade = 1.0 - smoothstep(OVERVIEW_FADE.0, OVERVIEW_FADE.1, height);
-        fog.weather = Vec4::new(weather.fog, fade, 0.0, 0.0);
+        let tendency = weather.fog.max(night_fog(clock.hour()));
+        fog.weather = Vec4::new(tendency, fade, 0.0, 0.0);
         fog.clouds = Vec4::new(cloud_cover(weather.cloud), weather.cloud, 0.0, 0.0);
         fog.wind += Vec4::new(drift.x, drift.y, churn, 0.0);
         fog.ambient = (sky * exposure.exposure() / PI).extend(0.0);
@@ -147,6 +169,14 @@ pub(super) fn update_distance_fog(
         let regional = visibility_at(at, &terrain) * (1.0 - 0.4 * weather.fog);
         fog.falloff = FogFalloff::from_visibility_squared(regional + height * OVERVIEW_CLEARANCE);
     }
+}
+
+/// The fog tendency of the night at `hour`: it gathers after dusk and lifts
+/// a few hours after dawn.
+fn night_fog(hour: f32) -> f32 {
+    let gathered = smoothstep(NIGHT_FOG_GATHERS.0, NIGHT_FOG_GATHERS.1, hour);
+    let lingering = 1.0 - smoothstep(NIGHT_FOG_LIFTS.0, NIGHT_FOG_LIFTS.1, hour);
+    NIGHT_FOG * gathered.max(lingering)
 }
 
 /// Cover of the cloud layers for the weather's cloudiness (0-1).
@@ -209,6 +239,18 @@ mod tests {
             .iter()
             .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
         assert!(maximum - minimum >= 128.0, "fog banks must vary by region");
+    }
+
+    #[test]
+    fn fog_gathers_every_night_and_lifts_after_dawn() {
+        for hour in [22.0, 0.0, 3.0, 5.5, 7.0] {
+            assert_eq!(night_fog(hour), NIGHT_FOG, "at {hour}");
+        }
+        for hour in [10.0, 13.0, 18.5] {
+            assert_eq!(night_fog(hour), 0.0, "at {hour}");
+        }
+        assert!(night_fog(8.5) < night_fog(8.0));
+        assert!(night_fog(20.0) > night_fog(19.5));
     }
 
     #[test]
