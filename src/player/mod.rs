@@ -42,7 +42,7 @@ use orders::{
 use vehicle::{
     Driver, Driving, Patrol, Vehicle, drive_carrier, drive_patrol, drive_traffic, drive_vehicle,
     flash_beacons, interact_vehicle, pose_wheels, spawn_carrier, spawn_patrol, spawn_traffic,
-    sync_spotlight,
+    steer_carrier, sync_spotlight,
 };
 
 pub struct PlayerPlugin;
@@ -171,6 +171,7 @@ impl Plugin for PlayerPlugin {
                     interact_vehicle,
                     move_player,
                     drive_vehicle,
+                    steer_carrier,
                     pose_wheels,
                     sync_spotlight,
                     follow_player,

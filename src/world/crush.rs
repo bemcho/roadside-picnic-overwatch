@@ -1,5 +1,5 @@
-//! Heavy bodies leave their mark. Every [`Crusher`] (the stalker, their car and
-//! the UN patrol) tramples the plants under its footprint and knocks down the
+//! Heavy bodies leave their mark. Every [`Crusher`] (the stalker, their car,
+//! the Institute's carrier and the UN patrol) tramples the plants under its footprint and knocks down the
 //! lighter solids it touches: trees fall like the ones that snap on their own,
 //! slender marsh props topple and squat ones are pressed into the mud. Neither
 //! comes back while the run lasts.

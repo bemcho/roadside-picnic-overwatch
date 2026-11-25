@@ -38,7 +38,8 @@ stalker's world position (X, Y, Z in meters; Y is up).
   checkpoints, trees and guards can't be climbed
 - **Space** — jump
 - **Ctrl** (hold) — crawl prone
-- **E** — enter or exit the armored vehicle; **W/S** to accelerate/reverse, **A/D** to steer, **Space** to brake
+- **E** — enter or exit the armored vehicle, or the Institute carrier while it stands
+  still; **W/S** to accelerate/reverse, **A/D** to steer, **Space** to brake
 - **Mouse wheel** — zoom from over the shoulder out to the whole map; pitch steepens with zoom
 - **Right mouse drag** — rotate the camera
 - **Arrow keys / middle drag / screen edges** — roam the camera freely

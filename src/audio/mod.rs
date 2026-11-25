@@ -12,7 +12,7 @@ use bevy::prelude::*;
 
 use crate::player::{
     Gait, Locomotion, Player,
-    vehicle::{Driving, Vehicle},
+    vehicle::{Carrier, Driving, Vehicle},
 };
 use crate::states::{AppState, InGamePhase, SplashPhase};
 use crate::world::{CreatureSound, GunSound};
@@ -272,14 +272,21 @@ fn sync_engine(
     mode: Res<AudioMode>,
     phase: Res<State<InGamePhase>>,
     driver: Query<&Driving, With<Player>>,
-    vehicles: Query<&Vehicle>,
+    vehicles: Query<AnyOf<(&Vehicle, &Carrier)>>,
     mut engine: Query<(Entity, Option<&mut AudioSink>), With<Engine>>,
 ) {
-    let car = driver.single().ok().and_then(|d| vehicles.get(d.0).ok());
+    let load = driver
+        .single()
+        .ok()
+        .and_then(|d| vehicles.get(d.0).ok())
+        .map(|driven| match driven {
+            (Some(car), _) => car.engine_load(),
+            (None, Some(carrier)) => carrier.engine_load(),
+            (None, None) => 0.0,
+        });
     let running = *phase.get() == InGamePhase::Running;
-    match (car, engine.single_mut().ok()) {
-        (Some(car), Some((_, Some(mut sink)))) => {
-            let load = car.engine_load();
+    match (load, engine.single_mut().ok()) {
+        (Some(load), Some((_, Some(mut sink)))) => {
             sink.set_speed(0.82 + load * 0.95);
             sink.set_volume(Volume::Linear(0.30 + load * 0.45));
             if running { sink.play() } else { sink.pause() }

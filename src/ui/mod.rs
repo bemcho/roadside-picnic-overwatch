@@ -16,7 +16,7 @@ use bevy::prelude::*;
 use crate::audio::AudioMode;
 use crate::player::{
     Locomotion, OrbitCamera, Player,
-    vehicle::{Driving, Vehicle, can_enter_vehicle},
+    vehicle::{Driving, Seat},
 };
 use crate::save::ProgressSaved;
 use crate::states::{AppState, InGamePhase};
@@ -425,7 +425,7 @@ fn update_vehicle_prompt(
     phase: Res<State<InGamePhase>>,
     audio: Res<AudioMode>,
     player: Query<(&Transform, &Locomotion, Option<&Driving>), With<Player>>,
-    vehicles: Query<&Transform, With<Vehicle>>,
+    seats: Query<(&Transform, &Seat)>,
     mut prompts: Query<&mut Text, (With<VehiclePrompt>, Without<HudControls>)>,
     mut controls: Query<&mut Text, With<HudControls>>,
 ) {
@@ -439,9 +439,9 @@ fn update_vehicle_prompt(
         ""
     } else if driving {
         text::HUD_EXIT_VEHICLE
-    } else if vehicles
+    } else if seats
         .iter()
-        .any(|at| can_enter_vehicle(locomotion, at, feet.translation))
+        .any(|(at, seat)| seat.can_enter(locomotion, at, feet.translation))
     {
         text::HUD_ENTER_VEHICLE
     } else {

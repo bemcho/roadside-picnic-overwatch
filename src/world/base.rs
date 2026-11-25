@@ -330,7 +330,7 @@ fn spawn_lamps(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::player::vehicle::{blocked, vehicle_distance};
+    use crate::player::vehicle::{Seat, blocked};
     use crate::world::cordon::inside_yard;
     use crate::world::{Body, SPAWN, push_out};
 
@@ -414,7 +414,7 @@ mod tests {
         let spawn = Vec2::from(SPAWN) - Vec2::from(BASE);
         assert!(DOOR_Z * MODEL_SCALE - spawn.y > 5.0);
         let start = Vec3::new(spawn.x, 0.0, spawn.y);
-        assert!(vehicle_distance(&vehicle, start) > 0.35);
+        assert!(Seat::CAR.distance(&vehicle, start) > 0.35);
         let body = Body {
             radius: 0.35,
             height: 1.8,
