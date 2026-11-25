@@ -706,7 +706,11 @@ the stalker stands still.
   less `MARGIN_GB` (0.5) and the most the rest of the game (all but the
   scans) has used this run. A dropped scan's bytes count as scan memory, not
   the rest of the game, until a reading shows them freed or reused (wgpu
-  keeps freed memory in 256 MiB blocks); after `FREE_WAIT_SECONDS` (30) they
+  keeps freed memory in blocks until they empty; `main.rs` asks for 8-64 MiB
+  blocks, `MemoryHints::MemoryUsage`, as the default 256 MiB ones left ~1.2 GB
+  of the 6 GB card reserved but unused, which is what ran it out of memory;
+  the same night drive uses ~0.43 GB less VRAM at the same frame rate);
+  after `FREE_WAIT_SECONDS` (30) they
   stop holding room for new scans, but a wanted scan that finds no other room
   may still load into them, one at a time within the live budget: the reading
   after it lands frees them if it reused them, or else no scan tries again
@@ -718,7 +722,18 @@ the stalker stands still.
   least recently shown unwanted one leaves, unpinned before pinned
   (`UHD scan … left the GPU` in the log). Where the driver cannot report
   VRAM, the budget is `--vram` (6 GB without it) less `DESKTOP_GB` (0.6),
-  `GAME_VRAM_GB` and the margin. Measured on the 6 GB RTX 2060 (with five tree species): peak RSS
+  `GAME_VRAM_GB` and the margin. If the GPU runs out of memory anyway (a
+  spike between two readings), the game does not quit as Bevy would
+  (`gpu_scans/recovery.rs`, the `RenderErrorHandler`): it drops every scan on
+  or bound for the GPU, gives up `OOM_SQUEEZE_GB` (0.5) more of the scan
+  budget for the rest of the run, drops the render world's per-frame textures
+  (`TextureCache`, where the failed shadow map would otherwise be reused) and
+  renders on; the scans come back as the smaller budget allows (`The GPU ran
+  out of memory` in the log). A validation error within 2 s of one is its
+  echo and recovers too. Any other render error, or a fourth recovery within a
+  minute, quits as before, so a lasting error cannot make the screen flash. A
+  full device recovery is not an option: the terrain, roads and scenery
+  meshes are render-only and could not be uploaded again. Measured on the 6 GB RTX 2060 (with five tree species): peak RSS
   9.3–11.7 GiB, the fill 3.3 GB in 10–14 s warm or cold, 1.4–2.1 GB of scans
   on the GPU. All 42 scans of then would take about 4.4 GiB on the GPU, so every one
   would stay from a driver budget of about 7.4 GiB (a 10 GB card); that is an

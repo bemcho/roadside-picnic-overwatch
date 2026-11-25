@@ -8,6 +8,7 @@
 //! the files nobody wants yet; `vram` keeps the budget on the driver's live
 //! VRAM reading.
 
+mod recovery;
 mod residency;
 mod streaming;
 mod vram;
@@ -35,9 +36,10 @@ pub const DESKTOP_GB: f32 = 0.6;
 pub const GAME_VRAM_GB: f32 = 2.4;
 /// GPU bytes per file byte of a scan (the five trees: about 700 MB from 428 MB).
 pub const GPU_BYTES_PER_FILE_BYTE: f32 = 1.65;
-/// GiB of the budget that prefill leaves free. The game's VRAM grows in 256 MiB
-/// allocator steps, and one such step in everything else lowers the budget by
-/// as much (0.4 GB measured on the 2060, just after the entry curtain). A
+/// GiB of the budget that prefill leaves free. The game's VRAM grows in
+/// allocator steps (256 MiB before `main` asked wgpu for 8-64 MiB blocks), and
+/// one such step in everything else lowers the budget by as much (0.4 GB
+/// measured on the 2060 with 256 MiB blocks, just after the entry curtain). A
 /// scan nobody wants yet must not sit at the budget's edge, where that dip
 /// evicts it and prefill loads it back. Behind the entry curtain, while the
 /// world's own uploads still land, every admission leaves it free
@@ -45,10 +47,13 @@ pub const GPU_BYTES_PER_FILE_BYTE: f32 = 1.65;
 pub const PREFILL_HEADROOM_GB: f32 = 0.5;
 /// Seconds a dropped scan's bytes may take to leave the driver's usage before
 /// they stop holding room for other scans. Rendering lets go of a scan within
-/// a few frames, but wgpu's allocator keeps freed memory in its 256 MiB blocks
-/// until a block empties, so a free may never show; a scan loaded later
+/// a few frames, but wgpu's allocator keeps freed memory in its blocks (8-64
+/// MiB) until a block empties, so a free may not show; a scan loaded later
 /// usually reuses it, which the reading then shows.
 pub const FREE_WAIT_SECONDS: f32 = 30.0;
+/// GiB the scan budget gives up for the rest of the run each time the GPU runs
+/// out of memory (`GpuScans::out_of_memory`).
+pub const OOM_SQUEEZE_GB: f32 = 0.5;
 
 /// The driver's device-local heap budget for this process and this process's
 /// usage of it, in bytes.
@@ -177,6 +182,9 @@ pub struct GpuScans {
     trying: Option<(&'static str, u64)>,
     /// No scan tries stuck room before this time: the last one did not reuse it.
     next_try: f32,
+    /// Bytes every budget leaves free on top of the margin, grown by each
+    /// time the GPU ran out of memory.
+    squeeze: u64,
     /// The world still uploads behind the entry curtain: every admission
     /// leaves `PREFILL_HEADROOM_GB` free.
     entering: bool,
@@ -243,7 +251,7 @@ impl GpuScans {
         self.rest_peak = Some(peak);
         self.note_stuck_frees(now);
         self.judge_try(now);
-        self.set_budget(live_scan_budget(reading, peak, cap));
+        self.set_budget(live_scan_budget(reading, peak, cap).saturating_sub(self.squeeze));
         debug!(
             "VRAM: usage {} MB, scans {} MB, rest of the game {} MB at most, freeing {} MB ({} MB stuck); budget {} MB",
             reading.usage >> 20,
@@ -254,6 +262,26 @@ impl GpuScans {
             self.budget >> 20,
         );
         true
+    }
+
+    /// The GPU ran out of memory at `now`: drops every scan on the GPU or on
+    /// its way there, as the failed allocation may be one of theirs, and
+    /// leaves `OOM_SQUEEZE_GB` more free from now on. Returns the dropped
+    /// scans; the caller frees them (`unload`). They come back as the
+    /// smaller budget allows, their stand-ins showing meanwhile.
+    pub fn out_of_memory(&mut self, now: f32) -> Vec<&'static str> {
+        let dropped: Vec<_> = self
+            .scans
+            .iter()
+            .filter(|(_, scan)| scan.state != State::Off)
+            .map(|(&path, _)| path)
+            .collect();
+        for &path in &dropped {
+            self.drop_scan(path, now);
+        }
+        self.squeeze += gib(OOM_SQUEEZE_GB);
+        self.budget = self.budget.saturating_sub(gib(OOM_SQUEEZE_GB));
+        dropped
     }
 
     /// What scans may fill: the live budget less the bytes of dropped scans
@@ -908,6 +936,27 @@ mod tests {
         assert!(scans.apply_reading(reading, None, 20.0));
         assert_eq!(scans.budget(), 200 * MB);
         (scans, reading)
+    }
+
+    #[test]
+    fn running_out_of_memory_drops_every_scan_and_squeezes_the_budget() {
+        let (mut scans, full) = two_scans_at_the_budget();
+        scans.estimate_exact("c", 10 * MB);
+        scans.want("c", 0.0);
+        scans.set_budget(gib(1.0));
+        assert_eq!(scans.plan(20.0).load, ["c"]);
+
+        assert_eq!(scans.out_of_memory(21.0), ["a", "b", "c"], "loading too");
+        assert_eq!(scans.resident_bytes(), 0);
+        assert_eq!(scans.budget(), gib(1.0) - gib(OOM_SQUEEZE_GB));
+
+        // Every reading from now on leaves the squeeze free as well.
+        let roomy = VramReading {
+            budget: full.budget + gib(1.0),
+            usage: full.usage - 200 * MB,
+        };
+        assert!(scans.apply_reading(roomy, None, 60.0));
+        assert_eq!(scans.budget(), 200 * MB + gib(1.0) - gib(OOM_SQUEEZE_GB));
     }
 
     #[test]
