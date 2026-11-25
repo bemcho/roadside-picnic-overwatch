@@ -454,9 +454,16 @@ the stalker stands still.
   at 3 m/s², braking at 8 m/s²; A/D turn it at 0.6 rad/s, on the spot when it
   stands, the other way backing up), or to a clicked point by the car's
   autopilot. It weighs 18 t (`Crusher`, footprint 3.6 × 7 m), so it flattens
-  plants and knocks down what is lighter; it fords what the car fords, climbs
-  grades up to 0.6 and stops at heavier solids, where it can still turn in
-  place. Its engine plays the car's engine sound. E puts the stalker down
+  plants and knocks down what is lighter. Off road it does more than the car:
+  it fords swamp pools up to 1.5 m deep (the car 0.6 m), climbs grades up to
+  1.0 (45°), and rides over rocks, logs and other solids up to 1 m high, each
+  quarter of its tracks resting on the highest one under it (`Footing`);
+  taller ones, more than 0.5 m above its tracks' line under the hull, stop it,
+  though it can still turn in place. Deep water and climbs slow it, to 40% at
+  its fording depth or steepest grade. Four lamps (two headlamps on the upper
+  glacis, 50 m; two shadow-casting floods on the cab roof, 180 m) burn while
+  it is out on an expedition or driven, as the car's do while driven
+  (`Lamp`, `mount_spotlights`). Its engine plays the car's engine sound. E puts the stalker down
   beside it (`Seat`, shared with the car); saved at its wheel, they come back
   beside it while the carrier itself returns to its bay.
 - **Institute helicopters** (`src/world/helicopters.rs`): two helicopters

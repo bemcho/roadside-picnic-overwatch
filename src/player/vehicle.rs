@@ -215,48 +215,67 @@ pub(crate) fn spawn_vehicle(
         WorldAssetRoot(assets::load_vehicle_scene(assets, assets::BASE_VEHICLE)),
     ));
     vehicle.observe(attach_wheels);
-    mount_spotlights(&mut vehicle, meshes, materials);
+    mount_spotlights(&mut vehicle, meshes, materials, &car_lamps());
     vehicle.id()
 }
 
-/// The vehicle's two lamps, in model coordinates (local +Z is the nose): a
-/// dipped beam at the grille that lights the ground just ahead, and a
-/// searchlight on the cab roof that throws a longer, wider spot down the road.
-/// Both shine only while someone drives.
-fn mount_spotlights(
+/// A vehicle lamp: where it sits in model coordinates (local +Z is the nose)
+/// and where it looks, its housing's radius in model units, and its light.
+pub(super) struct Lamp {
+    pub(super) mount: Transform,
+    pub(super) size: f32,
+    pub(super) light: SpotLight,
+}
+
+/// The lamps' cold white.
+pub(super) const LAMP_COLOR: Color = Color::srgb(0.91, 0.96, 1.0);
+
+/// The car's two lamps: a dipped beam at the grille that lights the ground
+/// just ahead, and a searchlight on the cab roof that throws a longer, wider
+/// spot down the road.
+fn car_lamps() -> [Lamp; 2] {
+    [
+        Lamp {
+            mount: Transform::from_xyz(0.0, 0.255, 0.473)
+                .looking_to(FORWARD - Vec3::Y * 0.19, Vec3::Y),
+            size: 0.034,
+            light: SpotLight {
+                color: LAMP_COLOR,
+                intensity: 2.2e7,
+                range: 32.0,
+                radius: 0.16,
+                inner_angle: 0.19,
+                outer_angle: 0.37,
+                shadow_maps_enabled: true,
+                ..default()
+            },
+        },
+        Lamp {
+            mount: Transform::from_xyz(0.07, 0.436, 0.115)
+                .looking_to(FORWARD - Vec3::Y * 0.035, Vec3::Y),
+            size: 0.045,
+            light: SpotLight {
+                color: LAMP_COLOR,
+                intensity: 6.0e7,
+                range: 120.0,
+                radius: 0.22,
+                inner_angle: 0.2,
+                outer_angle: 0.46,
+                shadow_maps_enabled: true,
+                ..default()
+            },
+        },
+    ]
+}
+
+/// Mounts `lamps` on a vehicle: a housing and a glowing lens each, and the
+/// light, which shines only while it drives (`sync_spotlight`).
+pub(super) fn mount_spotlights(
     vehicle: &mut EntityCommands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    lamps: &[Lamp],
 ) {
-    let color = Color::srgb(0.91, 0.96, 1.0);
-    let dipped = (
-        Transform::from_xyz(0.0, 0.255, 0.473).looking_to(FORWARD - Vec3::Y * 0.19, Vec3::Y),
-        0.034,
-        SpotLight {
-            color,
-            intensity: 2.2e7,
-            range: 32.0,
-            radius: 0.16,
-            inner_angle: 0.19,
-            outer_angle: 0.37,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-    );
-    let searchlight = (
-        Transform::from_xyz(0.07, 0.436, 0.115).looking_to(FORWARD - Vec3::Y * 0.035, Vec3::Y),
-        0.045,
-        SpotLight {
-            color,
-            intensity: 6.0e7,
-            range: 120.0,
-            radius: 0.22,
-            inner_angle: 0.2,
-            outer_angle: 0.46,
-            shadow_maps_enabled: true,
-            ..default()
-        },
-    );
     let housing = materials.add(StandardMaterial {
         base_color: Color::srgb(0.18, 0.19, 0.20),
         metallic: 0.55,
@@ -268,7 +287,7 @@ fn mount_spotlights(
         ..default()
     });
     vehicle.with_children(|body| {
-        for (mount, size, light) in [dipped, searchlight] {
+        for &Lamp { mount, size, light } in lamps {
             body.spawn((
                 Mesh3d(meshes.add(Cylinder::new(size, size * 1.3))),
                 MeshMaterial3d(housing.clone()),
@@ -291,13 +310,21 @@ fn mount_spotlights(
     });
 }
 
+/// Lights a vehicle's lamps while the stalker drives it, and the carrier's
+/// while it is out on an expedition.
 pub(super) fn sync_spotlight(
     driver: Query<&Driving, With<Player>>,
+    carriers: Query<&Carrier>,
     mut spotlights: Query<(&ChildOf, &mut Visibility), With<VehicleSpotlight>>,
 ) {
     let occupied = driver.single().ok().map(|driver| driver.0);
     for (vehicle, mut visibility) in &mut spotlights {
-        let next = if Some(vehicle.parent()) == occupied {
+        let vehicle = vehicle.parent();
+        let lit = Some(vehicle) == occupied
+            || carriers
+                .get(vehicle)
+                .is_ok_and(|carrier| carrier.on_expedition());
+        let next = if lit {
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -804,16 +831,16 @@ pub(crate) fn blocked<'a>(
     at: &Transform,
     colliders: impl Iterator<Item = (&'a Collider, &'a GlobalTransform)>,
 ) -> bool {
-    hull_blocked(at, HALF_EXTENTS, HULL_HEIGHT, colliders)
+    hull_blocked(at, HALF_EXTENTS, (STEP_HEIGHT, HULL_HEIGHT), colliders)
 }
 
-/// Whether a hull of `half_extents` and `height` posed at `at` would stand in
-/// one of `colliders`: it steps over what is lower than `STEP_HEIGHT` and
-/// passes under what is higher than itself.
+/// Whether a hull of `half_extents` posed at `at` would stand in one of
+/// `colliders`: it rides over what is lower than `step` above its underside
+/// and passes under what is higher than its `height`.
 fn hull_blocked<'a>(
     at: &Transform,
     half_extents: Vec2,
-    height: f32,
+    (step, height): (f32, f32),
     colliders: impl Iterator<Item = (&'a Collider, &'a GlobalTransform)>,
 ) -> bool {
     let heading = contact::heading(at.rotation);
@@ -836,7 +863,7 @@ fn hull_blocked<'a>(
             let base = at.translation.y - up.dot(offset) / up.y;
             let top = center.y + pillar.top * scale.y;
             let bottom = center.y + pillar.bottom * scale.y;
-            top > base + STEP_HEIGHT && bottom < base + height
+            top > base + step && bottom < base + height
         })
     })
 }

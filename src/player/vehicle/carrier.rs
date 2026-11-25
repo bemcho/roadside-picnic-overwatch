@@ -12,7 +12,10 @@
 //! The stalker can take it whenever it stands still, in its bay or waiting
 //! out in the Zone (`steer_carrier`): it then drives on its tracks, turning on
 //! the spot when stopped, and stays wherever they leave it for the rest of
-//! the run.
+//! the run. Off road it fords swamp water up to `FORD` deep, climbs grades up
+//! to `MAX_CLIMB` and rides over rocks and logs up to `ROCK_STEP` high, slowing
+//! in deep water and on climbs. Its four lamps (two headlamps, two roof
+//! floods) burn while it is out on an expedition or driven.
 
 use std::f32::consts::{PI, TAU};
 
@@ -31,8 +34,8 @@ use super::super::orders::{MoveOrder, Turning};
 use super::patrol::{Patrol, in_the_way};
 use super::traffic::{Traffic, keep_right, round_corners, settle_footprint};
 use super::{
-    AUTOPILOT_MIN_SPEED, DRIVE_KEYS, DriveInput, Driving, FORD_DEPTH, Seat, Solids, Vehicle,
-    autopilot, hull_blocked, key_input, other_colliders,
+    AUTOPILOT_MIN_SPEED, DRIVE_KEYS, DriveInput, Driving, LAMP_COLOR, Lamp, Seat, Solids, Vehicle,
+    autopilot, hull_blocked, key_input, mount_spotlights, other_colliders,
 };
 
 /// Meters per model unit: the carrier is 7 m long.
@@ -84,14 +87,24 @@ const BODY: Crusher = Crusher {
     half_size: HULL_HALF,
 };
 /// Driven by the stalker: its top speeds ahead and astern (m/s), how hard it
-/// speeds up and brakes (m/s²), how fast its tracks turn it (rad/s) and the
-/// steepest grade they climb.
+/// speeds up and brakes (m/s²) and how fast its tracks turn it (rad/s).
 const DRIVEN_TOP: f32 = 10.0;
 const DRIVEN_REVERSE: f32 = 3.0;
 const DRIVEN_ACCELERATION: f32 = 3.0;
 const DRIVEN_BRAKING: f32 = 8.0;
 const DRIVEN_TURN: f32 = 0.6;
-const MAX_CLIMB: f32 = 0.6;
+/// Off road: the deepest water it fords (m), the steepest grade its tracks
+/// climb (45°), and the tallest rock or log they ride over (m). A solid may
+/// reach `BELLY` above its tracks' line under the hull; anything taller
+/// stops it.
+const FORD: f32 = 1.5;
+const MAX_CLIMB: f32 = 1.0;
+const ROCK_STEP: f32 = 1.0;
+const BELLY: f32 = 0.5;
+/// How much of its speed water as deep as `FORD`, and a climb as steep as
+/// `MAX_CLIMB`, take off.
+const WATER_DRAG: f32 = 0.6;
+const CLIMB_DRAG: f32 = 0.6;
 
 const fn hull() -> [Pillar; 8] {
     let mut pillars = [Pillar {
@@ -300,26 +313,38 @@ impl Carrier {
         }
     }
 
+    /// Whether it is out on an expedition, rather than parked or the stalker's.
+    pub(crate) fn on_expedition(&self) -> bool {
+        !matches!(self.leg, Leg::Parked | Leg::Taken { .. })
+    }
+
     /// How hard its engine works while the stalker drives it (0-1).
     pub(crate) fn engine_load(&self) -> f32 {
         (self.speed.abs() / DRIVEN_TOP).min(1.0)
     }
 
-    /// Drives it by `input` for `dt` seconds while it is the stalker's; `fits`
-    /// tells whether it may stand at a spot facing a way. Like the car, it
-    /// turns the other way backing up; standing, its tracks turn it on the
-    /// spot. Returns how far it turned.
-    fn steer(&mut self, input: DriveInput, dt: f32, fits: impl Fn(Vec2, Vec2) -> bool) -> f32 {
+    /// Drives it by `input` for `dt` seconds while it is the stalker's, at up
+    /// to `going` (0-1) of its top speed; `fits` tells whether it may stand at
+    /// a spot facing a way. Like the car, it turns the other way backing up;
+    /// standing, its tracks turn it on the spot. Returns how far it turned.
+    fn steer(
+        &mut self,
+        input: DriveInput,
+        going: f32,
+        dt: f32,
+        fits: impl Fn(Vec2, Vec2) -> bool,
+    ) -> f32 {
         let Leg::Taken { at } = self.leg else {
             return 0.0;
         };
-        let target = if input.brake {
-            0.0
-        } else if input.throttle >= 0.0 {
-            input.throttle * DRIVEN_TOP
-        } else {
-            input.throttle * DRIVEN_REVERSE
-        };
+        let target = going
+            * if input.brake {
+                0.0
+            } else if input.throttle >= 0.0 {
+                input.throttle * DRIVEN_TOP
+            } else {
+                input.throttle * DRIVEN_REVERSE
+            };
         let rate = if input.brake || target * self.speed < 0.0 {
             DRIVEN_BRAKING
         } else {
@@ -472,29 +497,65 @@ pub(crate) fn spawn_carrier(
     mut commands: Commands,
     server: Res<AssetServer>,
     terrain: Res<Terrain>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let carrier = Carrier::new();
     let mut pose = Transform::from_scale(Vec3::splat(SCALE));
-    place(&carrier, &mut pose, &terrain);
-    commands
-        .spawn((
-            Name::new("Institute carrier"),
-            carrier,
-            Collider(COLLISION),
-            BODY,
-            InstitutePass,
-            Describe {
-                place: Place::Carrier,
-                radius: 3.6,
-                height: 4.0,
-            },
-            pose,
-            WorldAssetRoot(assets::load_vehicle_scene(
-                &server,
-                assets::INSTITUTE_CARRIER,
-            )),
-        ))
-        .observe(attach_carrier_wheels);
+    place(&carrier, &mut pose, &terrain, &[]);
+    let mut spawned = commands.spawn((
+        Name::new("Institute carrier"),
+        carrier,
+        Collider(COLLISION),
+        BODY,
+        InstitutePass,
+        Describe {
+            place: Place::Carrier,
+            radius: 3.6,
+            height: 4.0,
+        },
+        pose,
+        WorldAssetRoot(assets::load_vehicle_scene(
+            &server,
+            assets::INSTITUTE_CARRIER,
+        )),
+    ));
+    spawned.observe(attach_carrier_wheels);
+    mount_spotlights(&mut spawned, &mut meshes, &mut materials, &carrier_lamps());
+}
+
+/// Its lamps, in model units (7 m): two headlamps on the upper glacis that
+/// light the ground just ahead, and two floods on the cab roof that throw a
+/// long, wide spot over rough country.
+fn carrier_lamps() -> [Lamp; 4] {
+    let headlamp = |x: f32| Lamp {
+        mount: Transform::from_xyz(x, 0.215, 0.455).looking_to(Vec3::Z - Vec3::Y * 0.12, Vec3::Y),
+        size: 0.022,
+        light: SpotLight {
+            color: LAMP_COLOR,
+            intensity: 3.5e7,
+            range: 50.0,
+            radius: 0.15,
+            inner_angle: 0.25,
+            outer_angle: 0.5,
+            ..default()
+        },
+    };
+    let flood = |x: f32| Lamp {
+        mount: Transform::from_xyz(x, 0.505, 0.2).looking_to(Vec3::Z - Vec3::Y * 0.04, Vec3::Y),
+        size: 0.03,
+        light: SpotLight {
+            color: LAMP_COLOR,
+            intensity: 1.2e8,
+            range: 180.0,
+            radius: 0.25,
+            inner_angle: 0.18,
+            outer_angle: 0.42,
+            shadow_maps_enabled: true,
+            ..default()
+        },
+    };
+    [headlamp(-0.17), headlamp(0.17), flood(-0.12), flood(0.12)]
 }
 
 fn attach_carrier_wheels(
@@ -519,18 +580,75 @@ fn attach_carrier_wheels(
     }
 }
 
-/// Sets the carrier on the ground where it stands, tilted to its tracks.
-fn place(carrier: &Carrier, pose: &mut Transform, terrain: &Terrain) {
-    let settled = settled_at(carrier.at(), carrier.facing(), terrain);
+/// Sets the carrier on the ground, or the `footings` it rides over, where it
+/// stands, tilted to its tracks.
+fn place(carrier: &Carrier, pose: &mut Transform, terrain: &Terrain, footings: &[Footing]) {
+    let settled = settled_at(carrier.at(), carrier.facing(), terrain, footings);
     pose.translation = settled.translation;
     pose.rotation = settled.rotation;
 }
 
-/// Its pose standing at `at` facing `facing`, tilted to its tracks.
-fn settled_at(at: Vec2, facing: Vec2, terrain: &Terrain) -> Transform {
+/// A rock, log or other solid low enough for its tracks to ride over, in the
+/// world.
+#[derive(Clone, Copy, Debug)]
+struct Footing {
+    at: Vec2,
+    radius: f32,
+    top: f32,
+}
+
+/// The solids around `at` its tracks can ride over: those standing at most
+/// `ROCK_STEP` over the ground.
+fn footings<'a>(
+    at: Vec2,
+    terrain: &Terrain,
+    colliders: impl Iterator<Item = (&'a Collider, &'a GlobalTransform)>,
+) -> Vec<Footing> {
+    // A frame's travel past its footprint's corners.
+    let reach = HULL_HALF.length() + 2.0;
+    let mut found = Vec::new();
+    for (collider, transform) in colliders {
+        let (scale, _, _) = transform.to_scale_rotation_translation();
+        for pillar in collider.0 {
+            let center = transform.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
+            let footing = Footing {
+                at: center.xz(),
+                radius: pillar.radius * scale.x,
+                top: center.y + pillar.top * scale.y,
+            };
+            if footing.at.distance(at) < reach + footing.radius
+                && footing.top - ground(footing.at, terrain) <= ROCK_STEP
+            {
+                found.push(footing);
+            }
+        }
+    }
+    found
+}
+
+/// Its pose standing at `at` facing `facing`, tilted to its tracks: each
+/// quarter of its footprint rests on the ground or on the highest of
+/// `footings` under it.
+fn settled_at(at: Vec2, facing: Vec2, terrain: &Terrain, footings: &[Footing]) -> Transform {
     let ends = (TRACK_ENDS.0 * SCALE, TRACK_ENDS.1 * SCALE);
-    let (height, rotation) =
-        settle_footprint(at, facing, ends, HALF_TRACK * SCALE, |p| ground(p, terrain));
+    let middle = (ends.0 + ends.1) / 2.0;
+    let half_length = (ends.0 - ends.1) / 2.0;
+    let right = facing.perp();
+    let local = |p: Vec2| ((p - at).dot(facing) - middle, (p - at).dot(right));
+    let (height, rotation) = settle_footprint(at, facing, ends, HALF_TRACK * SCALE, |corner| {
+        let (along, side) = local(corner);
+        footings
+            .iter()
+            .filter(|footing| {
+                let (f_along, f_side) = local(footing.at);
+                f_along * along >= 0.0
+                    && f_side * side >= 0.0
+                    && f_along.abs() <= half_length + footing.radius
+                    && f_side.abs() <= HULL_HALF.x + footing.radius
+            })
+            .map(|footing| footing.top)
+            .fold(ground(corner, terrain), f32::max)
+    });
     Transform::from_translation(at.extend(height).xzy()).with_rotation(rotation)
 }
 
@@ -594,13 +712,21 @@ pub(crate) fn drive_carrier(
                 .iter()
                 .any(|other| in_the_way(at, toward, other.translation.xz()))
         });
-        place(&carrier, &mut pose, &terrain);
+        place(&carrier, &mut pose, &terrain, &[]);
     }
     seat.open = carrier.boardable();
     for (wheel, mut transform) in &mut wheels {
         let roll = carrier.tracks[wheel.side] / (wheel.radius * SCALE);
         transform.rotation = Quat::from_rotation_x(roll);
     }
+}
+
+/// How much of its top speed it makes at `at` heading `toward`: deep water
+/// and an uphill grade slow it.
+fn going(terrain: &Terrain, at: Vec2, toward: Vec2) -> f32 {
+    let depth = terrain.water_depth_at(at.x, at.y) / FORD;
+    let grade = (ground(at + toward, terrain) - ground(at, terrain)).max(0.0) / MAX_CLIMB;
+    (1.0 - WATER_DRAG * depth.min(1.0)) * (1.0 - CLIMB_DRAG * grade.min(1.0))
 }
 
 /// The stalker at the carrier's wheel, carried along with it.
@@ -638,19 +764,22 @@ pub(crate) fn steer_carrier(
         order.cancel();
     }
     let autopilot = autopilot(&mut order, &pose, carrier.speed);
+    let input = autopilot.unwrap_or_else(|| key_input(&keys));
     let from = carrier.at();
+    let footings = footings(from, &terrain, other_colliders(&colliders, entity, BODY));
     let fits = |at: Vec2, facing: Vec2| {
         at.abs().max_element() <= TERRAIN_HALF_SIZE - HULL_HALF.length()
-            && terrain.can_wade(from, at, FORD_DEPTH)
+            && terrain.can_wade(from, at, FORD)
             && ground(at, &terrain) - ground(from, &terrain) <= MAX_CLIMB * at.distance(from) + 0.05
             && !hull_blocked(
-                &settled_at(at, facing, &terrain),
+                &settled_at(at, facing, &terrain, &footings),
                 HULL_HALF,
-                HULL_HEIGHT,
+                (BELLY, HULL_HEIGHT),
                 other_colliders(&colliders, entity, BODY),
             )
     };
-    let turned = carrier.steer(autopilot.unwrap_or_else(|| key_input(&keys)), dt, fits);
+    let going = going(&terrain, from, carrier.facing() * input.throttle.signum());
+    let turned = carrier.steer(input, going, dt, fits);
     order.track_progress(
         carrier.at(),
         carrier.at().distance(from),
@@ -658,7 +787,7 @@ pub(crate) fn steer_carrier(
         dt,
         Turning::Reversing,
     );
-    place(&carrier, &mut pose, &terrain);
+    place(&carrier, &mut pose, &terrain, &footings);
     stalker.translation = pose.translation;
     if autopilot.is_none()
         && let Ok(mut orbit) = cameras.single_mut()
@@ -712,7 +841,7 @@ mod tests {
             brake: false,
         };
         (0..(seconds / dt) as usize)
-            .map(|_| carrier.steer(input, dt, |_, _| true))
+            .map(|_| carrier.steer(input, 1.0, dt, |_, _| true))
             .sum()
     }
 
@@ -765,10 +894,51 @@ mod tests {
             brake: false,
         };
         for _ in 0..40 {
-            carrier.steer(input, 0.05, |at, _| at.y < bay.y + 1.0);
+            carrier.steer(input, 1.0, 0.05, |at, _| at.y < bay.y + 1.0);
         }
         assert!(carrier.at().y < bay.y + 1.0);
         assert_eq!(carrier.speed, 0.0);
+    }
+
+    #[test]
+    fn its_tracks_ride_over_a_low_rock_under_one_quarter() {
+        let terrain = Terrain::new();
+        let at = Vec2::from(BASE) + Vec2::new(3.2, -12.0);
+        let level = settled_at(at, Vec2::Y, &terrain, &[]);
+        // A 0.8 m rock under the front of the track on +x.
+        let floor = ground(at, &terrain);
+        let rock = |offset: Vec2| Footing {
+            at: at + offset,
+            radius: 0.3,
+            top: floor + 0.8,
+        };
+        let front_right = settled_at(at, Vec2::Y, &terrain, &[rock(Vec2::new(1.3, 1.5))]);
+        assert!(front_right.translation.y > level.translation.y + 0.15);
+        let up = front_right.rotation * Vec3::Y;
+        let ahead = front_right.rotation * Vec3::Z;
+        assert!(ahead.y > 0.05, "its nose rises: {ahead}");
+        assert!(up.x < -0.05, "it leans away from the rock: {up}");
+        // Beside its footprint, the rock makes no difference.
+        let beside = settled_at(at, Vec2::Y, &terrain, &[rock(Vec2::new(4.0, 0.0))]);
+        assert_eq!(beside.translation, level.translation);
+    }
+
+    #[test]
+    fn it_keeps_its_top_speed_on_the_flat_only() {
+        let terrain = Terrain::new();
+        let hall = Vec2::from(BASE) + Vec2::new(3.2, -12.0);
+        assert_eq!(going(&terrain, hall, Vec2::Y), 1.0);
+        let mut carrier = Carrier::new();
+        carrier.take();
+        let input = DriveInput {
+            throttle: 1.0,
+            steering: 0.0,
+            brake: false,
+        };
+        for _ in 0..200 {
+            carrier.steer(input, 0.5, 0.05, |_, _| true);
+        }
+        assert!((carrier.speed - DRIVEN_TOP * 0.5).abs() < 0.01);
     }
 
     #[test]
