@@ -7,7 +7,7 @@ mod patrol;
 mod traffic;
 
 pub(crate) use carrier::Carrier;
-pub(super) use carrier::{drive_carrier, spawn_carrier, steer_carrier};
+pub(super) use carrier::{CARRIER_ROUTING, drive_carrier, spawn_carrier, steer_carrier};
 pub(super) use patrol::{Patrol, drive_patrol, spawn_patrol};
 pub(super) use traffic::{drive_traffic, flash_beacons, spawn_traffic};
 

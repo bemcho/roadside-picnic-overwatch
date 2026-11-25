@@ -35,7 +35,10 @@ V lifts the shroud for testing. M opens the Harmont map (`ui/map.rs`):
 marker, opaque near-black smoke over unsurveyed cells and a few birds wheeling over it.
 Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
 and deep water (`player/path.rs`); the vehicle follows them with an autopilot
-in `drive_vehicle`. Shift-clicks append legs pathfound from the last stop
+in `drive_vehicle`. Each mover is routed by its own size: the stalker, the car
+(1.7 m clear of solids, water to 0.6 m) and the wider Institute carrier
+(`CARRIER_ROUTING`: 2.3 m clear, water to 1.5 m, over what it knocks down), so
+the carrier is never sent through a gap only the car fits. Shift-clicks append legs pathfound from the last stop
 (`MoveOrder::append`); a route started with Shift-clicks while the mover stands
 still is held until Shift is released (appending to a moving order never stops it).
 Scenery colliders stream in only near the stalker, so a far leg is planned
@@ -462,7 +465,7 @@ the stalker stands still.
   the run and it drives on its tracks (W/S up to 10 m/s ahead and 3 m/s astern
   at 3 m/s², braking at 8 m/s²; A/D turn it at 0.6 rad/s, on the spot when it
   stands, the other way backing up), or to a clicked point by the car's
-  autopilot. It weighs 18 t (`Crusher`, footprint 3.6 × 7 m), so it flattens
+  autopilot, along routes planned for its own size. It weighs 18 t (`Crusher`, footprint 3.6 × 7 m), so it flattens
   plants and knocks down what is lighter. Off road it does more than the car:
   it fords swamp pools up to 1.5 m deep (the car 0.6 m), climbs grades up to
   1.0 (45°), and rides over rocks, logs and other solids up to 1 m high, each
