@@ -102,8 +102,13 @@ the stalker stands still.
 - **Day/night and weather** (`src/world/weather.rs`): a 24-minute day (hold T to
   time-lapse) moves the sun and a full moon (a second, dim `DirectionalLight` with
   its own disk) by solar geometry; whichever is up casts shadows, and exposure
-  eases from EV 13 by day to EV 9 at night. Each day rolls clear, humid, overcast
-  or rain. Temperature follows the sun (coldest at 05:00); relative humidity
+  eases from EV 13 by day to EV 9 at night. Every week (days 7w to 7w+6 of the
+  clock) brings one spell of bad weather (`bad_weather`), overcast or rain
+  (45%) each day: two or three days most weeks, four or five now and then, and
+  about one week in twenty the whole week. Shorter spells keep off a week's
+  first and last days and a whole bad week never follows another, so at least
+  two bad days come every week and no spell runs past seven. The other days
+  are clear (60%) or humid; the first day is always humid. Temperature follows the sun (coldest at 05:00); relative humidity
   comes from the day's dew point (Magnus), so it peaks late at night and at dawn,
   or stays high on humid and rainy days. The HUD shows time, temperature,
   humidity and sky.
