@@ -375,20 +375,24 @@ impl Carrier {
         self.speed += (target - self.speed).clamp(-rate * dt, rate * dt);
         let astern = self.speed < -0.1 || (self.speed.abs() <= 0.1 && input.throttle < 0.0);
         let turn = input.steering * DRIVEN_TURN * dt * if astern { -1.0 } else { 1.0 };
-        let yaw = self.yaw + turn;
-        let facing = Vec2::new(yaw.sin(), yaw.cos());
         let step = self.speed * dt;
-        let ahead = at + facing * step;
-        let (to, step) = if fits(ahead, facing) {
-            (ahead, step)
-        } else if turn != 0.0 && fits(at, facing) {
+        let yaw = self.yaw;
+        let facing = |turn: f32| Vec2::new((yaw + turn).sin(), (yaw + turn).cos());
+        let (to, step, turn) = if fits(at + facing(turn) * step, facing(turn)) {
+            (at + facing(turn) * step, step, turn)
+        } else if turn != 0.0 && step != 0.0 && fits(at + facing(0.0) * step, facing(0.0)) {
+            // As the car: a turn that would swing a corner into a rock goes
+            // straight instead, so nosed against one it still backs out.
+            (at + facing(0.0) * step, step, 0.0)
+        } else if turn != 0.0 && fits(at, facing(turn)) {
             // Blocked ahead, it can still turn where it stands.
             self.speed = 0.0;
-            (at, 0.0)
+            (at, 0.0, turn)
         } else {
             self.speed = 0.0;
             return 0.0;
         };
+        let yaw = self.yaw + turn;
         // Turning left (+yaw), the left track runs back, the right forward.
         let run = turn * HALF_TRACK * SCALE;
         self.tracks[0] += step - run;
@@ -920,6 +924,29 @@ mod tests {
         }
         assert!(carrier.at().y < bay.y + 1.0);
         assert_eq!(carrier.speed, 0.0);
+    }
+
+    #[test]
+    fn nosed_against_a_rock_it_backs_out_at_full_lock() {
+        let mut carrier = Carrier::new();
+        carrier.take();
+        let (bay, facing) = (carrier.at(), carrier.facing());
+        // Any turn would swing a corner into the rock; straight back is free.
+        let fits = |_: Vec2, heading: Vec2| heading.distance(facing) < 1e-4;
+        let input = DriveInput {
+            throttle: -1.0,
+            steering: 1.0,
+            brake: false,
+        };
+        for _ in 0..40 {
+            carrier.steer(input, 1.0, 0.05, fits);
+        }
+        assert!(
+            carrier.at().distance(bay) > 1.0,
+            "stuck at {}",
+            carrier.at()
+        );
+        assert_eq!(carrier.facing(), facing);
     }
 
     #[test]
