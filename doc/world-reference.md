@@ -424,7 +424,9 @@ the stalker stands still.
   ground by its first and last road wheels. Road wheels, return rollers, sprocket
   and idler are `WheelL*` /
   `WheelR*` nodes cut by `tools/split_moving_parts.py` (its docstring has the
-  commands).
+  commands); the split model is slimmed with `tools/slim_dense_model.py`
+  (1.8M to 372k triangles, maps capped at 2048 px; see Perimeter guns) and
+  finished with `tools/compress_glb_textures.py`.
 - **Institute helicopters** (`src/world/helicopters.rs`): two helicopters
   (`INSTITUTE_HELICOPTER`, `MILITARY_HELICOPTER`) rest on pads on the
   Institute roof's two wings (`sites::institute_helipads`, model units
@@ -437,7 +439,9 @@ the stalker stands still.
   into turns and dips its nose with speed. Home, it slows over its pad, slides
   in, sets down at up to 2.5 m/s, spins down and rests 120 s; the second starts
   90 s after the first. The `Rotor` node spins about +Y and `TailRotor` about
-  +X (`tools/split_moving_parts.py`).
+  +X (`tools/split_moving_parts.py`); both are slimmed with
+  `tools/slim_dense_model.py` (the Institute's from 2M to 295k triangles, maps
+  capped at 2048 px) and finished with `tools/compress_glb_textures.py`.
 - **Perimeter guns** (`src/world/turrets.rs`, `turrets/{scan,fire}.rs`): twelve
   automatic guns stand on top of the Perimeter wall (`cordon::perimeter_top`,
   about 9 m up), alternating a gatling and a naval mount, evenly spread
@@ -484,7 +488,13 @@ the stalker stands still.
   about its local +Y), under it `Barrels` (spin about local +Z) and an empty
   `Muzzle` at the barrel tips, whose rest position the game reads. They are
   split into these nodes by `tools/split_moving_parts.py` (its docstring has
-  the commands); finish with `tools/compress_glb_textures.py`.
+  the commands). The near tier is then slimmed with `tools/slim_dense_model.py`
+  (1.9M to about 290k triangles, maps capped at 2048 px): gltfpack simplifies
+  within 0.1 % of the extent while weighing the normals, since glTF Transform's
+  position-only simplify crumples the shading of these Tripo panels. Each
+  Tripo model at full density cost about 150 MB of VRAM, enough with the
+  townsfolk to exhaust a 6 GB card at 2560x1440. Finish with
+  `tools/compress_glb_textures.py`.
 - **Wildlife** (`src/world/wildlife.rs`): the optimized versions of the
   textured sources in `assets/models/{animals,birds}/medium/` share mesh handles
   and preserve the original PBR maps. Rebuild with glTF Transform `simplify
