@@ -9,7 +9,10 @@ is then turned to face glTF +Z, centered on its reference axis (mast, yaw axis, 
 grounded at y = 0. Native units are kept: the game scales.
 
 Output contracts (top-level nodes unless noted; spin axes are local):
-  carrier             Hull; WheelL0.. (+X side) and WheelR0.. (-X side) front to back, axle X
+  carrier             Hull; WheelL0.. (+X side) and WheelR0.. (-X side) front to back, axle X;
+                      TrackLinkL, TrackLinkR: one link from each lower run, origin at its centre on the
+                      belt's mid-line, travel -Z (the belts themselves are cut out of Hull and dropped);
+                      --track-out writes each belt's loop, x and link count (carrier_track.rs)
   civil/military heli Body; Rotor (on the mast at hub height, spins Y); TailRotor (hub, axle X)
   gatling/naval       Base; Head (yaw axis at the joint, yaws Y) with children
                       Barrels (barrel axis, spins Z, points +Z) and the empty Muzzle (tip centre)
@@ -29,7 +32,8 @@ tangent perpendicular to the vertex normal there, in place (`repair_tangents`).
   B="blender -b --factory-startup --python-exit-code 1 --python tools/split_moving_parts.py --"
 
   $G weld $W/vehicles/uhd/institute-carrier.glb $T/carrier_weld.glb
-  $B $T/carrier_weld.glb assets/models/vehicles/medium/institute_carrier.glb --model carrier
+  $B $T/carrier_weld.glb $T/carrier_split.glb --model carrier --track-out src/player/vehicle/carrier_track.rs
+  python3 tools/slim_dense_model.py $T/carrier_split.glb assets/models/vehicles/medium/institute_carrier.glb
   $G weld $W/vehicles/uhd/institute-helicopter.glb $T/heli_weld.glb
   $B $T/heli_weld.glb assets/models/vehicles/medium/institute_helicopter.glb --model civil_heli
   $B $W/vehicles/uhd/military-helicopter.glb assets/models/vehicles/medium/military_helicopter.glb \
@@ -60,6 +64,11 @@ Measured in the source frame (glTF axes, before turning and centering):
            return rollers r 0.019 at y 0.14; sprocket (front) r ~0.042 at (z 0.350, y 0.120),
            cut at 0.040 because the track meshes with its teeth; idler r 0.046 at (z -0.417,
            y 0.122); the track's lower run tops out at y 0.0165, so the wheels stop above it
+  belts    |x| 0.1435..0.2398, 0.016 thick (lower run y 0..0.016), link pitch 0.0245 (an end
+           connector, then a pair of guide horns at |x| 0.179..0.189 and 0.198..0.208 standing to
+           y 0.028); the upper run (y 0.161..0.177) is open inside, fused to the hull wall at
+           |x| 0.175 and the plate under the fender; the road wheels and return rollers keep the
+           horn faces their regions held. Loop ~1.90 long: 77.5 pitches, so 77 links left, 78 right
   civil    nose -X; mast (x -0.0105, z 0); hub y 0.291; blades droop to y ~0.24;
            tail rotor shaft along Z at (x 0.4385, y 0.157), hub and blades at z 0.050..0.059
   military nose -X; mast (x -0.075, z 0); hub y 0.300; fenestron (x 0.4271, y 0.1762) in a
@@ -78,11 +87,15 @@ import math
 import struct
 import sys
 from collections import defaultdict
+from pathlib import Path
 
 import bmesh
 import bpy
 import numpy as np
 from mathutils import Matrix, Vector
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import track_loop  # noqa: E402
 
 INF = float("inf")
 X, Y, Z = (1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0)
@@ -168,19 +181,121 @@ ROLLERS_L = [(-0.3366, 0.1376, 0.0205), (-0.2543, 0.1403, 0.0205), (-0.1767, 0.1
 ROLLERS_R = [(-0.3365, 0.1401, 0.0205), (-0.2541, 0.1399, 0.0205), (-0.1771, 0.1464, 0.016), (-0.1311, 0.1411, 0.0205),
              (-0.0269, 0.1410, 0.0205), (0.0719, 0.1424, 0.0205), (0.1337, 0.1390, 0.0205), (0.2348, 0.1374, 0.0205)]
 
+# The belts, measured in the source frame (see the docstring): |x| 0.1435..0.2398, 0.016 thick, guide horns
+# (two prongs, |x| 0.179..0.189 and 0.198..0.208) standing 0.012 in from the inner face, links every 0.0245.
+TRACK_WIDTH = (0.141, 0.243)  # |x| the belt lies in, short of the hull's side wall and fender plates
+TRACK_COARSE = (-0.011, 0.0245)  # its faces' offset from the hull round the wheels: horns to pads, short of the fender
+TRACK_OUTER_COLUMN = 0.213  # |x| beyond the horns and the hull wall the upper run joins: the mid-line is fit here
+TRACK_HORNS = (0.177, 0.2095)  # |x| of the guide horns
+TRACK_BAND = (-0.0095, 0.012)  # the belt's offset from its mid-line: inner face to the pads on top of the upper run
+TRACK_HORN_REACH = -0.0215  # and inward within the horn columns, to the horns' tips
+
+
+class Track:
+    """One flank's belt (side +1 is +X, the left), cut out of what the wheels leave round them.
+
+    Measured from the faces on first use (the wheel parts come first, so `faces.free` lacks them):
+      * the coarse belt: faces near the hull round the wheel circles, offset within TRACK_COARSE;
+      * the link pitch, from the outermost (ground) faces of the lower run;
+      * the loop: the belt's mid-line, fit (weighted by area) to its outer column, where every link has the
+        same cross-section: the horns, and the horns the road wheels already took, would make it wander;
+      * the belt: free faces within TRACK_BAND of the loop, or TRACK_HORN_REACH in the horn columns;
+      * the link: the lower run's belt faces that reach within half a pitch of the link centre nearest
+        `link_at`, trimmed to that slab after the split (so its ends are straight and copies tile). Centres
+        lie half a pitch from the end connectors' (the ground faces' phase): the cuts fall through the
+        connectors, where the pins are. The horns would place them less well: the wheels hold some.
+    """
+
+    def __init__(self, side, sprocket, idler, road, rollers, link_at):
+        self.side, self.link_at = side, link_at
+        self.road_span = (min(z for z, _ in road), max(z for z, _ in road))
+        circles = [(*sprocket, 0.042), (*idler, 0.046)] + [(z, y, 0.049) for z, y in road] + list(rollers)
+        angles = np.linspace(0, 2 * np.pi, 48, endpoint=False)
+        ring = np.concatenate([np.stack([z + r * np.cos(angles), y + r * np.sin(angles)], axis=1) for z, y, r in circles])
+        self.wheel_hull = track_loop.start_and_direction(track_loop.resample(track_loop.convex_hull(ring), 0.002))
+        self.measured = None
+
+    def measure(self, faces):
+        if self.measured is not None:
+            return self.measured
+        x = faces.centers[:, 0] * self.side
+        near = np.flatnonzero(faces.free & (x > TRACK_WIDTH[0]) & (x < TRACK_WIDTH[1]))
+        zy, x, areas = faces.centers[near][:, [2, 1]], x[near], faces.areas[near]
+        _, offset = track_loop.place_on(zy, self.wheel_hull)
+        coarse = (offset > TRACK_COARSE[0]) & (offset < TRACK_COARSE[1])
+
+        on_run = (zy[:, 0] > self.road_span[0]) & (zy[:, 0] < self.road_span[1])
+        ground = coarse & on_run & (zy[:, 1] < zy[coarse, 1].min() + 0.002)
+        pitch = track_loop.link_pitch(zy[ground, 0])
+        column = coarse & (x > TRACK_OUTER_COLUMN)
+        loop = track_loop.fit_loop(zy[column], pitch / 2, span=2 * pitch, weights=areas[column])
+
+        _, offset = track_loop.place_on(zy, loop)
+        horns = (x > TRACK_HORNS[0]) & (x < TRACK_HORNS[1])
+        inner = np.where(horns, TRACK_HORN_REACH, TRACK_BAND[0])
+        belt = (offset > inner) & (offset < TRACK_BAND[1])
+        lower = belt & on_run & (zy[:, 1] < loop[:, 1].mean())
+        turns = (areas[ground] * np.exp(2j * np.pi * zy[ground, 0] / pitch)).sum()
+        phase = np.angle(turns) / (2 * np.pi) * pitch + pitch / 2  # connectors to link centres
+        centre = phase + round((self.link_at - phase) / pitch) * pitch
+        slab = (centre - pitch / 2, centre + pitch / 2)
+        z_min, z_max = faces.z_ranges()
+        link = lower & (z_max[near] > slab[0]) & (z_min[near] < slab[1])
+
+        run = loop[loop[:, 1] < loop[:, 1].mean()]
+        order = np.argsort(run[:, 0])
+        mid_x = self.side * (x[lower].min() + x[lower].max()) / 2
+        self.measured = {
+            "pitch": pitch, "loop": loop, "x": mid_x, "slab": slab,
+            "belt": near[belt], "link": near[link],
+            "link_pivot": (mid_x, float(np.interp(centre, run[order, 0], run[order, 1])), centre),
+        }
+        return self.measured
+
+    def link(self, faces):
+        return self.mask(faces, "link")
+
+    def belt(self, faces):
+        return self.mask(faces, "belt")
+
+    def mask(self, faces, key):
+        chosen = np.zeros(len(faces.centers), dtype=bool)
+        chosen[self.measure(faces)[key]] = True
+        return chosen
+
+    def letter(self):
+        return "L" if self.side > 0 else "R"
+
+    def link_part(self):
+        return {"name": f"TrackLink{self.letter()}", "select": self.link, "pivot": lambda: self.measured["link_pivot"],
+                "trim_z": lambda: self.measured["slab"]}
+
+    def belt_part(self):
+        return {"name": f"Belt{self.letter()}", "select": self.belt, "pivot": (0.0, 0.0, 0.0), "drop": True}
+
+
 CIVIL_MAST = (-0.0105, 0.0, 0.0003)
 MILITARY_MAST = (-0.075, 0.0, -0.0007)
 NAVAL_ELEVATION = math.degrees(math.atan(0.1512))
 NAVAL_AXIS = (0.0, math.sin(math.radians(NAVAL_ELEVATION)), math.cos(math.radians(NAVAL_ELEVATION)))
 NAVAL_MANTLET = (0.0, 0.3503 + 0.1512 * 0.2, 0.2)
 
+SPROCKET_L, IDLER_L, SPROCKET_R, IDLER_R = (0.3497, 0.1199), (-0.4173, 0.1217), (0.3524, 0.1206), (-0.4177, 0.1229)
+LINK_AT = -0.04  # the link to export: on the lower run, between the 3rd and 4th road wheels from the front
+TRACKS = [Track(1, SPROCKET_L, IDLER_L, ROAD_L, ROLLERS_L, LINK_AT), Track(-1, SPROCKET_R, IDLER_R, ROAD_R, ROLLERS_R, LINK_AT)]
+
 MODELS = {
     "carrier": {
         "root": "Hull",
         "turn_degrees": 0.0,
         "center": "bounds",
-        "parts": track_wheels(1, (0.3497, 0.1199), (-0.4173, 0.1217), ROAD_L, ROLLERS_L)
-        + track_wheels(-1, (0.3524, 0.1206), (-0.4177, 0.1229), ROAD_R, ROLLERS_R),
+        # Wheels first (first region wins), then each side's link, then its belt: kept through normalize so
+        # the bounds, centring and grounding stay the scan's, and dropped before export.
+        "parts": track_wheels(1, SPROCKET_L, IDLER_L, ROAD_L, ROLLERS_L)
+        + track_wheels(-1, SPROCKET_R, IDLER_R, ROAD_R, ROLLERS_R)
+        + [track.link_part() for track in TRACKS]
+        + [track.belt_part() for track in TRACKS],
+        "tracks": TRACKS,
     },
     "civil_heli": {
         "root": "Body",
@@ -299,8 +414,23 @@ class Faces:
         mesh.polygons.foreach_get("center", centers)
         centers = centers.reshape(-1, 3)
         self.centers = np.stack([centers[:, 0], centers[:, 2], -centers[:, 1]], axis=1)
+        self.areas = np.zeros(count)
+        mesh.polygons.foreach_get("area", self.areas)
+        self.free = np.ones(count, dtype=bool)  # faces no earlier part took (split keeps it current)
         self.mesh = mesh
         self._by_position = None
+
+    def z_ranges(self):
+        """Each face's lowest and highest vertex z (glTF frame)."""
+        mesh = self.mesh
+        corners = np.zeros(len(mesh.loops), dtype=int)
+        mesh.loops.foreach_get("vertex_index", corners)
+        starts = np.zeros(len(mesh.polygons), dtype=int)
+        mesh.polygons.foreach_get("loop_start", starts)
+        positions = np.zeros(len(mesh.vertices) * 3)
+        mesh.vertices.foreach_get("co", positions)
+        z = -positions.reshape(-1, 3)[corners, 1]
+        return np.minimum.reduceat(z, starts), np.maximum.reduceat(z, starts)
 
     def neighbors(self, face):
         if self._by_position is None:
@@ -322,6 +452,8 @@ def parse_args():
     parser.add_argument("--model", choices=sorted(MODELS), required=True)
     parser.add_argument("--pose-test", type=float, default=0.0, metavar="DEG",
                         help="turn every part DEG about its spin axis (a check render, never a game asset)")
+    parser.add_argument("--track-out", type=Path, metavar="RS",
+                        help="write the tracks' loops, x and link counts as Rust (carrier: src/player/vehicle/carrier_track.rs)")
     return parser.parse_args(sys.argv[sys.argv.index("--") + 1 :])
 
 
@@ -369,7 +501,8 @@ def split(body, config):
     faces = Faces(body.data)
     labels = np.zeros(len(body.data.polygons), dtype=int)
     for label, part in enumerate(config["parts"], start=1):
-        chosen = part["select"](faces) & (labels == 0)
+        faces.free = labels == 0
+        chosen = part["select"](faces) & faces.free
         if not chosen.any():
             raise ValueError(f"{part['name']}: its region holds no faces")
         labels[chosen] = label
@@ -381,6 +514,8 @@ def split(body, config):
             raise RuntimeError(f"{part['name']}: separated {len(obj.data.polygons)} faces, expected {(labels == label).sum()}")
         labels = labels[labels != label]  # body keeps its remaining faces in order
         obj.name = obj.data.name = part["name"]
+        if "trim_z" in part:
+            trim_z(obj, *part["trim_z"]())
         set_pivot(obj, part)
         objects[part["name"]] = obj
     body.name = body.data.name = config["root"]
@@ -388,9 +523,22 @@ def split(body, config):
     return objects
 
 
+def trim_z(obj, low, high):
+    """Bisect the part at the glTF planes z = low and z = high and keep what lies between: straight ends
+    cut through the scan's own surface."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    for z, outward in ((low, -1.0), (high, 1.0)):
+        bmesh.ops.bisect_plane(bm, geom=bm.verts[:] + bm.edges[:] + bm.faces[:], plane_co=to_blender(0.0, 0.0, z),
+                               plane_no=to_blender(0.0, 0.0, outward), clear_outer=True)
+    bm.to_mesh(obj.data)
+    bm.free()
+
+
 def set_pivot(obj, part):
-    """Re-pose the part rigidly if asked, then move its origin to the pivot (None: bounds centre)."""
-    pivot = part["pivot"]
+    """Re-pose the part rigidly if asked, then move its origin to the pivot (None: bounds centre; a function:
+    measured while splitting)."""
+    pivot = part["pivot"]() if callable(part["pivot"]) else part["pivot"]
     if pivot[0] is None:
         xs = [to_gltf(v.co)[0] for v in obj.data.vertices]
         pivot = ((min(xs) + max(xs)) / 2, pivot[1], pivot[2])
@@ -403,7 +551,9 @@ def set_pivot(obj, part):
 
 
 def normalize(objects, config):
-    """Turn the model to face +Z, center its reference axis on x = z = 0 and ground it."""
+    """Turn the model to face +Z, center its reference axis on x = z = 0 and ground it.
+
+    Returns the shift it applied after the turn, in glTF axes."""
     turn = turn_matrix(Y, config["turn_degrees"])
     for obj in objects.values():
         if obj.type == "MESH":
@@ -424,6 +574,32 @@ def normalize(objects, config):
     root = objects[config["root"]]  # the static root sits at the model origin
     root.data.transform(Matrix.Translation(root.location))
     root.location = Vector()
+    return to_gltf(shift)
+
+
+def drop_parts(objects, config):
+    """Delete the parts that only stood in for the bounds (the belts)."""
+    for part in config["parts"]:
+        if part.get("drop"):
+            bpy.data.objects.remove(objects.pop(part["name"]))
+
+
+def write_tracks(path, config, shift):
+    """The tracks' loops, x and link counts, moved into the runtime frame by normalize's shift."""
+    if not config.get("tracks") or config["turn_degrees"]:
+        raise ValueError("--track-out needs a model with tracks and no turn")
+    loops, xs, links = [], [], []
+    for track in config["tracks"]:
+        measured = track.measured
+        loop = measured["loop"] + np.array([shift[2], shift[1]])
+        length = track_loop.loop_length(loop)
+        loops.append(loop)
+        xs.append(measured["x"] + shift[0])
+        links.append(int(round(length / measured["pitch"])))
+        print(f"TRACK side {track.side:+d} x {xs[-1]:.4f} loop {length:.4f} points {len(loop)} pitch "
+              f"{measured['pitch']:.5f} length/pitch {length / measured['pitch']:.3f} links {links[-1]}")
+    path.write_text(track_loop.rust_track_module(loops, xs, links))
+    print(f"TRACK wrote {path}")
 
 
 def add_empties(objects, config):
@@ -448,7 +624,7 @@ def parent_nodes(objects, config):
 
 def pose_test(objects, config, degrees):
     turn = turn_matrix(Y, config["turn_degrees"])
-    for part in config["parts"]:
+    for part in (part for part in config["parts"] if "spin" in part):
         axis = turn @ to_blender(*part["spin"])
         objects[part["name"]].rotation_mode = "QUATERNION"
         objects[part["name"]].rotation_quaternion = Matrix.Rotation(math.radians(degrees), 4, axis).to_quaternion()
@@ -523,7 +699,10 @@ def main():
     body = import_body(args.src)
     objects = split(body, config)
     add_empties(objects, config)
-    normalize(objects, config)
+    shift = normalize(objects, config)
+    drop_parts(objects, config)
+    if args.track_out:
+        write_tracks(args.track_out, config, shift)
     parent_nodes(objects, config)
     bpy.context.view_layer.update()
     if args.pose_test:
