@@ -61,9 +61,9 @@ along a ramp that winds down the pit.
    not pivot) and the path is resampled every 3 m. As built: 244 m, grade
    0.198, at most 6.8 m of fill and 2.2 m of cut against the smoothed relief
    the search follows (7.9 and 3.2 m against the raw relief), runs at least
-   22.7 m apart, tightest turn 9.5 m. It winds down the pit in an S: along
-   the front, down the near wall, across the back, a hairpin back through the
-   middle terrace and down to the floor.
+   22.7 m apart, tightest turn 9.5 m. It runs west along the front, down
+   the west wall, east along the back, north through the middle terrace, east
+   again and down the east wall to the floor.
 2. **Ramp surface.** A new `Surface::Ramp` in `world/roads.rs`: dirt look
    (gravel and ruts in the mask), a 4.5 m half-width bed and a 9 m shoulder
    (the cut banks), narrower than the 8.5 m roads.
@@ -93,7 +93,7 @@ along a ramp that winds down the pit.
 
 ## Verification
 
-- Unit tests: the ramp starts at the drive's entrance and ends on the floor,
+- Unit tests: the ramp track starts at the quarry junction (its 60 m drive included, graded like any drive up to the entrance) and ends on the floor,
   grade at most 0.2 everywhere on the rendered terrain, fill at most 8 m and
   cut at most 3 m against the scan's ground, runs at least 2 shoulders apart,
   no quarry pillar on the bed, and the cut image is uncut outside the

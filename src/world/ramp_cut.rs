@@ -28,7 +28,10 @@ const UNCUT: f32 = 1.0e6;
 /// Meters per texel of the cut image.
 const TEXEL: f32 = 0.5;
 /// How far under the drawn ground the stone is cut, so that stone lying on the
-/// ground, which would show through it as dark slivers, goes too.
+/// ground, which would show through it as dark slivers, goes too. The lowest
+/// corner of a texel can lie up to about 0.07 m above the mesh inside it, where
+/// a triangle's crease crosses the texel (a margin of -0.05 m left stone 0.12 m
+/// above the ground in the test), so 0.1 m keeps the cut under the ground.
 const BURY: f32 = 0.1;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
@@ -96,9 +99,11 @@ pub(super) fn prepare_ramp_cut(
 
 /// The height above which the stone is cut wherever the ramp's shoulder
 /// reaches, `UNCUT` elsewhere, over the quarry's footprint and a shoulder around
-/// it, and where it lies. A texel is cut from the lowest ground drawn over it
-/// (the render mesh, which is not `height_at` and falls steeply on the banks)
-/// less `BURY`, so no stone stays above the drawn ground within the texel.
+/// it, and where it lies. A texel is cut from the lowest of the ground drawn at
+/// its corners (the render mesh, which is not `height_at` and falls steeply on
+/// the banks) less `BURY`. That keeps the cut under the drawn ground at the
+/// points `the_cut_lies_below_the_ground_that_is_drawn` samples; it is not a
+/// proof for every point, as the mesh may dip below its corners inside a texel.
 fn build_ramp_cut(terrain: &Terrain) -> (Image, Vec4) {
     let (low, high) = sites::quarry_footprint();
     let corner = low - Vec2::splat(RAMP_SHOULDER);

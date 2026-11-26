@@ -1,5 +1,5 @@
 // The quarry scan's stone, cut away above the haul ramp (world/ramp_cut.rs):
-// fragments higher than the cut image's height, a hair under the drawn terrain,
+// fragments higher than the cut image's height, 0.1 m under the drawn terrain,
 // in the ramp's corridor are discarded, then the standard PBR path runs.
 //
 // Three pipelines draw the material: the main pass, the deferred prepass and

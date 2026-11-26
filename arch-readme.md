@@ -318,9 +318,10 @@ every placement passes the road, water, yard, and site-clearance filters.
 Each route has a `Surface`: dirt, `Asphalt` (the old roads, painted by the
 terrain shader from the A mask and four asphalt maps), `Street` (New
 Harmont's smooth streets, B only: no A, no cracks) or `Ramp` (the quarry's haul
-road: a narrow dirt bed, graded at one constant grade end to end by
-`track_levels`, and applied by `Terrain` after a diorama's own ground, which
-hides every other road).
+road: a narrow dirt bed, graded by `graded_track` at one constant grade from the
+entrance of the quarry's drive to its end (the drive before the entrance follows
+the land; a 24 m parabolic crest rounds the break at the entrance), and applied
+by `Terrain` after a diorama's own ground, which hides every other road).
 
 Road legs must connect to a real route vertex, stay below the grade and water
 thresholds tested in `world/roads.rs`, and avoid cutting through site pads.
@@ -481,10 +482,11 @@ so moving the exhibit rows or the door means moving them too.
 
 The quarry's `RampCutMaterial` (`world/ramp_cut.rs`, `shaders/ramp_cut.wesl`) is
 the other `ExtendedMaterial` that discards fragments: it hides the Quarry rim
-scan's stone above the haul ramp's corridor, in the main pass, the deferred
-prepass and the shadow pass alike (the extension's `AlphaMode::Mask` is what makes
-the shadow maps run the shader), so the road is lit rather than shadowed by
-stone that is not drawn. The height image behind it (`RampCutImage`) is built
+scan's stone above the haul ramp's corridor, in the main pass and the shadow
+pass (the extension's `AlphaMode::Mask` is what makes the shadow maps run the
+shader), so the road is lit rather than shadowed by stone that is not drawn.
+The shader's deferred-prepass variant is written but never exercised: the camera
+is forward. The height image behind it (`RampCutImage`) is built
 once from `Terrain` at entering the Zone. `cut_scan_stone`, an observer on the
 scan's `WorldInstanceReady`, swaps the material on every stream-in of the full
 scan; the stand-in gets it at spawn. A new camera prepass (normals, motion
