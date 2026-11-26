@@ -544,6 +544,10 @@ const PAD_BLEND: f32 = 26.0;
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
 const TRAIN_PILLARS: &[Pillar] = include!("pillars/vehicle_train.rs");
 
+/// The quarry's haul road in the model's units, from the front edge's middle.
+#[allow(clippy::approx_constant, reason = "Measured model coordinates")]
+const QUARRY_RAMP: &[Vec2] = include!("pillars/quarry_ramp.rs");
+
 #[derive(Clone, Copy)]
 pub(super) struct Landmark {
     kind: Kind,
@@ -742,10 +746,25 @@ pub(super) fn institute_pose() -> Transform {
 }
 
 fn institute() -> Landmark {
+    landmark(Institute)
+}
+
+fn landmark(kind: Kind) -> Landmark {
     LANDMARKS
         .into_iter()
-        .find(|site| site.kind == Institute)
-        .expect("the Institute is a landmark")
+        .find(|site| site.kind == kind)
+        .expect("every kind of site is a landmark")
+}
+
+/// The quarry's haul road in world xz: the drive's end, then the baked path
+/// (`tools/plan_quarry_ramp.py`) down into the pit.
+pub(super) fn quarry_ramp() -> Vec<Vec2> {
+    let site = landmark(QuarryRim);
+    let pose = site.pose();
+    let path = QUARRY_RAMP
+        .iter()
+        .map(|at| pose.transform_point(Vec3::new(at.x, 0.0, at.y)).xz());
+    std::iter::once(site.entrance()).chain(path).collect()
 }
 
 /// Every site and the derailed train as a rough upright cylinder around the

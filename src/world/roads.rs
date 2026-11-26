@@ -7,7 +7,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use super::cordon::{BREACH, GATE, PERIMETER_GATE};
 use super::map::{RAILWAY, map};
-use super::sites::LANDMARKS;
+use super::sites::{self, LANDMARKS};
 use super::terrain::{BASE, TILE_SIZE, lerp, smoothstep};
 use super::town;
 
@@ -17,6 +17,9 @@ pub(super) const SHOULDER: f32 = 11.0;
 /// The railway's gravel bed, narrower than a road.
 const RAIL_HALF_WIDTH: f32 = 3.2;
 const RAIL_SHOULDER: f32 = 6.0;
+/// The quarry's haul road, a dirt track cut into the pit's wall.
+pub(super) const RAMP_HALF_WIDTH: f32 = 4.5;
+pub(super) const RAMP_SHOULDER: f32 = 9.0;
 /// The longest graded run of the railway bed between sampled levels.
 const RAIL_RUN: f32 = 48.0;
 
@@ -77,6 +80,8 @@ enum Surface {
     Street,
     /// The railway's gravel bed.
     Ballast,
+    /// The quarry's haul road: dirt, graded evenly from end to end.
+    Ramp,
 }
 
 impl Surface {
@@ -84,6 +89,7 @@ impl Surface {
     fn widths(self) -> (f32, f32) {
         match self {
             Surface::Ballast => (RAIL_HALF_WIDTH, RAIL_SHOULDER),
+            Surface::Ramp => (RAMP_HALF_WIDTH, RAMP_SHOULDER),
             Surface::Dirt | Surface::Asphalt | Surface::Street => (HALF_WIDTH, SHOULDER),
         }
     }
@@ -267,7 +273,8 @@ fn railway_bed() -> Vec<Vec2> {
     bed
 }
 
-/// Every graded path: the routes, each site's drive and the railway bed.
+/// Every graded path: the routes, each site's drive, the railway bed and the
+/// quarry's ramp.
 fn tracks() -> Vec<(Surface, Vec<Vec2>)> {
     let routes = ROUTES
         .iter()
@@ -277,7 +284,10 @@ fn tracks() -> Vec<(Surface, Vec<Vec2>)> {
         .map(|site| (Surface::Dirt, vec![site.junction, site.entrance()]));
     routes
         .chain(drives)
-        .chain([(Surface::Ballast, railway_bed())])
+        .chain([
+            (Surface::Ballast, railway_bed()),
+            (Surface::Ramp, sites::quarry_ramp()),
+        ])
         .collect()
 }
 
@@ -316,12 +326,8 @@ impl RoadSample {
     fn surface(&self) -> [u8; 4] {
         let d = self.distance;
         let [gravel, rut, asphalt, old] = match self.surface {
-            Surface::Dirt => [
-                smoothstep(7.5, 4.6, d),
-                smoothstep(0.83, 0.32, (d - 1.51).abs()),
-                0.0,
-                0.0,
-            ],
+            Surface::Dirt => [smoothstep(7.5, 4.6, d), ruts(d), 0.0, 0.0],
+            Surface::Ramp => [smoothstep(4.2, 2.8, d), ruts(d), 0.0, 0.0],
             Surface::Asphalt | Surface::Street => {
                 let tar = smoothstep(6.4, 5.4, d);
                 let old = if self.surface == Surface::Asphalt {
@@ -337,13 +343,42 @@ impl RoadSample {
     }
 }
 
+/// How much a tire rut stands out at `d` from the track's middle.
+fn ruts(d: f32) -> f32 {
+    smoothstep(0.83, 0.32, (d - 1.51).abs())
+}
+
+/// The graded level at each point of a track. A ramp falls evenly with its
+/// length from its first point's level to its last's, however the land between
+/// them lies; other tracks follow the land at every corner.
+fn track_levels(surface: Surface, path: &[Vec2], level: impl Fn(Vec2) -> f32) -> Vec<f32> {
+    if surface != Surface::Ramp {
+        return path.iter().map(|&at| level(at)).collect();
+    }
+    let (first, last) = (path[0], path[path.len() - 1]);
+    let runs: Vec<f32> = path
+        .iter()
+        .scan((first, 0.0), |(previous, run), &at| {
+            *run += previous.distance(at);
+            *previous = at;
+            Some(*run)
+        })
+        .collect();
+    let total = runs[runs.len() - 1];
+    let (top, bottom) = (level(first), level(last));
+    runs.iter()
+        .map(|run| lerp(top, bottom, run / total))
+        .collect()
+}
+
 impl RoadNetwork {
     pub fn new(level: impl Fn(Vec2) -> f32) -> Self {
         let mut min = Vec2::splat(f32::INFINITY);
         let mut max = Vec2::splat(f32::NEG_INFINITY);
         let mut tiles: HashMap<_, Vec<_>> = HashMap::default();
         for (surface, path) in tracks() {
-            for &[a, b] in path.array_windows() {
+            let levels = track_levels(surface, &path, &level);
+            for (&[a, b], &levels) in path.array_windows().zip(levels.array_windows()) {
                 let delta = b - a;
                 let length = delta.length();
                 let reach = Vec2::splat(surface.widths().1);
@@ -351,7 +386,7 @@ impl RoadNetwork {
                     start: a,
                     along: delta / length,
                     length,
-                    levels: [level(a), level(b)],
+                    levels,
                     surface,
                     min: a.min(b) - reach,
                     max: a.max(b) + reach,
@@ -510,6 +545,78 @@ mod tests {
             bad.is_empty(),
             "track, grade and position, depth and position: {bad:#?}"
         );
+    }
+
+    fn quarry_ramp_track() -> Vec<Vec2> {
+        let mut ramps = tracks()
+            .into_iter()
+            .filter(|(surface, _)| *surface == Surface::Ramp);
+        let (_, path) = ramps.next().expect("the quarry has a ramp track");
+        assert!(ramps.next().is_none(), "one ramp track only");
+        path
+    }
+
+    /// The point halfway along `path`, by length.
+    fn midway(path: &[Vec2]) -> Vec2 {
+        let length: f32 = path.array_windows().map(|&[a, b]| a.distance(b)).sum();
+        let mut left = length / 2.0;
+        for &[a, b] in path.array_windows() {
+            let leg = a.distance(b);
+            if left <= leg {
+                return a.lerp(b, left / leg);
+            }
+            left -= leg;
+        }
+        path[path.len() - 1]
+    }
+
+    #[test]
+    fn the_ramp_starts_at_the_quarry_drive() {
+        let quarry = LANDMARKS
+            .iter()
+            .find(|site| site.junction == QUARRY)
+            .expect("the quarry is a landmark");
+        assert_eq!(quarry_ramp_track()[0], quarry.entrance());
+    }
+
+    #[test]
+    fn a_ramp_is_graded_evenly() {
+        let ramp = quarry_ramp_track();
+        let roads = RoadNetwork::new(|at| at.x);
+        let ends = (ramp[0].x, ramp[ramp.len() - 1].x);
+        assert!((ends.0 - ends.1).abs() > 10.0, "the ramp must change level");
+        let at = midway(&ramp);
+        let road = roads
+            .sample(at)
+            .expect("the ramp's middle is on the network");
+        assert_eq!(road.surface, Surface::Ramp);
+        let mean = (ends.0 + ends.1) / 2.0;
+        assert!(
+            (road.height - mean).abs() < 0.01,
+            "height {} vs mean {mean}",
+            road.height
+        );
+    }
+
+    #[test]
+    fn ramp_mask_paints_a_narrow_dirt_bed() {
+        let at = |distance| RoadSample {
+            distance,
+            surface: Surface::Ramp,
+            height: 0.0,
+        };
+        assert_eq!(at(0.0).surface()[0], 255);
+        assert_eq!(at(5.0).surface()[0], 0);
+        assert_eq!(at(RAMP_SHOULDER + 0.1).mask(), 0.0);
+        assert_eq!(at(RAMP_HALF_WIDTH).mask(), 1.0);
+        // Two tire ruts, as on a dirt track.
+        let dirt = RoadSample {
+            distance: 1.51,
+            surface: Surface::Dirt,
+            height: 0.0,
+        };
+        assert_eq!(at(1.51).surface()[1], dirt.surface()[1]);
+        assert!(at(1.51).surface()[1] >= 190);
     }
 
     /// The mask's four bytes (gravel, ruts, asphalt, old asphalt) at a world point.
