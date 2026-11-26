@@ -782,7 +782,7 @@ pub(crate) fn quarry_ramp() -> Vec<Vec2> {
 }
 
 /// The quarry scan's pose and its collision as the model carries it, before
-/// the ramp's bed is cleared (`quarry_ramp::quarry_pillars`).
+/// the ramp's cut corridor is cleared (`quarry_ramp::quarry_pillars`).
 pub(crate) fn quarry_scan() -> (Transform, &'static [Pillar]) {
     let site = landmark(QuarryRim);
     (site.pose(), site.model().pillars)

@@ -80,7 +80,8 @@ enum Surface {
     Street,
     /// The railway's gravel bed.
     Ballast,
-    /// The quarry's haul road: dirt: the drive follows the land, then the ramp is graded evenly from the entrance, with a rounded crest there.
+    /// The quarry's dirt haul road. The drive follows the land; the ramp is graded
+    /// evenly from the entrance, with a rounded crest there.
     Ramp,
 }
 

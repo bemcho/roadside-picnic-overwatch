@@ -76,6 +76,8 @@ mod tests {
         }
     }
 
+    // A guard against narrowing the filter: with the centre rule no kept pillar lies
+    // wholly inside the corridor, so today this examines none.
     #[test]
     fn no_kept_pillar_stands_invisible_in_the_cut() {
         let terrain = Terrain::new();
@@ -103,7 +105,7 @@ mod tests {
     fn pillars_off_the_ramp_are_kept() {
         let (_, scan) = sites::quarry_scan();
         let dropped = scan.len() - quarry_pillars().len();
-        assert!(dropped >= 1, "the ramp's bed clears no pillar");
+        assert!(dropped >= 1, "the ramp's cut corridor clears no pillar");
         // The corridor is 18 m wide and winds 250 m through a 100 m scan.
         assert!(
             dropped * 100 <= scan.len() * 55,

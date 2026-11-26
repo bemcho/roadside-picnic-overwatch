@@ -377,6 +377,9 @@ the stalker stands still.
     centerline); filtered once at first use from the same points.
     `Landmark::solids` serves it, so the stalker, the car, the carrier and the
     router meet no invisible wall on the road, its banks or the rest of the cut.
+    The centre rule leaves a sub-metre lip (pillar radius 0.9 m): 57 dropped
+    pillars reach 0.5–0.82 m past the 9 m edge, stone there without its own
+    pillar, and kept pillars bulge up to 0.9 m into the cut, off the bed.
   - *Cut:* the scan is untouched. `RampCutMaterial` (`ramp_cut.rs`,
     `ExtendedMaterial<StandardMaterial, RampCut>`) draws the stand-in and every
     streamed full scan of the quarry (`cut_scan_stone` swaps the material on each
