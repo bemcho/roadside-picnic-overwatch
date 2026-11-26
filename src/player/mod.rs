@@ -41,8 +41,8 @@ use orders::{
 };
 use vehicle::{
     Driver, Driving, Patrol, Vehicle, drive_carrier, drive_patrol, drive_traffic, drive_vehicle,
-    flash_beacons, interact_vehicle, pose_wheels, spawn_carrier, spawn_patrol, spawn_traffic,
-    steer_carrier, sync_spotlight,
+    flash_beacons, interact_vehicle, pose_wheels, run_carrier_tracks, spawn_carrier, spawn_patrol,
+    spawn_traffic, steer_carrier, sync_spotlight,
 };
 
 pub struct PlayerPlugin;
@@ -186,7 +186,15 @@ impl Plugin for PlayerPlugin {
             )
             .add_systems(
                 Update,
-                (drive_patrol, drive_traffic, flash_beacons, drive_carrier)
+                (
+                    drive_patrol,
+                    drive_traffic,
+                    flash_beacons,
+                    // Both of its tracks' drivers run first, so its wheels and links
+                    // roll with the same tracks.
+                    drive_carrier.after(steer_carrier),
+                    run_carrier_tracks.after(drive_carrier),
+                )
                     .run_if(in_state(InGamePhase::Running)),
             )
             .add_systems(OnEnter(InGamePhase::Paused), pause_stalker_animation)

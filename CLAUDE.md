@@ -83,7 +83,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Sites (Harmont map, 32 scan placements, stand-ins, relief, Institute lights) | `world/{sites,map,institute}.rs` |
 | Quarry ramp (haul road, `Surface::Ramp`, collision off the cut, scan cut, `tools/plan_quarry_ramp.py`) | `world/{quarry_ramp,ramp_cut}.rs`, `world/{roads,terrain,sites}.rs`, `shaders/ramp_cut.wesl`, generated `world/pillars/quarry_ramp.rs` |
 | New Harmont; Railway; Marsh props; Rocks | `world/{town,railway,marsh,rocks}.rs` |
-| Guards; UN patrol; Harmont traffic; Institute carrier; Institute helicopters | `world/{guards,helicopters}.rs`, `player/vehicle/{patrol,traffic,carrier}.rs` |
+| Guards; UN patrol; Harmont traffic; Institute carrier; Institute helicopters | `world/{guards,helicopters}.rs`, `player/vehicle/{patrol,traffic,carrier,carrier_track,track_loop}.rs` |
 | Townsfolk (New Harmont pedestrians, scientists at the Institute) | `world/townsfolk.rs` |
 | Wildlife; Mutants | `world/wildlife.rs`, `wildlife/{rig,mutants}.rs` |
 | Artifact showcase; Base (hangar, props, yard vehicles) | `world/base.rs`, `base/{artifacts,props,cutaway}.rs` |

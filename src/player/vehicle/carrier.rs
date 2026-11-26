@@ -7,7 +7,9 @@
 //! It stops for the stalker, their car, a patrol or traffic in its way; they
 //! stop for it. Its road wheels, sprocket and idler are separate nodes
 //! (`tools/split_moving_parts.py`) that roll with the tracks, the two sides
-//! turning against each other while it pivots.
+//! turning against each other while it pivots, and each belt is a ring of
+//! copies of one scanned link (`CarrierLink`) run round the loop measured in
+//! `carrier_track` as far as its track has run.
 //!
 //! The stalker can take it whenever it stands still, in its bay or waiting
 //! out in the Zone (`steer_carrier`): it then drives on its tracks, turning on
@@ -17,6 +19,7 @@
 //! floods) burn while it is out on an expedition or driven.
 
 use std::f32::consts::{PI, TAU};
+use std::sync::LazyLock;
 
 use bevy::prelude::*;
 use bevy::world_serialization::WorldInstanceReady;
@@ -30,7 +33,9 @@ use crate::world::{
 use super::super::Player;
 use super::super::camera::OrbitCamera;
 use super::super::orders::{MoveOrder, Turning};
+use super::carrier_track::{TRACK_LINKS, TRACK_LOOPS, TRACK_X};
 use super::patrol::{Patrol, in_the_way};
+use super::track_loop::{TrackLoop, link_pose};
 use super::traffic::{Traffic, keep_right, round_corners, settle_footprint};
 use super::{
     AUTOPILOT_MIN_SPEED, DRIVE_KEYS, DriveInput, Driving, LAMP_COLOR, Lamp, Seat, Solids, Vehicle,
@@ -519,6 +524,29 @@ pub(crate) struct CarrierWheel {
     radius: f32,
 }
 
+/// One link of a track belt: link `index` of `TRACK_LINKS[side]`, a copy of the
+/// scanned `TrackLinkL`/`TrackLinkR`.
+#[derive(Component)]
+pub(crate) struct CarrierLink {
+    side: usize,
+    index: usize,
+}
+
+/// Each track's belt loop, derived from the baked `TRACK_LOOPS` once, at first use.
+static TRACKS: LazyLock<[TrackLoop; 2]> = LazyLock::new(|| TRACK_LOOPS.map(TrackLoop::new));
+
+/// The pose of `link` in the carrier's model frame: its place on its belt, run round
+/// as far as its track has run (meters, the same as its wheels roll with).
+fn link_transform(carrier: &Carrier, link: &CarrierLink) -> Transform {
+    link_pose(
+        &TRACKS[link.side],
+        TRACK_X[link.side],
+        TRACK_LINKS[link.side],
+        link.index,
+        carrier.tracks[link.side] / SCALE,
+    )
+}
+
 /// A wheel's radius from its hub height, in model units.
 fn wheel_radius(hub: f32) -> f32 {
     if hub < ROAD_WHEEL.0 {
@@ -558,6 +586,7 @@ pub(crate) fn spawn_carrier(
         )),
     ));
     spawned.observe(attach_carrier_wheels);
+    spawned.observe(attach_carrier_links);
     mount_spotlights(&mut spawned, &mut meshes, &mut materials, &carrier_lamps());
 }
 
@@ -615,6 +644,78 @@ fn attach_carrier_wheels(
             .entity(entity)
             .insert(CarrierWheel { side, radius });
     }
+}
+
+/// Replaces each scanned track link node (`TrackLinkL`, `TrackLinkR`) by a ring of
+/// copies that run round the belt.
+fn attach_carrier_links(
+    ready: On<WorldInstanceReady>,
+    mut commands: Commands,
+    carriers: Query<&Carrier>,
+    children: Query<&Children>,
+    parts: Query<(&Name, &ChildOf)>,
+    primitives: Query<(&Mesh3d, &MeshMaterial3d<StandardMaterial>)>,
+) {
+    let Ok(carrier) = carriers.get(ready.entity) else {
+        return;
+    };
+    for entity in children.iter_descendants(ready.entity) {
+        let Ok((name, parent)) = parts.get(entity) else {
+            continue;
+        };
+        let side = match name.as_str() {
+            "TrackLinkL" => 0,
+            "TrackLinkR" => 1,
+            _ => continue,
+        };
+        let Some((mesh, material)) = children
+            .iter_descendants(entity)
+            .find_map(|part| primitives.get(part).ok())
+        else {
+            warn!("{name} has no mesh to copy");
+            continue;
+        };
+        spawn_links(
+            &mut commands,
+            carrier,
+            LinkTemplate {
+                side,
+                node: entity,
+                parent: parent.parent(),
+                mesh: mesh.clone(),
+                material: material.clone(),
+            },
+        );
+    }
+}
+
+/// A scanned link node of one belt side: its entity and its parent's, and the mesh
+/// and material to copy.
+struct LinkTemplate {
+    side: usize,
+    node: Entity,
+    parent: Entity,
+    mesh: Mesh3d,
+    material: MeshMaterial3d<StandardMaterial>,
+}
+
+/// Hides the scanned link and spawns its copies beside it, in the same model frame,
+/// where its track has run them. They are siblings, not children, so the hidden
+/// template does not hide them.
+fn spawn_links(commands: &mut Commands, carrier: &Carrier, template: LinkTemplate) {
+    let side = template.side;
+    commands.entity(template.node).insert(Visibility::Hidden);
+    commands.entity(template.parent).with_children(|belt| {
+        for index in 0..TRACK_LINKS[side] {
+            let link = CarrierLink { side, index };
+            belt.spawn((
+                link_transform(carrier, &link),
+                link,
+                template.mesh.clone(),
+                template.material.clone(),
+            ));
+        }
+    });
 }
 
 /// Sets the carrier on the ground, or the `footings` it rides over, where it
@@ -758,6 +859,24 @@ pub(crate) fn drive_carrier(
     }
 }
 
+/// Runs the links round their belts when the tracks have run since they were placed.
+pub(crate) fn run_carrier_tracks(
+    carriers: Query<&Carrier>,
+    mut links: Query<(&CarrierLink, &mut Transform)>,
+    mut placed: Local<[f32; 2]>,
+) {
+    let Ok(carrier) = carriers.single() else {
+        return;
+    };
+    if *placed == carrier.tracks {
+        return;
+    }
+    *placed = carrier.tracks;
+    for (link, mut transform) in &mut links {
+        *transform = link_transform(carrier, link);
+    }
+}
+
 /// How much of its top speed it makes at `at` heading `toward`: deep water
 /// and an uphill grade slow it.
 fn going(terrain: &Terrain, at: Vec2, toward: Vec2) -> f32 {
@@ -836,6 +955,117 @@ pub(crate) fn steer_carrier(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_follow_the_tracks() {
+        let loops = TRACK_LOOPS.map(TrackLoop::new);
+        let d = 1.0;
+        let at = |tracks: [f32; 2], side: usize, index: usize| {
+            let carrier = Carrier {
+                tracks,
+                ..Carrier::new()
+            };
+            link_transform(&carrier, &CarrierLink { side, index })
+        };
+        // Each link sits where `link_pose` puts it once its track has run `d` meters,
+        // the left forward and the right back, as in a pivot.
+        let pivot = [d, -d];
+        for (side, run) in [(0, d), (1, -d)] {
+            for index in [0, 10, 40] {
+                assert_eq!(
+                    at(pivot, side, index),
+                    link_pose(
+                        &loops[side],
+                        TRACK_X[side],
+                        TRACK_LINKS[side],
+                        index,
+                        run / SCALE
+                    ),
+                    "side {side} link {index}"
+                );
+            }
+        }
+        // On the lower run (link 10 rests there) the left belt travels rearward and
+        // the right forward.
+        let rest = at([0.0; 2], 0, 10);
+        assert!(rest.translation.y < 0.02, "link 10 is on the lower run");
+        assert!(at(pivot, 0, 10).translation.z < rest.translation.z);
+        assert!(at(pivot, 1, 10).translation.z > at([0.0; 2], 1, 10).translation.z);
+    }
+
+    /// A carrier whose scene holds a template link node per side, replaced by links.
+    fn carrier_with_links(world: &mut World) -> (Entity, [Entity; 2], Mesh3d) {
+        let mesh = Mesh3d(Assets::<Mesh>::default().add(Cuboid::default()));
+        let carrier = world.spawn(Carrier::new()).id();
+        let nodes = [0, 1].map(|_| world.spawn((Visibility::default(), ChildOf(carrier))).id());
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, world);
+        for (side, node) in nodes.into_iter().enumerate() {
+            let template = LinkTemplate {
+                side,
+                node,
+                parent: carrier,
+                mesh: mesh.clone(),
+                material: MeshMaterial3d(Handle::default()),
+            };
+            spawn_links(&mut commands, &Carrier::new(), template);
+        }
+        queue.apply(world);
+        (carrier, nodes, mesh)
+    }
+
+    #[test]
+    fn the_template_links_are_hidden_and_their_copies_are_not() {
+        let mut world = World::new();
+        // As `VisibilityPlugin` does.
+        world.register_required_components::<Mesh3d, Visibility>();
+        let (carrier, nodes, mesh) = carrier_with_links(&mut world);
+        for node in nodes {
+            assert_eq!(world.get::<Visibility>(node), Some(&Visibility::Hidden));
+        }
+        let mut links = world.query::<(&CarrierLink, &Visibility, &ChildOf, &Mesh3d)>();
+        for side in 0..2 {
+            let copies: Vec<_> = links
+                .iter(&world)
+                .filter(|(link, ..)| link.side == side)
+                .collect();
+            assert_eq!(copies.len(), TRACK_LINKS[side]);
+            for (_, visibility, parent, copy) in copies {
+                assert_eq!(*visibility, Visibility::Inherited);
+                assert_eq!(parent.parent(), carrier, "a sibling of the template");
+                assert_eq!(copy.0, mesh.0);
+            }
+        }
+    }
+
+    #[test]
+    fn the_links_run_when_the_tracks_do() {
+        let mut world = World::new();
+        let (carrier, ..) = carrier_with_links(&mut world);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(run_carrier_tracks);
+        let poses = |world: &mut World| {
+            let mut links = world.query::<(&CarrierLink, &Transform)>();
+            let carrier = world.query::<&Carrier>().single(world).expect("a carrier");
+            links
+                .iter(world)
+                .map(|(link, pose)| (*pose, link_transform(carrier, link)))
+                .collect::<Vec<_>>()
+        };
+        let before = poses(&mut world);
+        assert_eq!(before.len(), TRACK_LINKS.iter().sum::<usize>());
+        assert!(before.iter().all(|(pose, wanted)| pose == wanted));
+        world.get_mut::<Carrier>(carrier).expect("a carrier").tracks = [2.0, -2.0];
+        assert!(
+            poses(&mut world)
+                .iter()
+                .any(|(pose, wanted)| pose != wanted)
+        );
+        schedule.run(&mut world);
+        let after = poses(&mut world);
+        assert!(after.iter().all(|(pose, wanted)| pose == wanted));
+        assert!(after.iter().zip(&before).any(|(now, was)| now.0 != was.0));
+    }
 
     fn run(carrier: &mut Carrier, seconds: f32, blocked: bool) {
         let dt = 0.05;

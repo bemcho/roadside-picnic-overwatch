@@ -538,8 +538,21 @@ the stalker stands still.
   and idler are `WheelL*` /
   `WheelR*` nodes cut by `tools/split_moving_parts.py` (its docstring has the
   commands); the split model is slimmed with `tools/slim_dense_model.py`
-  (1.8M to 372k triangles, maps capped at 2048 px; see Perimeter guns) and
-  finished with `tools/compress_glb_textures.py`.
+  (1.8M to 288k triangles with the belts cut out, maps capped at 2048 px; see
+  Perimeter guns) and finished with `tools/compress_glb_textures.py`.
+  The belts run with the wheels: the script cuts each belt out of `Hull` and keeps
+  one scanned link per side (`TrackLinkL`, `TrackLinkR`, 758 and 809 triangles) plus
+  each belt's mid-line loop, mid-plane x and link count (77 a side), written to
+  `src/player/vehicle/carrier_track.rs` by `--track-out`. At spawn the carrier
+  hides those two template nodes and spawns that many copies of each beside
+  them (`CarrierLink`, about 121k triangles in all, drawn instanced and casting
+  shadows). `run_carrier_tracks` places every copy from its two pins on the loop
+  (`track_loop.rs`), shifted by the same `Carrier::tracks` the wheels roll with
+  (meters over `SCALE`), after both `drive_carrier` and `steer_carrier`, so belts
+  and wheels turn together: backwards when it backs up, against each other as it
+  pivots. The lower run travels toward -Z going forward; links nod up to about
+  4 degrees where the scanned belt dips under each road wheel. Change the loops by
+  regenerating `carrier_track.rs`, never by hand.
   The stalker can take it with E whenever it stands still (in its bay, waiting
   out in the Zone, or where they left it): its expedition stops for the rest of
   the run and it drives on its tracks (W/S up to 10 m/s ahead and 3 m/s astern
