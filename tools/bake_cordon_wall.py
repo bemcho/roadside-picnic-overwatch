@@ -5,7 +5,7 @@ repeat is replaced by an 84-vertex box and two wire strips whose maps are baked 
 from the repository root (Blender 4.5; `ctt`, `node` and the glb-bake-tangents tool must exist;
 about 3 minutes with a GPU):
 
-    BLENDER=~/.cache/blender/blender-4.5.16-linux-x64/blender
+    BLENDER=~/.local/blender-4.5.16-linux-x64/blender
     "$BLENDER" -b --factory-startup --python-exit-code 1 --python tools/bake_cordon_wall.py -- \
         ~/Projects/agentic/RoadSide-Picnic/models/sites/uhd/site-cordon-wall.glb \
         assets/models/sites/medium assets/textures/cordon \
