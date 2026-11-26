@@ -75,7 +75,9 @@ the stalker stands still.
   marsh hollow and bald hill (`landform_height`). The graded road network
   (`src/world/roads.rs`) follows the Harmont map: Harmont's streets, the highway
   from the Perimeter gate past the factories and the Garage, the railway tracks,
-  the Chapter 4 track through the breach, the marsh road and the quarry. Roads
+  the Chapter 4 track through the breach, the marsh road and the quarry, where it
+  ends: the way on to the Golden Sphere is the quarry's haul ramp and then the
+  Sphere's own. Roads
   are graded over the sited land (pads and dioramas), then paved. Each route
   is dirt, old asphalt (`Surface::Asphalt`: the highway, Harmont's main road,
   the Institute and Plague roads), New Harmont's smooth streets
@@ -88,8 +90,8 @@ the stalker stands still.
   a short crest rounds the break there), instead of following the land at
   every corner, and it
   overrides a diorama's own ground, which hides every other road, so the quarry's pit
-  follows it inside its corridor (see **Quarry ramp**; the Golden Sphere's ramp
-  lies on the land outside every diorama's ground); the road mask texture holds gravel (R), tire ruts (G),
+  and the Golden Sphere's crater follow it inside its corridor (see **Quarry ramp**);
+  the road mask texture holds gravel (R), tire ruts (G),
   asphalt (B) and the old, broken share of that asphalt (A, `Surface::Asphalt`
   only: New Harmont's streets and plaza keep A = 0), and `terrain.wesl` paints
   smooth weathered tar from B and the old asphalt (see Old roads) from A.
@@ -429,60 +431,66 @@ the stalker stands still.
     straight down the pit's face, which both the stalker (25 s) and the car
     (27 s) descend, against about 255 m by the ramp from the same spot (its
     251 m from the entrance to the floor, plus the 4 m to the entrance).
-  - *Golden pit* (`roads.rs`: `GOLDEN_RIM`, `golden_pit_ramp()`; generated
-    `world/pillars/{golden_pit_ramp,golden_pit_ground}.rs`): a second
-    `Surface::Ramp` track, a ledge road down the south-west wall of the terraced
-    pit round the Golden Sphere, in place of the Chapter 4 road's straight chute
-    (the old leg through `map(1146, 368)`). It has no scan cut and no collision
-    filter: it keeps off every diorama's ground, so the terrain's ramp override
-    never applies to it, and it is graded over the land like any road.
-    - *Rim road:* the Chapter 4 route now runs on from `map(1100, 368)` (-948, 36)
-      over three more points about 30 m apart along the rim's low ridge, (-962, 10),
-      (-966, -20), (-972, -48) and `GOLDEN_RIM` (-980.2, -77.8), in world
-      metres, not map pixels.
-    - *Track:* `golden_pit_ramp()` is `GOLDEN_RIM`, then the baked points. The 25 m
-      drive from the rim to the baked entrance (-995.49, -97.59) follows near-flat land
-      (at least 12 m, half `CREST_LENGTH`); from there the ramp falls at one
-      grade (0.118) over 330 m. It ends exactly at `GOLDEN_SPHERE` (-1152, 84), where
-      the Sphere's own dirt drive begins (`the_golden_ramp_ends_at_the_golden_sphere`).
-      Against the land as it is (`sited_height`) the baked points cut at most 3.85 m
-      and fill at most 3.89 m (`the_golden_ramp_cuts_and_fills_within_its_limits`
-      allows 4.3 and 5.3 m). Shape: south-west down the first face, west along the
-      -10 m shelf (z about -132), north along it (x about -1076), north-west down the second face,
-      north along the ridge at x about -1120 between the Sphere's crater and the Quarry
-      rim's pit, then north-west and west into the junction.
-    - *Planner input:* `cargo test world::terrain::tests::write_golden_pit_relief --
-      --ignored --exact` writes `golden_pit_ground.rs`, the land (`sited_height`,
-      before roads and water) over x -1260..-920, z -330..130 on a 96 x 96 grid.
-      It is planner input only: nothing in the game loads it (its size is not that
-      of a `Relief`, 64), and the test also prints the dioramas' footprints and
-      their blends as `--avoid` boxes. `python3 tools/plan_quarry_ramp.py
-      src/world/pillars/golden_pit_ground.rs src/world/pillars/golden_pit_ramp.rs
-      --scale 1 --grade 0.12 --entrance=-995,-100 --heading 5 --centre=-1090,-100
-      --half=170,220 --grid 64 --end=-1152,84 --max-length 450` plus the `--avoid`
-      boxes writes the road; the whole command is in the file's `Options` header.
-    - *Avoid boxes:* the Quarry rim scan's footprint grown by its 57.5 m ground blend on its
-      two straight sides (-1152.2, 97.2, -945.4, 205.2 and -1094.7, 39.7, -1002.9, 262.7),
-      its south-west corner as a quarter disc of radius 33 m about the scan's corner
-      (-1094.67, 97.19) in 18 stair boxes, and the Sphere's footprint
-      (-1286.4, 30.5, -1168.8, 137.5). The blend's full corner radius (47.5 m) cannot
-      be kept: `GOLDEN_SPHERE` lies 0.2 m inside the grown box and 1.3 m outside the
-      real rounded blend, and every road through the corner at that radius needs 19 m of
-      fill across the Sphere's crater hollow, against 3.7 m at 33 m. So the last
-      54 m of the road run inside the blend's corner, at blend weight at most 0.12 on
-      the centerline (0.32 at the shoulder edge), never in a scan's own footprint
-      (`the_golden_ramp_keeps_off_the_dioramas` checks every diorama's footprint box
-      and `diorama_ground`). The road comes no closer than 28 m to another track away
-      from its two ends (`the_golden_ramp_keeps_clear_of_other_tracks` skips the first and last 30 m).
-    - *Checks:* `the_golden_ramp_meets_the_chapter_4_road_level` (no step at the
-      rim), `the_ramp_grade_stays_drivable` (both ramps), `the_golden_ramp_is_dry`
-      (no water within the bed) and `a_click_order_reaches_the_golden_sphere`. The
-      router is slope-blind, as at the quarry: a click from the rim to the Sphere
-      crosses the pit's benches in a straight line, not the road (a stalker ran at
-      4.5 m/s on the rim, then slowed to about 0.7 m/s across the benches, cause not
-      found; after 190 s it had covered 208 of the 236 m and the run was stopped).
-      Not yet driven in the game: the road is to be re-planned down to the crater
-      floor, so the car and carrier runs wait for it.
+  - *Golden Sphere's crater* (`sites::crater_ramp()`, `sites::core_scan()`, `roads.rs`;
+    generated `world/pillars/golden_crater_ramp.rs`): the only road to the Golden
+    Sphere, a second `Surface::Ramp` track that runs on from the end of the quarry's
+    ramp and spirals down inside the Sphere's crater scan (`landmark-core`) to its
+    floor. The Chapter 4 route ends at `QUARRY`; no other route or drive comes nearer
+    to the Sphere than that junction, 226 m away
+    (`the_only_road_to_the_golden_sphere_runs_through_the_quarry_rim`). The Sphere has
+    no dirt drive of its own: `tracks()` leaves out the drive of `GOLDEN_SPHERE` as it
+    does the quarry's. The Sphere itself is a painted golden glow on the crater's
+    lowest wall (a 44 degree incline, no geometry of its own, about 0.6 m across), at
+    model (-0.0172, -0.0138) of the core, world (-1229.3, 86.1).
+    - *Track:* the quarry ramp's last point (-1063.6, 101.7), at -48.6 m on the Quarry
+      rim's floor, `GOLDEN_SPHERE` (-1152, 84), the core's `entrance()` (-1161.8, 84)
+      and the baked points under the core's pose, the first on the front edge
+      (-1168.8, 84). `graded_track` treats the track's first leg as its drive and the
+      second point as the crest, so the drive is the 90 m from the quarry ramp's end to
+      the junction: one straight grade between the sited land at its two ends (-48.6 m
+      and -36.8 m, 0.13 up), with no step at the quarry ramp's end
+      (`the_crater_ramp_continues_the_quarry_ramps_level`). The 24 m crest lies at the
+      junction (a 0.30 grade change; `the_ramp_crest_is_rounded` checks both ramps), and
+      from there the ramp falls at one grade, 0.171, over 394 m to the last point's
+      level (-104.3 m). The junction lies on the saddle between the quarry's and the
+      core's ground blends: the drive cuts up to 8.7 m and fills up to 4.3 m against the
+      land, and the land rises 3.4 m from the junction to the entrance, so the road
+      lies 5.1 m below the land at the entrance and 6.9 m at the front edge, a cutting
+      before the crater. The drive's leg to the entrance has no corner of its own: the
+      kinks are 11.3 degrees at the junction and 6.5 degrees at the first baked point
+      (a 7 m leg, then 3 m ones), by the circle through three points 254 m and 44 m;
+      `the_crater_ramp_bends_no_tighter_than_9_m` holds every corner of the track
+      to 9 m and `the_connector_meets_the_spiral_in_line` the last kink to 10 degrees, so
+      none is rounded.
+    - *Path:* `python3 tools/plan_quarry_ramp.py src/world/pillars/uhd_core_ground.rs
+      src/world/pillars/golden_crater_ramp.rs` with the options in the file's header
+      (`--scale 120`, entrance at the front edge's middle, `--turn right`,
+      `--min-separation 18`, `--end` on the floor beside the Sphere, grade at most 0.19):
+      a right-hand spiral of 127 points and 378 m, laps at least 20 m apart, corners of 9.5 m.
+      The file is generated: regenerate it, never edit it.
+    - *Cut and fill:* deep by design, the road makes its way through the crater's walls
+      (nothing caps it). Against the land the ramp cuts up to 44 m through the high west
+      rim (at world (-1234, 118), 188 m along the track) and fills up to 25 m on the east
+      edge (at (-1258, 32), 314 m along), over the scan's hole there; the quarry's
+      cut and fill tests do not apply. The crater ramp overrides the core's ground as
+      the quarry's does its own (the core's ground blend is not a limit).
+    - *Not cut yet:* the core scan is neither cut along the road nor cleared of its
+      collision there: the stone stands above the lowered ground and its pillars stand
+      across the road, so a click order that must cross the crater has no route
+      (`a_click_order_reaches_the_crater_floor` runs against the quarry's cleared
+      collision only).
+    - *Checks:* `the_crater_ramp_starts_at_the_quarry_ramps_end`,
+      `the_crater_ramp_ends_beside_the_sphere` (ground below -95 m, 5.1 to 15 m from the
+      Sphere's centre, not under the bed), `the_crater_ramp_laps_keep_apart` (18 m),
+      `the_crater_ramp_keeps_clear_of_other_tracks` (18 m, after its first 30 m),
+      `a_ramp_is_graded_evenly` and `every_track_joins_the_network_back_to_the_gate`
+      (both ramps). Two tests fail on the first bake and are ignored until it is made
+      again: `the_crater_ramp_keeps_off_the_sphere` (the spiral runs 0.19 m from the
+      Sphere, over its glow) and `the_crater_ramp_grade_stays_drivable` (where the road
+      crosses the tile edge x = -1280 in a deep cut, at (-1280.5, 72.3), the 8 m edge
+      stitch pulls the 2 m mesh 0.17 m off the road: 0.34 against the centerline's limit
+      of 0.25). A bake must keep its centerline off the 128 m tile edges x = -1280 and
+      z = 128 (model z = -0.437, x = -0.367). Not yet driven in the game.
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town
   scan (`assets/models/harmont/`) line a street grid around a paved downtown
   plaza on one level town pad; each shows its full scan near the view and a

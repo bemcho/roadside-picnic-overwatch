@@ -550,6 +550,11 @@ const TRAIN_PILLARS: &[Pillar] = include!("pillars/vehicle_train.rs");
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
 const QUARRY_RAMP: &[Vec2] = include!("pillars/quarry_ramp.rs");
 
+/// The Golden Sphere's road down its crater in the core scan's model units,
+/// from the front edge's middle: a spiral to the floor beside the Sphere.
+#[allow(clippy::approx_constant, reason = "Measured model coordinates")]
+const CRATER_RAMP: &[Vec2] = include!("pillars/golden_crater_ramp.rs");
+
 #[derive(Clone, Copy)]
 pub(super) struct Landmark {
     kind: Kind,
@@ -767,17 +772,33 @@ fn landmark(kind: Kind) -> Landmark {
         .expect("every kind of site is a landmark")
 }
 
+/// A baked haul road (model xz, `tools/plan_quarry_ramp.py`) under the site's pose.
+fn baked_path(site: Landmark, baked: &'static [Vec2]) -> impl Iterator<Item = Vec2> {
+    let pose = site.pose();
+    baked
+        .iter()
+        .map(move |at| pose.transform_point(Vec3::new(at.x, 0.0, at.y)).xz())
+}
+
 /// The quarry's haul road in world xz: its drive from the junction to the
-/// entrance, then the baked path (`tools/plan_quarry_ramp.py`) down into the pit.
+/// entrance, then the baked path down into the pit.
 pub(crate) fn quarry_ramp() -> Vec<Vec2> {
     let site = landmark(QuarryRim);
-    let pose = site.pose();
-    let path = QUARRY_RAMP
-        .iter()
-        .map(|at| pose.transform_point(Vec3::new(at.x, 0.0, at.y)).xz());
     [site.junction, site.entrance()]
         .into_iter()
-        .chain(path)
+        .chain(baked_path(site, QUARRY_RAMP))
+        .collect()
+}
+
+/// The Golden Sphere's haul road in world xz, the only way to it: from where
+/// the quarry's ramp ends on the pit's floor, its drive on to the Sphere's
+/// junction and the crater's entrance, then the baked spiral down the crater.
+pub(crate) fn crater_ramp() -> Vec<Vec2> {
+    let site = landmark(GoldenSphere);
+    let quarry = quarry_ramp();
+    [quarry[quarry.len() - 1], site.junction, site.entrance()]
+        .into_iter()
+        .chain(baked_path(site, CRATER_RAMP))
         .collect()
 }
 
@@ -788,22 +809,16 @@ pub(crate) fn quarry_scan() -> (Transform, &'static [Pillar]) {
     (site.pose(), site.model().pillars)
 }
 
+/// The core scan's pose and its collision as the model carries it.
+#[cfg(test)]
+pub(crate) fn core_scan() -> (Transform, &'static [Pillar]) {
+    let site = landmark(GoldenSphere);
+    (site.pose(), site.model().pillars)
+}
+
 /// The corners of the box around the quarry scan's footprint in world xz.
 pub(super) fn quarry_footprint() -> (Vec2, Vec2) {
     footprint_box(landmark(QuarryRim))
-}
-
-/// Every diorama's name, the box around its footprint in world xz and the
-/// width of the slope that blends its ground into the land.
-#[cfg(test)]
-pub(super) fn diorama_footprints() -> impl Iterator<Item = (&'static str, (Vec2, Vec2), f32)> {
-    LANDMARKS
-        .into_iter()
-        .filter(|site| matches!(site.model().ground, Ground::Relief(_)))
-        .map(|site| {
-            let m = site.model();
-            (m.name, footprint_box(site), m.relief_margin())
-        })
 }
 
 /// The corners of the box around a site's footprint in world xz.

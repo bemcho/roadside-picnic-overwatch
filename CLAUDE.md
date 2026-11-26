@@ -81,7 +81,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Cordons (yard, Perimeter, gates, crawl hole, belts) | `world/cordon.rs` |
 | Perimeter guns (laser scan, trespass, tracers, downed creatures) | `world/turrets.rs`, `turrets/{scan,fire}.rs`, `wildlife/downed.rs`, `audio/guns.rs` |
 | Sites (Harmont map, 32 scan placements, stand-ins, relief, Institute lights) | `world/{sites,map,institute}.rs` |
-| Quarry ramp (haul road, `Surface::Ramp`, collision off the cut, scan cut, `tools/plan_quarry_ramp.py`); Golden pit ramp (the Golden Sphere's ledge road) | `world/{quarry_ramp,ramp_cut}.rs`, `world/{roads,terrain,sites}.rs`, `shaders/ramp_cut.wesl`, generated `world/pillars/{quarry_ramp,golden_pit_ramp,golden_pit_ground}.rs` |
+| Quarry ramp (haul road, `Surface::Ramp`, collision off the cut, scan cut, `tools/plan_quarry_ramp.py`); Golden Sphere's crater road (on through the Quarry rim) | `world/{quarry_ramp,ramp_cut}.rs`, `world/{roads,terrain,sites}.rs`, `shaders/ramp_cut.wesl`, generated `world/pillars/{quarry_ramp,golden_crater_ramp}.rs` |
 | New Harmont; Railway; Marsh props; Rocks | `world/{town,railway,marsh,rocks}.rs` |
 | Guards; UN patrol; Harmont traffic; Institute carrier; Institute helicopters | `world/{guards,helicopters}.rs`, `player/vehicle/{patrol,traffic,carrier,carrier_track,track_loop}.rs` |
 | Townsfolk (New Harmont pedestrians, scientists at the Institute) | `world/townsfolk.rs` |

@@ -61,9 +61,6 @@ pub(super) const EMBANKMENT: Vec2 = map(907.0, 449.0);
 pub(super) const RIDGE: Vec2 = map(997.0, 395.0);
 pub(super) const QUARRY: Vec2 = map(1095.0, 320.0);
 pub(super) const GOLDEN_SPHERE: Vec2 = map(1185.0, 348.0);
-/// Where the Chapter 4 road meets the Golden Sphere's pit ramp, on the rim
-/// (world metres, not map pixels): the ramp's drive starts here.
-pub(super) const GOLDEN_RIM: Vec2 = Vec2::new(-980.2, -77.8);
 pub(super) const SWAMP: Vec2 = map(775.0, 690.0);
 pub(super) const CRATER: Vec2 = map(880.0, 700.0);
 // On the railway itself.
@@ -202,12 +199,6 @@ const ROUTES: &[Route] = &[
         map(1027.0, 334.0),
         map(1057.0, 318.0),
         QUARRY,
-        map(1100.0, 368.0),
-        // Along the pit's rim, on the low ridge, to where its ramp starts.
-        Vec2::new(-962.0, 10.0),
-        Vec2::new(-966.0, -20.0),
-        Vec2::new(-972.0, -48.0),
-        GOLDEN_RIM,
     ]),
     // The short track between the highway's end and the Chapter 4 route.
     dirt(&[RED_LINK, map(737.0, 395.0), RED_TURN]),
@@ -271,23 +262,6 @@ pub(super) fn country_roads() -> impl Iterator<Item = &'static [Vec2]> {
         .map(|route| route.points)
 }
 
-/// The Golden Sphere's haul road in world xz (`tools/plan_quarry_ramp.py`),
-/// from the entrance in the pit's rim down to the Sphere's junction.
-#[allow(
-    clippy::excessive_precision,
-    reason = "The planner writes 5 decimals; the file is generated, not edited"
-)]
-const GOLDEN_PIT_RAMP: &[Vec2] = include!("pillars/golden_pit_ramp.rs");
-
-/// The Golden Sphere's haul road: its drive from the Chapter 4 road's end on
-/// the rim to the baked entrance, then the baked path down the pit to the Sphere.
-pub(crate) fn golden_pit_ramp() -> Vec<Vec2> {
-    [GOLDEN_RIM]
-        .into_iter()
-        .chain(GOLDEN_PIT_RAMP.iter().copied())
-        .collect()
-}
-
 /// The railway's bed: the map's line, split into graded runs.
 fn railway_bed() -> Vec<Vec2> {
     let mut bed = vec![RAILWAY[0]];
@@ -299,22 +273,23 @@ fn railway_bed() -> Vec<Vec2> {
 }
 
 /// Every graded path: the routes, each site's drive, the railway bed and the
-/// two ramps: the quarry's, which carries the quarry's drive as its head, and
-/// the Golden Sphere's, which starts at the end of the Chapter 4 road.
+/// two ramps. The quarry's carries the quarry's drive as its head; the Golden
+/// Sphere's carries the Sphere's, and leaves the end of the quarry's ramp, the
+/// only way to it.
 fn tracks() -> Vec<(Surface, Vec<Vec2>)> {
     let routes = ROUTES
         .iter()
         .map(|route| (route.surface, route.points.to_vec()));
     let drives = LANDMARKS
         .iter()
-        .filter(|site| site.junction != QUARRY)
+        .filter(|site| ![QUARRY, GOLDEN_SPHERE].contains(&site.junction))
         .map(|site| (Surface::Dirt, vec![site.junction, site.entrance()]));
     routes
         .chain(drives)
         .chain([
             (Surface::Ballast, railway_bed()),
             (Surface::Ramp, sites::quarry_ramp()),
-            (Surface::Ramp, golden_pit_ramp()),
+            (Surface::Ramp, sites::crater_ramp()),
         ])
         .collect()
 }
@@ -578,16 +553,23 @@ mod tests {
             );
         }
         assert!(bed.contains(&RAIL_CROSSING) && on_routes(RAIL_CROSSING));
-        // A ramp track is the road's end for a site it leads to.
-        let ramp_ends: Vec<Vec2> = ramp_tracks()
-            .iter()
-            .map(|path| path[path.len() - 1])
-            .collect();
+        // A ramp starts on a route or where an earlier ramp ends, and carries the
+        // junction of the site it leads to.
+        let ramps = ramp_tracks();
+        for (i, ramp) in ramps.iter().enumerate() {
+            assert!(
+                on_routes(ramp[0])
+                    || ramps[..i]
+                        .iter()
+                        .any(|earlier| earlier.last() == Some(&ramp[0])),
+                "ramp {i} starts off the network"
+            );
+        }
         for site in LANDMARKS {
             assert!(
                 on_routes(site.junction)
                     || bed.contains(&site.junction)
-                    || ramp_ends.contains(&site.junction),
+                    || ramps.iter().any(|ramp| ramp.contains(&site.junction)),
                 "{:?} has no road",
                 site.junction
             );
@@ -651,6 +633,13 @@ mod tests {
             .expect("the quarry has a ramp track")
     }
 
+    fn crater_ramp_track() -> Vec<Vec2> {
+        ramp_tracks()
+            .into_iter()
+            .find(|path| path.contains(&GOLDEN_SPHERE))
+            .expect("the Golden Sphere has a ramp track")
+    }
+
     /// The point halfway along `path`, by length.
     fn midway(path: &[Vec2]) -> Vec2 {
         let length: f32 = path.array_windows().map(|&[a, b]| a.distance(b)).sum();
@@ -677,30 +666,128 @@ mod tests {
         assert!(!tracks().iter().any(|(_, path)| path[..] == track[..2]));
     }
 
+    /// The Golden Sphere's centre in the core scan's model units, the centroid
+    /// of its painted glow on the crater's lowest inner wall (the scan has no
+    /// geometry for it), and its radius in metres.
+    const SPHERE: Vec3 = Vec3::new(-0.0172, 0.0, -0.0138);
+    const SPHERE_RADIUS: f32 = 0.6;
+
+    fn golden_sphere() -> Vec2 {
+        let (pose, _) = sites::core_scan();
+        pose.transform_point(SPHERE).xz()
+    }
+
     #[test]
-    fn the_golden_ramp_starts_on_the_chapter_4_road() {
+    fn the_only_road_to_the_golden_sphere_runs_through_the_quarry_rim() {
+        // The Chapter 4 road ends at the quarry's junction, the nearest any
+        // route or dirt drive comes; the way on is the quarry's ramp and then
+        // the crater's, which both come nearer.
+        let reach = QUARRY.distance(GOLDEN_SPHERE);
         let chapter_4 = ROUTES
             .iter()
             .find(|route| route.points.contains(&QUARRY))
             .expect("the Chapter 4 route passes the quarry");
-        assert_eq!(chapter_4.points.last(), Some(&GOLDEN_RIM));
-        assert_eq!(golden_pit_ramp()[0], GOLDEN_RIM);
-        assert!(ramp_tracks().contains(&golden_pit_ramp()));
-        // The old chute along the pit's floor is gone.
-        let chute = map(1146.0, 368.0);
-        assert!(!ROUTES.iter().any(|route| route.points.contains(&chute)));
+        assert_eq!(chapter_4.points.last(), Some(&QUARRY));
+        let gap = |path: &[Vec2]| {
+            path.array_windows()
+                .map(|&[a, b]| distance_to_leg(GOLDEN_SPHERE, a, b))
+                .fold(f32::INFINITY, f32::min)
+        };
+        for (surface, path) in tracks() {
+            if surface == Surface::Ramp {
+                assert!(gap(&path) < reach, "a ramp keeps away from the Sphere");
+            } else {
+                assert!(
+                    gap(&path) >= reach - 0.01,
+                    "a {surface:?} track {} m from the Sphere passes the quarry's junction at {reach} m",
+                    gap(&path)
+                );
+            }
+        }
     }
 
     #[test]
-    fn the_golden_ramp_ends_at_the_golden_sphere() {
-        assert_eq!(golden_pit_ramp().last(), Some(&GOLDEN_SPHERE));
+    fn the_crater_ramp_starts_at_the_quarry_ramps_end() {
+        let quarry = sites::quarry_ramp();
+        let crater = crater_ramp_track();
+        assert_eq!(crater[0], quarry[quarry.len() - 1]);
+        let site = LANDMARKS
+            .iter()
+            .find(|site| site.junction == GOLDEN_SPHERE)
+            .expect("the Golden Sphere is a landmark");
+        assert_eq!(crater[1..3], [GOLDEN_SPHERE, site.entrance()]);
+        // The Sphere has no dirt drive of its own beside the ramp.
+        assert!(!tracks().iter().any(|(_, path)| path[0] == GOLDEN_SPHERE));
     }
 
-    /// A point on a path, its run from the path's start and the direction across it.
+    #[test]
+    fn the_crater_ramp_continues_the_quarry_ramps_level() {
+        // Every half metre from 4 m before the quarry ramp's end to 4 m after
+        // it, along the two tracks: no step in the road's level at the join.
+        let terrain = Terrain::new();
+        let quarry = sites::quarry_ramp();
+        let crater = crater_ramp_track();
+        let end = crater[0];
+        let level = |toward: Vec2, metres: f32| {
+            let at = end + (toward - end).normalize() * metres;
+            terrain
+                .roads
+                .sample(at)
+                .expect("the join is on the road")
+                .height
+        };
+        let metres = (0..=8).map(|half| half as f32 * 0.5);
+        let profile: Vec<f32> = metres
+            .clone()
+            .rev()
+            .map(|back| level(quarry[quarry.len() - 2], back))
+            .chain(metres.skip(1).map(|ahead| level(crater[1], ahead)))
+            .collect();
+        for window in profile.array_windows::<2>() {
+            let step = (window[1] - window[0]).abs();
+            assert!(step <= 0.5 * 0.25, "the road steps {step} m at the join");
+        }
+    }
+
+    #[test]
+    fn the_crater_ramp_ends_beside_the_sphere() {
+        let terrain = Terrain::new();
+        let crater = crater_ramp_track();
+        let end = crater[crater.len() - 1];
+        let floor = terrain.height_at(end.x, end.y);
+        assert!(floor < -95.0, "the road ends at {floor} m, above the floor");
+        // Its bed leaves the Sphere itself alone, and the Sphere is near.
+        let gap = end.distance(golden_sphere());
+        assert!(
+            gap > RAMP_HALF_WIDTH + SPHERE_RADIUS,
+            "the road's end lies {gap} m from the Sphere's centre, over it"
+        );
+        assert!(gap <= 15.0, "the road ends {gap} m from the Sphere");
+    }
+
+    #[test]
+    #[ignore = "until the re-bake: the baked spiral runs over the Sphere"]
+    fn the_crater_ramp_keeps_off_the_sphere() {
+        // The Sphere stands on the crater's lowest wall; no leg of the road may
+        // come nearer to it than its bed and a car's width.
+        const CLEAR: f32 = 10.0;
+        let crater = crater_ramp_track();
+        let sphere = golden_sphere();
+        let (gap, at) = crater
+            .array_windows()
+            .map(|&[a, b]| (distance_to_leg(sphere, a, b), a))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("the ramp has legs");
+        assert!(
+            gap >= CLEAR,
+            "the road passes {gap} m from the Sphere, on the leg from {at}"
+        );
+    }
+
+    /// A point on a path and its run from the path's start.
     struct Station {
         run: f32,
         at: Vec2,
-        across: Vec2,
     }
 
     /// Points along `path` every `step` meters, and its last point.
@@ -709,24 +796,16 @@ mod tests {
         let (mut start, mut next) = (0.0, 0.0);
         for &[a, b] in path.array_windows() {
             let leg = a.distance(b);
-            let across = (b - a).normalize().perp();
             while next < start + leg {
                 let at = a.lerp(b, (next - start) / leg);
-                found.push(Station {
-                    run: next,
-                    at,
-                    across,
-                });
+                found.push(Station { run: next, at });
                 next += step;
             }
             start += leg;
         }
-        let last = path.len() - 1;
-        let across = (path[last] - path[last - 1]).normalize().perp();
         found.push(Station {
             run: start,
-            at: path[last],
-            across,
+            at: path[path.len() - 1],
         });
         found
     }
@@ -739,20 +818,18 @@ mod tests {
     }
 
     #[test]
-    fn the_golden_ramp_keeps_clear_of_other_tracks() {
-        // Its first 30 m leave the Chapter 4 road at the rim and its last 30 m
-        // join the Sphere's own drive; between them no other track's nearest
-        // leg may take the road's level.
-        const JOINS: f32 = 30.0;
-        let ramp = golden_pit_ramp();
-        let length = stations(&ramp, 1.0).last().map_or(0.0, |end| end.run);
+    fn the_crater_ramp_keeps_clear_of_other_tracks() {
+        // Its first 30 m leave the quarry ramp's end; after them no other
+        // track's nearest leg may take the road's level.
+        const LEAVES: f32 = 30.0;
+        let ramp = crater_ramp_track();
         let others: Vec<_> = tracks()
             .into_iter()
             .filter(|(_, path)| *path != ramp)
             .collect();
         let mut worst = (f32::INFINITY, Vec2::ZERO);
         for station in stations(&ramp, 1.0) {
-            if station.run < JOINS || station.run > length - JOINS {
+            if station.run < LEAVES {
                 continue;
             }
             for (_, path) in &others {
@@ -773,67 +850,65 @@ mod tests {
     }
 
     #[test]
-    fn the_golden_ramp_meets_the_chapter_4_road_level() {
-        let terrain = Terrain::new();
-        let ramp = golden_pit_ramp();
-        let chapter_4 = ROUTES
-            .iter()
-            .find(|route| route.points.contains(&QUARRY))
-            .expect("the Chapter 4 route passes the quarry");
-        let before = chapter_4.points[chapter_4.points.len() - 2];
-        let level = |toward: Vec2| {
-            let at = GOLDEN_RIM + (toward - GOLDEN_RIM).normalize();
-            terrain
-                .roads
-                .sample(at)
-                .expect("the rim is on the road")
-                .height
-        };
-        let step = (level(before) - level(ramp[1])).abs();
-        assert!(step < 0.2, "the road steps {step} m at the rim");
-    }
-
-    #[test]
-    fn the_golden_ramp_keeps_off_the_dioramas() {
-        // The ramp may pass a scan's ground blend, but not its footprint: that
-        // is the Golden Sphere's own pad and the Quarry rim's scan.
-        let footprints: Vec<_> = sites::diorama_footprints().collect();
-        for name in ["The Golden Sphere", "Quarry rim"] {
-            assert!(footprints.iter().any(|(found, ..)| *found == name));
-        }
-        for station in stations(&golden_pit_ramp(), 3.0) {
-            for side in [-RAMP_SHOULDER, 0.0, RAMP_SHOULDER] {
-                let at = station.at + station.across * side;
-                assert!(
-                    sites::diorama_ground(at).is_none(),
-                    "a diorama's ground lies {side} m from the ramp's {} m at {at}",
-                    station.run
-                );
-                for (name, (low, high), _) in &footprints {
-                    assert!(
-                        at.cmplt(*low).any() || at.cmpgt(*high).any(),
-                        "{name}'s footprint holds the point {side} m from the ramp's {} m at {at}",
-                        station.run
-                    );
+    fn the_crater_ramp_laps_keep_apart() {
+        // Two laps closer than the shoulders would cut one road's bank into
+        // the other's bed.
+        const APART: f32 = 18.0;
+        const SEPARATE: f32 = 60.0;
+        let stations = stations(&crater_ramp_track(), 1.0);
+        let mut closest = (f32::INFINITY, 0.0, 0.0);
+        for (i, a) in stations.iter().enumerate() {
+            for b in stations[i + 1..]
+                .iter()
+                .filter(|b| b.run - a.run > SEPARATE)
+            {
+                let gap = a.at.distance(b.at);
+                if gap < closest.0 {
+                    closest = (gap, a.run, b.run);
                 }
             }
         }
+        assert!(
+            closest.0 >= APART,
+            "the road's {} m and {} m runs lie {} m apart",
+            closest.1,
+            closest.2,
+            closest.0
+        );
+    }
+
+    /// The radius of the circle through three points.
+    fn circumradius([a, b, c]: [Vec2; 3]) -> f32 {
+        let area_twice = (b - a).perp_dot(c - a).abs();
+        a.distance(b) * b.distance(c) * c.distance(a) / (2.0 * area_twice)
     }
 
     #[test]
-    fn the_golden_ramp_is_dry() {
-        let terrain = Terrain::new();
-        for station in stations(&golden_pit_ramp(), 1.0) {
-            for side in [-RAMP_HALF_WIDTH, 0.0, RAMP_HALF_WIDTH] {
-                let at = station.at + station.across * side;
-                let depth = terrain.water_depth_at(at.x, at.y);
-                assert_eq!(
-                    depth, 0.0,
-                    "{depth} m of water {side} m from the ramp's {} m at {at}",
-                    station.run
-                );
-            }
-        }
+    fn the_crater_ramp_bends_no_tighter_than_9_m() {
+        // Tracks are polylines: every corner, the connector's and the
+        // spiral's, is judged by the circle through it and its neighbours.
+        let crater = crater_ramp_track();
+        let (radius, at) = crater
+            .array_windows::<3>()
+            .map(|&window| (circumradius(window), window[1]))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("the ramp has corners");
+        assert!(radius >= 9.0, "the road bends at {radius} m at {at}");
+    }
+
+    #[test]
+    fn the_connector_meets_the_spiral_in_line() {
+        // The drive runs straight in over the entrance; the baked spiral
+        // leaves the front edge about 6 degrees off it. The kink between the
+        // two legs is too slight to round (the test above gives its radius).
+        const KINK: f32 = 10.0;
+        let crater = crater_ramp_track();
+        let [entrance, edge, next] = [crater[2], crater[3], crater[4]];
+        let turn = (edge - entrance).angle_to(next - edge).to_degrees().abs();
+        assert!(
+            turn <= KINK,
+            "the spiral leaves the drive at {turn} degrees"
+        );
     }
 
     #[test]

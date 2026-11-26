@@ -319,8 +319,8 @@ Each route has a `Surface`: dirt, `Asphalt` (the old roads, painted by the
 terrain shader from the A mask and four asphalt maps), `Street` (New
 Harmont's smooth streets, B only: no A, no cracks) or `Ramp` (a pit's haul
 road, the quarry's or the Golden Sphere's: a narrow dirt bed, graded by `graded_track` at one constant grade from the
-entrance of the quarry's drive to its end (the drive before the entrance follows
-the land; a 24 m parabolic crest rounds the break at the entrance), and applied
+entrance of the track's drive, its second point, to its end (the first leg, the drive,
+follows the land; a 24 m parabolic crest rounds the break at the entrance), and applied
 by `Terrain` after a diorama's own ground, which hides every other road).
 
 Road legs must connect to a real route vertex, stay below the grade and water
@@ -614,11 +614,11 @@ site's pose; `quarry_ramp::quarry_pillars()` is the quarry scan's collision with
 the pillars in the ramp's cut corridor left out, filtered once at first use. Regenerate
 the path after changing the relief file, then rerun `cargo test`.
 
-The Golden Sphere's ramp is baked the same way, in world metres: the ignored test
-`terrain::tests::write_golden_pit_relief` exports the pit's land to
-`pillars/golden_pit_ground.rs` (planner input only; it is never loaded) and
-`tools/plan_quarry_ramp.py --scale 1` writes `pillars/golden_pit_ramp.rs`, which
-`roads::golden_pit_ramp()` runs as a second `Surface::Ramp` track from `GOLDEN_RIM`.
+The Golden Sphere's crater road is baked the same way, from the core scan's relief
+(`pillars/uhd_core_ground.rs`, `--scale 120`, a right-hand spiral): `pillars/golden_crater_ramp.rs`,
+placed by `sites::crater_ramp()` under the core's pose after the quarry ramp's last
+point, the Sphere's junction and the core's entrance. It is the second `Surface::Ramp`
+track, the only road to the Sphere (the Chapter 4 route ends at the quarry).
 
 The cordon walls' posts are not generated: `cordon::WALL_PILLAR` holds two hand-set
 discs every 0.77 m along the wall, `WALL_DISC` sized to the baked box's half thickness

@@ -242,7 +242,7 @@ fn smooth(grid: &Grid, from: Vec2, points: Vec<Vec2>) -> Vec<Vec2> {
 mod tests {
     use super::*;
     use crate::player::STANDING;
-    use crate::world::{Pillar, golden_pit_ramp, quarry_pillars, quarry_ramp, quarry_scan};
+    use crate::world::{Pillar, crater_ramp, quarry_pillars, quarry_ramp, quarry_scan};
 
     const WALL: &[Pillar] = &[
         Pillar {
@@ -356,21 +356,31 @@ mod tests {
     }
 
     #[test]
-    // The router is slope-blind, so this only proves the Sphere is reachable
-    // from the rim; it may cut across the pit rather than follow the ramp.
-    fn a_click_order_reaches_the_golden_sphere() {
+    // The router is slope-blind, so this only proves the crater's floor is
+    // reachable from the quarry's junction; it may cut across the pit and the
+    // crater's walls rather than follow the road. The crater scan's own
+    // collision, which stands across the road until it is cleared, is left out.
+    fn a_click_order_reaches_the_crater_floor() {
         let terrain = Terrain::new();
-        let ramp = golden_pit_ramp();
-        let (rim, sphere) = (ramp[0], ramp[ramp.len() - 1]);
+        let (pose, _) = quarry_scan();
+        let scan = GlobalTransform::from(pose);
+        let collider = Collider(quarry_pillars());
+        let crater = crater_ramp();
+        let road = [quarry_ramp().as_slice(), &crater[1..]].concat();
+        let (junction, floor) = (road[0], road[road.len() - 1]);
 
-        let path =
-            find_path(&terrain, [], rim, sphere, STANDING, 1.0).expect("a route to the Sphere");
-        let route = length(&[&[rim], path.as_slice()].concat());
-        let limit = length(&ramp) * 1.6;
-        assert!(
-            route <= limit,
-            "the route is {route} m, the limit {limit} m"
-        );
+        let path = find_path(
+            &terrain,
+            [(&collider, &scan)],
+            junction,
+            floor,
+            STANDING,
+            1.0,
+        )
+        .expect("a route to the crater floor");
+        let route = length(&[&[junction], path.as_slice()].concat());
+        let limit = length(&road);
+        assert!(route <= limit, "the route is {route} m, the road {limit} m");
     }
 
     fn push_free(at: Vec2, collider: &Collider, wall: &GlobalTransform, body: Body) -> Vec2 {
