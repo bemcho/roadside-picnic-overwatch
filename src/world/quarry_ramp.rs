@@ -1,36 +1,44 @@
-//! The quarry's haul ramp runs through the scan's collision: the pillars that
-//! stand on its bed are left out, so the stalker, the car and the click router
-//! can use the road the terrain was graded for.
+//! The quarry's haul ramp runs through the scan's collision: the pillars whose
+//! centres lie in its cut corridor are left out, so the stalker, the car and
+//! the click router can use the road the terrain was graded for.
 
 use std::sync::LazyLock;
 
 use bevy::prelude::*;
 
 use super::collision::Pillar;
-use super::roads::RAMP_HALF_WIDTH;
+use super::roads::{RAMP_HALF_WIDTH, RAMP_SHOULDER};
 use super::sites;
 
 /// The ramp's centerline in world xz, from the junction to the pit floor.
 /// Derived from the baked path and the site pose once, at first use.
 static RAMP: LazyLock<Vec<Vec2>> = LazyLock::new(sites::quarry_ramp);
 
-/// The quarry scan's collision without the pillars on the ramp's bed, filtered
-/// once at first use from the same baked path and site pose the terrain and
-/// the road follow.
+/// The quarry scan's collision without the pillars whose centres lie in the
+/// cut corridor, filtered once at first use from the same baked path and site
+/// pose the terrain and the road follow.
 static PILLARS: LazyLock<Vec<Pillar>> = LazyLock::new(|| {
     let (pose, pillars) = sites::quarry_scan();
     pillars
         .iter()
         .filter(|pillar| {
             let at = pose.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
-            !on_ramp_bed(at.xz(), pillar.radius * pose.scale.x)
+            !in_cut_corridor(at.xz())
         })
         .copied()
         .collect()
 });
 
+/// The quarry's solids outside the ramp's cut corridor, the same corridor
+/// whose stone the cut hides, so what blocks is what is drawn. Computed once.
 pub(crate) fn quarry_pillars() -> &'static [Pillar] {
     &PILLARS
+}
+
+/// Whether `at` lies in the corridor whose stone the cut hides: within the
+/// bed and its shoulder. The collision and the cut share this one rule.
+pub(super) fn in_cut_corridor(at: Vec2) -> bool {
+    on_ramp_bed(at, RAMP_SHOULDER - RAMP_HALF_WIDTH)
 }
 
 /// Whether a circle of `radius` at `at` overlaps the ramp's bed.
@@ -51,7 +59,7 @@ fn distance_to_ramp(at: Vec2) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{Body, Collider, Terrain, push_out};
+    use crate::world::{Body, Collider, STEP_HEIGHT, Terrain, push_out};
 
     #[test]
     fn no_quarry_pillar_stands_on_the_ramp() {
@@ -69,13 +77,36 @@ mod tests {
     }
 
     #[test]
+    fn no_kept_pillar_stands_invisible_in_the_cut() {
+        let terrain = Terrain::new();
+        let (pose, _) = sites::quarry_scan();
+        for pillar in quarry_pillars() {
+            let center = pose.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
+            let radius = pillar.radius * pose.scale.x;
+            if distance_to_ramp(center.xz()) + radius >= RAMP_SHOULDER {
+                continue;
+            }
+            // The cut hides the stone here, so a solid taller than a step
+            // would be a climbable column nobody can see.
+            let top = center.y + pillar.top * pose.scale.y;
+            let ground = terrain.mesh_height_at(center.xz());
+            assert!(
+                top <= ground + STEP_HEIGHT,
+                "a pillar at {} rises {} m above the drawn ground inside the cut",
+                center.xz(),
+                top - ground
+            );
+        }
+    }
+
+    #[test]
     fn pillars_off_the_ramp_are_kept() {
         let (_, scan) = sites::quarry_scan();
         let dropped = scan.len() - quarry_pillars().len();
         assert!(dropped >= 1, "the ramp's bed clears no pillar");
-        // The bed is 9 m wide and winds 250 m through a 100 m scan.
+        // The corridor is 18 m wide and winds 250 m through a 100 m scan.
         assert!(
-            dropped * 100 <= scan.len() * 35,
+            dropped * 100 <= scan.len() * 55,
             "{dropped} of {} pillars dropped, the pit's walls must stay",
             scan.len()
         );
@@ -87,7 +118,8 @@ mod tests {
         let (pose, _) = sites::quarry_scan();
         let scan = GlobalTransform::from(pose);
         let collider = Collider(quarry_pillars());
-        // The Institute carrier's routing body, wider and taller than the car's.
+        // The Institute carrier's routing body (`CARRIER_ROUTING`, its radius and
+        // `HULL_HEIGHT` rounded up), wider and taller than the car's.
         let carrier = Body {
             radius: 2.3,
             height: 3.0,

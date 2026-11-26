@@ -368,13 +368,15 @@ the stalker stands still.
     The drive follows the land to the entrance; from there
     the ramp falls 48 m over 251 m (0.191) to the floor. A parabolic crest, 24 m long and centred on the
     entrance (`graded_track`, points every 1 m), rounds the 0.27 grade change (radius about 89 m, so a car
-    stays on the ground up to about 29 m/s; the sharp break launched the armored car at its 21 m/s top speed). The terrain
+    stays on the ground up to about 29 m/s; the sharp break launched the armored car at 21 m/s). The terrain
     applies a ramp after the diorama's ground (`lerp(h, ramp.height, ramp.mask())`),
     cutting and filling the pit's relief inside the corridor.
   - *Collision:* `quarry_ramp::quarry_pillars()` is the scan's collision without
-    the pillars whose footprint reaches the bed (930 of 3,186), filtered once at
-    first use from the same points; `Landmark::solids` serves it, so the stalker,
-    the car, the carrier and the router meet no invisible wall on the road.
+    the pillars whose centres lie in the cut corridor (1,528 of 3,186), the one
+    rule `in_cut_corridor` shares with the cut's texels (within 9 m of the
+    centerline); filtered once at first use from the same points.
+    `Landmark::solids` serves it, so the stalker, the car, the carrier and the
+    router meet no invisible wall on the road, its banks or the rest of the cut.
   - *Cut:* the scan is untouched. `RampCutMaterial` (`ramp_cut.rs`,
     `ExtendedMaterial<StandardMaterial, RampCut>`) draws the stand-in and every
     streamed full scan of the quarry (`cut_scan_stone` swaps the material on each

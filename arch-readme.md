@@ -102,7 +102,7 @@ flowchart LR
 | Vehicle | `src/player/vehicle.rs`, `vehicle/contact.rs` | Throttle/steer, traction, four-tire terrain fit, wheels, spotlight |
 | World | `src/world/mod.rs` | World plugin, terrain/material setup, sky, fog, spawn and teardown |
 | Terrain | `src/world/terrain.rs`, `hydrology.rs`, `roads.rs` | Deterministic heights, water, road grading and masks |
-| Quarry ramp | `src/world/quarry_ramp.rs`, `ramp_cut.rs`, `assets/shaders/ramp_cut.wesl` | The haul road down the Quarry rim's pit: scan pillars dropped off its bed (`quarry_pillars`), the cut image and `RampCutMaterial` that hide the scan's stone over it |
+| Quarry ramp | `src/world/quarry_ramp.rs`, `ramp_cut.rs`, `assets/shaders/ramp_cut.wesl` | The haul road down the Quarry rim's pit: scan pillars dropped from its cut corridor (`quarry_pillars`), the cut image and `RampCutMaterial` that hide the scan's stone over it |
 | Day/night and weather | `src/world/weather.rs` | `WorldClock`, daily `Weather` (temperature, humidity, fog tendency), sun/moon, exposure |
 | Ground fog | `src/world/ground_fog.rs`, `ground_fog/{field,render}.rs` | Fog field texture, terrain-hugging raymarch pass with the clouds and the shroud's smoke, regional distance fog |
 | Places | `src/world/places.rs` | Named places at a point or along a ray, `Describe`, the `Explored` survey grid |
@@ -611,7 +611,7 @@ must be represented by multiple separated vertical intervals.
 bakes the quarry ramp's centerline (model units) from
 `pillars/uhd_quarry_pit_ground.rs`. `sites::quarry_ramp()` places it with the
 site's pose; `quarry_ramp::quarry_pillars()` is the quarry scan's collision with
-the pillars on the ramp's bed left out, filtered once at first use. Regenerate
+the pillars in the ramp's cut corridor left out, filtered once at first use. Regenerate
 the path after changing the relief file, then rerun `cargo test`.
 
 The cordon walls' posts are not generated: `cordon::WALL_PILLAR` holds two hand-set

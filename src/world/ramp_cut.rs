@@ -16,8 +16,8 @@ use bevy::world_serialization::WorldInstanceReady;
 
 use crate::assets;
 
-use super::quarry_ramp::on_ramp_bed;
-use super::roads::{RAMP_HALF_WIDTH, RAMP_SHOULDER};
+use super::quarry_ramp::in_cut_corridor;
+use super::roads::RAMP_SHOULDER;
 use super::sites;
 use super::terrain::Terrain;
 
@@ -87,7 +87,8 @@ impl RampCutImage {
 pub(super) struct RampCutScan;
 
 /// Builds the cut image once, at entering the Zone. It follows `Terrain`, which
-/// exists only at run time, so no asset pipeline can bake it.
+/// derives from the runtime terrain (roads, relief, overrides), so baking it
+/// would need a re-run on every terrain change.
 pub(super) fn prepare_ramp_cut(
     mut commands: Commands,
     terrain: Res<Terrain>,
@@ -122,7 +123,7 @@ fn build_ramp_cut(terrain: &Terrain) -> (Image, Vec4) {
         .flat_map(|row| (0..size.x).map(move |column| UVec2::new(column, row)))
         .flat_map(|texel| {
             let at = corner + (texel.as_vec2() + 0.5) * TEXEL;
-            let height = if on_ramp_bed(at, RAMP_SHOULDER - RAMP_HALF_WIDTH) {
+            let height = if in_cut_corridor(at) {
                 let lowest = [UVec2::ZERO, UVec2::X, UVec2::Y, UVec2::ONE]
                     .map(|offset| ground(texel + offset))
                     .into_iter()
@@ -202,6 +203,8 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::world_serialization::{WorldAsset, WorldAssetRoot, WorldSerializationPlugin};
 
+    use super::super::quarry_ramp::on_ramp_bed;
+    use super::super::roads::RAMP_HALF_WIDTH;
     use super::*;
 
     /// The cut image's height under `at`, read as the shader reads it.
