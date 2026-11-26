@@ -4,6 +4,8 @@
 //! than the ground inside the ramp's corridor (`shaders/ramp_cut.wesl`), in the
 //! main pass and in the shadow maps alike.
 
+use std::collections::HashMap;
+
 use bevy::asset::RenderAssetUsages;
 use bevy::ecs::system::SystemParam;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
@@ -25,6 +27,9 @@ pub(super) type RampCutMaterial = ExtendedMaterial<StandardMaterial, RampCut>;
 const UNCUT: f32 = 1.0e6;
 /// Meters per texel of the cut image.
 const TEXEL: f32 = 0.5;
+/// How far under the drawn ground the stone is cut, so that stone lying on the
+/// ground, which would show through it as dark slivers, goes too.
+const BURY: f32 = 0.1;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub(super) struct RampCut {
@@ -32,8 +37,8 @@ pub(super) struct RampCut {
     /// extent (x, z), in meters.
     #[uniform(100)]
     bounds: Vec4,
-    /// The terrain's height in the corridor, `UNCUT` elsewhere. Read texel by
-    /// texel (`textureLoad`), so it needs no filtering.
+    /// The height above which the stone is cut in the corridor, `UNCUT`
+    /// elsewhere. Read texel by texel (`textureLoad`), so it needs no filtering.
     #[texture(101, sample_type = "float", filterable = false)]
     heights: Handle<Image>,
 }
@@ -89,8 +94,11 @@ pub(super) fn prepare_ramp_cut(
     commands.insert_resource(RampCutImage(images.add(image), bounds));
 }
 
-/// The terrain's height wherever the ramp's shoulder reaches, `UNCUT` elsewhere,
-/// over the quarry's footprint and a shoulder around it, and where it lies.
+/// The height above which the stone is cut wherever the ramp's shoulder
+/// reaches, `UNCUT` elsewhere, over the quarry's footprint and a shoulder around
+/// it, and where it lies. A texel is cut from the lowest ground drawn over it
+/// (the render mesh, which is not `height_at` and falls steeply on the banks)
+/// less `BURY`, so no stone stays above the drawn ground within the texel.
 fn build_ramp_cut(terrain: &Terrain) -> (Image, Vec4) {
     let (low, high) = sites::quarry_footprint();
     let corner = low - Vec2::splat(RAMP_SHOULDER);
@@ -98,12 +106,23 @@ fn build_ramp_cut(terrain: &Terrain) -> (Image, Vec4) {
         .ceil()
         .as_uvec2();
     let extent = size.as_vec2() * TEXEL;
+    // The drawn ground at the texels' corners, found once each.
+    let mut drawn = HashMap::new();
+    let mut ground = |lattice: UVec2| {
+        *drawn
+            .entry(lattice)
+            .or_insert_with(|| terrain.mesh_height_at(corner + lattice.as_vec2() * TEXEL))
+    };
     let texels = (0..size.y)
         .flat_map(|row| (0..size.x).map(move |column| UVec2::new(column, row)))
         .flat_map(|texel| {
             let at = corner + (texel.as_vec2() + 0.5) * TEXEL;
             let height = if on_ramp_bed(at, RAMP_SHOULDER - RAMP_HALF_WIDTH) {
-                terrain.height_at(at.x, at.y)
+                let lowest = [UVec2::ZERO, UVec2::X, UVec2::Y, UVec2::ONE]
+                    .map(|offset| ground(texel + offset))
+                    .into_iter()
+                    .fold(f32::INFINITY, f32::min);
+                lowest - BURY
             } else {
                 UNCUT
             };
@@ -209,15 +228,47 @@ mod tests {
             .expect("a point of the footprint is far from the ramp");
         assert_eq!(cut_height(&image, bounds, far), UNCUT);
 
-        // The baked points, past the drive's two, lie in the cut.
+        // The baked points, past the drive's two, lie in the cut, a little
+        // under the ground (a texel of the 19% grade spans 0.1 m of height).
         for at in sites::quarry_ramp().into_iter().skip(2) {
             let ground = terrain.height_at(at.x, at.y);
             let cut = cut_height(&image, bounds, at);
             assert!(
-                (cut - ground).abs() < 0.3,
+                (-0.1..0.5).contains(&(ground - cut)),
                 "the cut at {at} is {cut}, the terrain {ground}"
             );
         }
+    }
+
+    #[test]
+    fn the_cut_lies_below_the_ground_that_is_drawn() {
+        let terrain = Terrain::new();
+        let (image, bounds) = build_ramp_cut(&terrain);
+        let (low, high) = sites::quarry_footprint();
+        // Stone left above the drawn ground, even by centimeters, shows through
+        // it as dark slivers; the grid is off the texels' lattice on purpose.
+        let mut worst = (f32::MIN, Vec2::ZERO);
+        let mut cut = 0;
+        for column in 0..((high.x - low.x) / 0.37) as u32 {
+            for row in 0..((high.y - low.y) / 0.37) as u32 {
+                let at = low + UVec2::new(column, row).as_vec2() * 0.37;
+                let height = cut_height(&image, bounds, at);
+                if height < UNCUT {
+                    cut += 1;
+                    let above = height - terrain.mesh_height_at(at);
+                    if above > worst.0 {
+                        worst = (above, at);
+                    }
+                }
+            }
+        }
+        assert!(cut > 10_000, "only {cut} points lie in the cut");
+        assert!(
+            worst.0 <= 0.0,
+            "the cut is {} m above the drawn ground at {}",
+            worst.0,
+            worst.1
+        );
     }
 
     /// An app that spawns world instances, with two scans' roots, each holding
