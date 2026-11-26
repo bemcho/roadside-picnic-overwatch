@@ -123,3 +123,35 @@ and the carrier.
 - **Produced by the first ramp's planner,** generalised to any relief, entrance,
   end point and no-go boxes. It is fed the pit's land (`sited_height`) exported
   once as a relief file in metres. The path is a generated file.
+
+## Revision 2 — through the Quarry rim, spiralling into the crater (user, 2026-11-26)
+This supersedes the goal's start, "Calls made" and the south-west rim road.
+
+The user: "the only possible way should be through the rim (meatgrinder) we will limit it in the future with
+anomalies, but for now connect the rim road with the entry to the golden globe [and] spiral the road down to
+the very bottom (eg the road will make its path through the walls of the quarry)".
+
+- **The only way in is the Quarry rim** (the scanned diorama whose haul ramp is done, `text.rs`: "The narrow way
+  down into the pit. The Meat Grinder waits at the bottleneck"). Anomalies there come later.
+  - The Chapter 4 road ends at the Quarry rim's junction (`QUARRY`). Its legs past it (`map(1100, 368)` and the
+    south-west rim road) and the 330 m south-west ramp (`golden_pit_ramp.rs`, `golden_pit_ground.rs`, its export
+    test) are removed. The generalised planner stays.
+- **Connector:** from the first ramp's last point on the Quarry rim's floor (world ≈ (−1063.6, 101.7), heading −x,
+  ≈ −48 m) a road runs on west to the Golden Sphere's junction (`GOLDEN_SPHERE`, ≈ −37 m) and its entrance
+  (the core scan's front edge, ≈ (−1168.8, 84), ≈ −32 m). It follows the land (the ramp track's drive).
+- **Spiral:** from the entrance the road spirals down inside the Golden Sphere's crater scan (`landmark-core`,
+  relief `uhd_core_ground.rs`, floor ≈ −100 m, lowest ≈ −104 m near the model's centre) to the very bottom,
+  ending beside the Sphere without running over it. It turns one way only (a spiral, not a zigzag).
+  - It cuts through the crater's walls: cut depth is not limited (report it); the scan is cut away above the
+    road, as at the Quarry rim (`ramp_cut.rs`), and its collision cleared in the corridor.
+  - Grade at most 0.19 (the first ramp's 0.191 is proven drivable); `the_ramp_grade_stays_drivable` holds;
+    corners ≥ 9 m radius; separate runs (laps) ≥ 18 m apart.
+- **Track:** one `Surface::Ramp` track `[quarry ramp's last point, GOLDEN_SPHERE, core entrance, spiral…]` under
+  the core's pose, like `sites::quarry_ramp()`. The Sphere's own dirt drive is dropped (it is the ramp's
+  head), so the junction and the entrance lie on the road.
+- **Cut and collision:** the cut corridor rule (`in_cut_corridor`) and the cut image are made per scan: the
+  Quarry rim's covers its ramp and the connector's leg inside its footprint; the core's covers the spiral.
+- **Orders:** a click order from the Quarry rim's junction reaches the bottom (the router is slope-blind).
+- **Verification:** unit tests as for the first ramp (grade, radius, separation, drivable, cut below the drawn
+  ground, collision cleared, joins the network); playtest the stalker walking and the car and the carrier
+  driving from the Quarry rim's junction to the bottom and back, with close shots of the cut walls.
