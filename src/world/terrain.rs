@@ -826,9 +826,7 @@ mod tests {
         const CENTERLINE: f32 = 0.25;
         const LANES: f32 = 0.35;
         let terrain = Terrain::new();
-        let path: Vec<Vec2> = std::iter::once(roads::QUARRY)
-            .chain(sites::quarry_ramp())
-            .collect();
+        let path = sites::quarry_ramp();
         let mut worst = (0.0, 0.0, Vec2::ZERO);
         for &[a, b] in path.array_windows() {
             let steps = a.distance(b).ceil() as usize;
@@ -878,6 +876,67 @@ mod tests {
             assert!(
                 (-5.0..=8.0).contains(&(level - ground)),
                 "ramp {level} vs scan {ground} at {at}"
+            );
+        }
+    }
+
+    /// Lines across the quarry's gate, a metre apart from 5 m before its
+    /// entrance to 6 m past it, where the drive and the ramp's first leg run
+    /// straight; on each, points every 0.25 m out to `half_width` either side.
+    fn lines_across_the_gate(half_width: f32) -> Vec<Vec<Vec2>> {
+        let site = sites::LANDMARKS
+            .iter()
+            .find(|site| site.junction == roads::QUARRY)
+            .expect("the quarry is a landmark");
+        let entrance = site.entrance();
+        let axis = (entrance - site.junction).normalize();
+        let steps = (half_width / 0.25) as i32;
+        (-5..=6)
+            .map(|metre| {
+                let line = entrance + axis * metre as f32;
+                (-steps..=steps)
+                    .map(|step| line + axis.perp() * step as f32 * 0.25)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_quarry_gate_road_has_no_step_across_it() {
+        let terrain = Terrain::new();
+        for line in lines_across_the_gate(roads::RAMP_HALF_WIDTH) {
+            let heights: Vec<f32> = line
+                .iter()
+                .map(|&at| {
+                    terrain
+                        .roads
+                        .sample(at)
+                        .expect("the gate is on the road")
+                        .height
+                })
+                .collect();
+            for (&[a, b], at) in heights.array_windows().zip(&line[1..]) {
+                assert!((a - b).abs() <= 0.1, "road height steps {a} to {b} at {at}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_quarry_gate_ground_is_level_across_it() {
+        // The axis is straight there, so each line across it lies at one level,
+        // give or take the 2 m mesh.
+        let terrain = Terrain::new();
+        for line in lines_across_the_gate(3.0) {
+            let (low, high) = line
+                .iter()
+                .map(|&at| terrain.mesh_height_at(at))
+                .fold((f32::MAX, f32::MIN), |(low, high), h| {
+                    (low.min(h), high.max(h))
+                });
+            assert!(
+                high - low <= 0.05,
+                "ground spans {low} to {high} across the line at {}",
+                line[0]
             );
         }
     }

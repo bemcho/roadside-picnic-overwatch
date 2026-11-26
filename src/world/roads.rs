@@ -274,13 +274,14 @@ fn railway_bed() -> Vec<Vec2> {
 }
 
 /// Every graded path: the routes, each site's drive, the railway bed and the
-/// quarry's ramp.
+/// quarry's ramp, which carries the quarry's drive as its head.
 fn tracks() -> Vec<(Surface, Vec<Vec2>)> {
     let routes = ROUTES
         .iter()
         .map(|route| (route.surface, route.points.to_vec()));
     let drives = LANDMARKS
         .iter()
+        .filter(|site| site.junction != QUARRY)
         .map(|site| (Surface::Dirt, vec![site.junction, site.entrance()]));
     routes
         .chain(drives)
@@ -352,26 +353,29 @@ fn ruts(d: f32) -> f32 {
     smoothstep(0.83, 0.32, (d - 1.51).abs())
 }
 
-/// The graded level at each point of a track. A ramp falls evenly with its
-/// length from its first point's level to its last's, however the land between
-/// them lies; other tracks follow the land at every corner.
+/// The graded level at each point of a track. A ramp's first leg is its drive,
+/// following the land like any other; from the drive's end the ramp falls
+/// evenly with its length to its last point's level, however the land between
+/// lies. Other tracks follow the land at every corner.
 fn track_levels(surface: Surface, path: &[Vec2], level: impl Fn(Vec2) -> f32) -> Vec<f32> {
     if surface != Surface::Ramp {
         return path.iter().map(|&at| level(at)).collect();
     }
-    let (first, last) = (path[0], path[path.len() - 1]);
-    let runs: Vec<f32> = path
+    let (drive, ramp) = path.split_at(1);
+    let runs: Vec<f32> = ramp
         .iter()
-        .scan((first, 0.0), |(previous, run), &at| {
+        .scan((ramp[0], 0.0), |(previous, run), &at| {
             *run += previous.distance(at);
             *previous = at;
             Some(*run)
         })
         .collect();
     let total = runs[runs.len() - 1];
-    let (top, bottom) = (level(first), level(last));
-    runs.iter()
-        .map(|run| lerp(top, bottom, run / total))
+    let (top, bottom) = (level(ramp[0]), level(ramp[ramp.len() - 1]));
+    drive
+        .iter()
+        .map(|&at| level(at))
+        .chain(runs.iter().map(|run| lerp(top, bottom, run / total)))
         .collect()
 }
 
@@ -580,19 +584,25 @@ mod tests {
             .iter()
             .find(|site| site.junction == QUARRY)
             .expect("the quarry is a landmark");
-        assert_eq!(quarry_ramp_track()[0], quarry.entrance());
+        let track = quarry_ramp_track();
+        assert_eq!(track[..2], [quarry.junction, quarry.entrance()]);
+        // The drive is the ramp's head, not a track of its own beside it.
+        assert!(!tracks().iter().any(|(_, path)| path[..] == track[..2]));
     }
 
     #[test]
     fn a_ramp_is_graded_evenly() {
-        let ramp = quarry_ramp_track();
+        let track = quarry_ramp_track();
+        let (drive, ramp) = track.split_at(1);
         let roads = RoadNetwork::new(|at| at.x);
         let ends = (ramp[0].x, ramp[ramp.len() - 1].x);
         assert!((ends.0 - ends.1).abs() > 10.0, "the ramp must change level");
-        let at = midway(&ramp);
-        let road = roads
-            .sample(at)
-            .expect("the ramp's middle is on the network");
+        let sample = |at| {
+            roads
+                .sample(at)
+                .expect("the ramp's middle is on the network")
+        };
+        let road = sample(midway(ramp));
         assert_eq!(road.surface, Surface::Ramp);
         let mean = (ends.0 + ends.1) / 2.0;
         assert!(
@@ -600,6 +610,10 @@ mod tests {
             "height {} vs mean {mean}",
             road.height
         );
+        // Its drive follows the land from the junction to the entrance.
+        let middle = sample(midway(&[drive[0], ramp[0]]));
+        let mean = (drive[0].x + ramp[0].x) / 2.0;
+        assert!((middle.height - mean).abs() < 0.01);
     }
 
     #[test]

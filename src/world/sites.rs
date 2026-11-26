@@ -756,15 +756,18 @@ fn landmark(kind: Kind) -> Landmark {
         .expect("every kind of site is a landmark")
 }
 
-/// The quarry's haul road in world xz: the drive's end, then the baked path
-/// (`tools/plan_quarry_ramp.py`) down into the pit.
+/// The quarry's haul road in world xz: its drive from the junction to the
+/// entrance, then the baked path (`tools/plan_quarry_ramp.py`) down into the pit.
 pub(super) fn quarry_ramp() -> Vec<Vec2> {
     let site = landmark(QuarryRim);
     let pose = site.pose();
     let path = QUARRY_RAMP
         .iter()
         .map(|at| pose.transform_point(Vec3::new(at.x, 0.0, at.y)).xz());
-    std::iter::once(site.entrance()).chain(path).collect()
+    [site.junction, site.entrance()]
+        .into_iter()
+        .chain(path)
+        .collect()
 }
 
 /// Every site and the derailed train as a rough upright cylinder around the
