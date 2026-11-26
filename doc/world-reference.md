@@ -38,7 +38,15 @@ and deep water (`player/path.rs`); the vehicle follows them with an autopilot
 in `drive_vehicle`. Each mover is routed by its own size: the stalker, the car
 (1.7 m clear of solids, water to 0.6 m) and the wider Institute carrier
 (`CARRIER_ROUTING`: 2.3 m clear, water to 1.5 m, over what it knocks down), so
-the carrier is never sent through a gap only the car fits. Shift-clicks append legs pathfound from the last stop
+the carrier is never sent through a gap only the car fits. The search keeps to
+the trip's box and 28 m around it (0.5 m cells, coarser past 260k cells); when
+no way lies in there it searches once more 84 m around it, for a road that winds
+out of the box (the crater's spiral). A pillar blocks if `push_out` would stop
+the mover on any ground it touches the pillar from (the pillar's foot and eight
+points a reach around it), so on a slope a stone just over the ground at its
+foot still blocks a mover coming up from below. A mover standing in a solid's
+reach (pressed into it, or up on stone it climbed when it stalled) sets off from
+the nearest free cell, as a click on a solid ends at one. Shift-clicks append legs pathfound from the last stop
 (`MoveOrder::append`); a route started with Shift-clicks while the mover stands
 still is held until Shift is released (appending to a moving order never stops it).
 Scenery colliders stream in only near the stalker, so a far leg is planned
@@ -506,11 +514,10 @@ the stalker stands still.
       west banks: the scan stone stands to 9 m from the centerline and is cut flush
       there, above a dark, steep terrain wall with stretched texture (not a tile
       edge, nor the stand-in's). On the floor the cut's edge on the Sphere's wall shows
-      as a stair-stepped outline beside the road's end. In the planner a click order from the quarry's
-      junction reaches the crater's floor through both scans' cleared collision
-      (`a_click_order_reaches_the_crater_floor`: 357 m, the straight line 303 m; the
-      slope-blind router crosses from lap to lap down the walls rather than follow
-      the 799 m of road); in the game the order fails (see *Driving and orders*).
+      as a stair-stepped outline beside the road's end. Click orders reach the crater's
+      floor through both scans' cleared collision (`click_orders_reach_the_crater_floor`;
+      the slope-blind router crosses from lap to lap down the walls rather than follow
+      the 799 m of road; see *Driving and orders*).
     - *Checks:* `the_crater_ramp_starts_at_the_quarry_ramps_end`,
       `the_crater_ramp_ends_beside_the_sphere` (ground below -95 m, 5.1 to 15 m from the
       Sphere's centre, not under the bed), `the_crater_ramp_laps_keep_apart` (18 m),
@@ -533,12 +540,22 @@ the stalker stands still.
       The bends are 11-15 m (11.4 m on the lowest laps), tighter than the 16.7 m the
       carrier turns at its 10 m/s top speed: driven flat out, it climbs the lowest
       laps' banks and stalls there once; it holds them below 6.8 m/s (driven at 4.5).
-      Click orders do not follow the road: from the quarry's junction the stalker
-      runs straight down the Quarry rim's wall (up to a 1.4 grade) and stalls
-      climbing the core's uncut stone on the crater's rim at (-1172, 99), 80 m above
-      the floor; from the Golden Sphere's junction no mover finds a route (the
-      router's box, the trip's plus 28 m, leaves out the spiral's outer laps, and
-      the core's walls close the rest). On the main thread the crater costs at most
+      Click orders do not follow the road, but reach the floor for the stalker and
+      the carrier from either junction (`click_orders_reach_the_crater_floor` checks
+      all three movers through `route` from both junctions, the road in from the
+      hangar and the rim). The trip's box with 28 m around it leaves out the
+      spiral's outer laps, so these orders take the wider second search (84 m):
+      a click costs 0.26 s from the Golden Sphere's junction and 0.48 s from the
+      Quarry rim's (release build, both scans streamed in). At the Quarry rim's
+      junction the core has not streamed in yet: the stalker runs straight down the
+      Quarry rim's wall (up to a 1.4 grade), stalls climbing the core's stone on the
+      rim at (-1172, 99) and is routed again from there, down the crater's walls
+      (87 s in all; 29 s from the Golden Sphere's junction); the carrier takes 64 s
+      and 26 s. The car does not arrive: the slope-blind route sends it down the
+      walls, flying at up to 24 m/s, to banks steeper than it grips (0.66; a 1.64
+      grade at (-1192, 30) from the Golden Sphere's junction, a pocket at (-1213,
+      24) from the Quarry rim's), and the order is dropped once its back-offs are
+      spent. On the main thread the crater costs at most
       0.7 ms a frame more than the Quarry rim (7.7 against 7.0 ms); the core's cut
       scan reaches the GPU behind the splash, with no hitch in the game.
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town

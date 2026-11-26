@@ -490,6 +490,7 @@ pub(crate) fn cast_to_ground(terrain: &Terrain, ray: Ray3d) -> Option<Vec3> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::{CutScan, crater_ramp, cut_scan, push_out, quarry_ramp};
 
     #[test]
     fn the_carrier_is_routed_around_a_gap_the_car_takes() {
@@ -525,6 +526,101 @@ mod tests {
         };
         assert!(widest(car) < 2.0, "the car takes the gap");
         assert!(widest(carrier) > 15.0, "the carrier goes round the wall");
+    }
+
+    /// Where a mover of `body` walking `path` from `from` first runs into
+    /// `solids` at the ground it walks on, pushed back out of them.
+    fn first_contact<'a>(
+        terrain: &Terrain,
+        solids: &[(&'a Collider, &'a GlobalTransform)],
+        body: Body,
+        from: Vec2,
+        path: &[Vec2],
+    ) -> Option<Vec2> {
+        let mut previous = from;
+        for &point in path {
+            let steps = (previous.distance(point) / 0.25).ceil().max(1.0);
+            for i in 0..=steps as usize {
+                let at = previous.lerp(point, i as f32 / steps);
+                let clear = push_out(at, terrain.mesh_height_at(at), body, solids.iter().copied());
+                if clear.distance(at) > 0.05 {
+                    return Some(clear);
+                }
+            }
+            previous = point;
+        }
+        None
+    }
+
+    #[test]
+    // Click orders for the stalker, the car and the carrier, through the
+    // game's own `route`, to the crater's floor: with both cut scans streamed
+    // in, from both junctions and from the road in from the hangar; and as the
+    // game gives them at the Quarry rim's junction, where the crater's scan
+    // has not streamed in yet: the order runs into its stone, and is planned
+    // again from there (the stalker stalled on the rim at (-1172.4, 99.3) in
+    // the playtest). The router is slope-blind, so routes may cut from lap to
+    // lap down the crater's walls; this proves the floor is reached clear of
+    // the scans' stone at the height each leg is walked on, not that every
+    // mover can take those walls (the car cannot: banks past its grip stop it).
+    fn click_orders_reach_the_crater_floor() {
+        use bevy::ecs::system::SystemState;
+        let terrain = Terrain::new();
+        let world_of = |scans: &[CutScan]| {
+            let mut world = World::new();
+            let car = world.spawn_empty().id();
+            let carrier = world.spawn(Carrier::new()).id();
+            for &scan in scans {
+                let (pose, _) = cut_scan(scan);
+                world.spawn((Collider(scan.pillars()), GlobalTransform::from(pose)));
+            }
+            (world, car, carrier)
+        };
+        let (mut streamed, car, carrier) = world_of(&CutScan::ALL);
+        let (mut unstreamed, ..) = world_of(&[CutScan::Quarry]);
+        let mut both = SystemState::<(Solids, Query<(), With<Carrier>>)>::new(&mut streamed);
+        let mut quarry = SystemState::<(Solids, Query<(), With<Carrier>>)>::new(&mut unstreamed);
+        let (solids, carriers) = both.get(&streamed).expect("valid queries");
+        let early = quarry.get(&unstreamed).expect("valid queries");
+        let stone: Vec<_> = solids.iter().map(|(_, c, pose, ..)| (c, pose)).collect();
+        let crater = crater_ramp();
+        let floor = crater.last().copied().expect("a road");
+        let junction = quarry_ramp()[0];
+        let reaches_the_floor = |mover: &str, from: Vec2, vehicle: Option<Entity>, body: Body| {
+            let path = route(&terrain, (&solids, &carriers), vehicle, from, floor)
+                .unwrap_or_else(|| panic!("no route for the {mover} from {from}"));
+            assert_eq!(path.last(), Some(&floor), "the {mover} from {from}");
+            let contact = first_contact(&terrain, &stone, body, from, &path);
+            assert!(
+                contact.is_none(),
+                "the {mover}'s route from {from} runs into stone at {contact:?}"
+            );
+        };
+        let movers = [
+            ("stalker", None, STANDING),
+            ("car", Some(car), VEHICLE_BODY),
+            ("carrier", Some(carrier), CARRIER_ROUTING.0),
+        ];
+        for (mover, vehicle, body) in movers {
+            for from in [crater[1], junction, Vec2::new(-844.8, 156.0)] {
+                reaches_the_floor(mover, from, vehicle, body);
+            }
+            let planned = route(&terrain, (&early.0, &early.1), vehicle, junction, floor)
+                .unwrap_or_else(|| panic!("no route for the {mover} before the crater streams in"));
+            let stalled = first_contact(&terrain, &stone, body, junction, &planned)
+                .unwrap_or_else(|| panic!("the {mover} runs into the crater's stone unplanned"));
+            reaches_the_floor(mover, stalled, vehicle, body);
+        }
+        // Up on the stone it climbed, the stalker first steps down off it.
+        let rim = Vec2::new(-1172.4, 99.3);
+        let path = route(&terrain, (&solids, &carriers), None, rim, floor)
+            .expect("a route from the crater's rim");
+        assert_eq!(path.last(), Some(&floor));
+        assert!(rim.distance(path[0]) < 3.0, "steps off at {}", path[0]);
+        assert_eq!(
+            first_contact(&terrain, &stone, STANDING, path[0], &path[1..]),
+            None
+        );
     }
 
     #[test]

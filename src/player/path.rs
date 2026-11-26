@@ -11,6 +11,9 @@ use crate::world::{Body, Collider, STEP_HEIGHT, Terrain};
 const CELL: f32 = 0.5;
 /// Extra room around the trip's bounding box for detours, in meters.
 const MARGIN: f32 = 28.0;
+/// The room searched when no way lies within `MARGIN`: a winding road's laps
+/// (the crater's spiral reaches 44 m past its floor) with room to spare.
+const WIDE_MARGIN: f32 = 3.0 * MARGIN;
 /// Upper bound on searched cells, keeping a click well under a frame.
 const MAX_CELLS: usize = 260_000;
 
@@ -58,6 +61,9 @@ impl Grid {
 }
 
 /// Waypoints from `from` to `to` (excluding the start), or `None` if unreachable.
+/// The search keeps to the trip's box and `MARGIN` around it; should no way
+/// lie in there, it searches once more within `WIDE_MARGIN`, for a road that
+/// winds out of the trip's box, as the crater's spiral does.
 pub(super) fn find_path<'a>(
     terrain: &Terrain,
     colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
@@ -66,8 +72,24 @@ pub(super) fn find_path<'a>(
     body: Body,
     max_depth: f32,
 ) -> Option<Vec<Vec2>> {
-    let low = from.min(to) - MARGIN;
-    let high = from.max(to) + MARGIN;
+    let colliders: Vec<_> = colliders.into_iter().collect();
+    [MARGIN, WIDE_MARGIN].into_iter().find_map(|margin| {
+        let colliders = colliders.iter().copied();
+        find_path_within(terrain, colliders, from, to, body, max_depth, margin)
+    })
+}
+
+fn find_path_within<'a>(
+    terrain: &Terrain,
+    colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
+    from: Vec2,
+    to: Vec2,
+    body: Body,
+    max_depth: f32,
+    margin: f32,
+) -> Option<Vec<Vec2>> {
+    let low = from.min(to) - margin;
+    let high = from.max(to) + margin;
     let area = (high - low).x * (high - low).y;
     let cell = CELL.max((area / MAX_CELLS as f32).sqrt());
     let size = ((high - low) / cell).ceil().as_uvec2().max(UVec2::ONE);
@@ -80,11 +102,10 @@ pub(super) fn find_path<'a>(
     };
     rasterize(&mut grid, terrain, &obstacles, max_depth);
 
-    let start = grid.cell_at(from);
+    // A mover pressed into a solid (or climbing it, after it stalled there)
+    // sets off from the nearest free spot, as an order ends at one.
+    let start = nearest_free(&grid, grid.cell_at(from))?;
     let goal = nearest_free(&grid, grid.cell_at(to))?;
-    if let Some(i) = grid.index(start) {
-        grid.blocked[i] = false;
-    }
     let cells = search(&grid, start, goal)?;
     let mut points: Vec<Vec2> = cells.iter().map(|&c| grid.center(c)).collect();
     if goal == grid.cell_at(to) {
@@ -109,11 +130,18 @@ fn obstacles<'a>(
             if (center.xz() + reach).cmplt(low).any() || (center.xz() - reach).cmpgt(high).any() {
                 continue;
             }
-            // Same rule as `push_out`: low pillars are stepped over, high ones passed under.
-            let feet = terrain.mesh_height_at(center.xz());
+            // Same rule as `push_out` (low pillars are stepped over, high ones
+            // passed under) for feet anywhere on the ground the body touches
+            // the pillar from: on a slope it comes up from below the pillar's
+            // foot, or down from above it.
             let top = center.y + pillar.top * scale.y;
             let bottom = center.y + pillar.bottom * scale.y;
-            if top > feet + STEP_HEIGHT && bottom < feet + body.height {
+            let blocks = |(lowest, highest): (f32, f32)| {
+                top > lowest + STEP_HEIGHT && bottom < highest + body.height
+            };
+            // Most pillars block from the ground at their foot already.
+            let foot = terrain.mesh_height_at(center.xz());
+            if blocks((foot, foot)) || blocks(ground_around(terrain, center.xz(), reach, foot)) {
                 found.push(Obstacle {
                     center: center.xz(),
                     reach,
@@ -122,6 +150,18 @@ fn obstacles<'a>(
         }
     }
     found
+}
+
+/// The lowest and highest rendered ground at `center` (where it is `foot`
+/// high) and at eight points `radius` around it, where a body touching a
+/// pillar there stands.
+fn ground_around(terrain: &Terrain, center: Vec2, radius: f32, foot: f32) -> (f32, f32) {
+    (0..8)
+        .map(|i| {
+            let around = Vec2::from_angle(i as f32 * std::f32::consts::FRAC_PI_4) * radius;
+            terrain.mesh_height_at(center + around)
+        })
+        .fold((foot, foot), |(low, high), y| (low.min(y), high.max(y)))
 }
 
 fn rasterize(grid: &mut Grid, terrain: &Terrain, obstacles: &[Obstacle], max_depth: f32) {
@@ -242,7 +282,7 @@ fn smooth(grid: &Grid, from: Vec2, points: Vec<Vec2>) -> Vec<Vec2> {
 mod tests {
     use super::*;
     use crate::player::STANDING;
-    use crate::world::{CutScan, Pillar, crater_ramp, cut_scan, quarry_ramp};
+    use crate::world::{CutScan, Pillar, cut_scan, quarry_ramp};
 
     const WALL: &[Pillar] = &[
         Pillar {
@@ -349,41 +389,6 @@ mod tests {
             .expect("a route down the ramp");
         let route = length(&[&[entrance], path.as_slice()].concat());
         let limit = length(ramp) * 1.6;
-        assert!(
-            route <= limit,
-            "the route is {route} m, the limit {limit} m"
-        );
-    }
-
-    #[test]
-    // The router is slope-blind, so this only proves the crater's floor is
-    // reachable from the quarry's junction through both scans' cleared
-    // collision. It cuts across the pit and from lap to lap down the crater's
-    // walls (357 m against the road's 799 m), so the road's length bounds
-    // nothing: the limit, half again the straight line, catches a detour
-    // round the crater instead.
-    fn a_click_order_reaches_the_crater_floor() {
-        let terrain = Terrain::new();
-        let scans = CutScan::ALL.map(|scan| {
-            let (pose, _) = cut_scan(scan);
-            (Collider(scan.pillars()), GlobalTransform::from(pose))
-        });
-        let (junction, floor) = (
-            quarry_ramp()[0],
-            crater_ramp().last().copied().expect("a road"),
-        );
-
-        let path = find_path(
-            &terrain,
-            scans.iter().map(|(collider, scan)| (collider, scan)),
-            junction,
-            floor,
-            STANDING,
-            1.0,
-        )
-        .expect("a route to the crater floor");
-        let route = length(&[&[junction], path.as_slice()].concat());
-        let limit = junction.distance(floor) * 1.5;
         assert!(
             route <= limit,
             "the route is {route} m, the limit {limit} m"
