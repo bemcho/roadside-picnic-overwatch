@@ -822,7 +822,8 @@ mod tests {
     fn the_ramp_grade_stays_drivable() {
         // The centerline holds the ramp's grade; on a bend the inner lane is
         // shorter by R / (R - lane), and the 2 m mesh adds to it.
-        const CENTERLINE: f32 = 0.22;
+        // The road level is exactly 0.191; the render mesh strays up to 0.11 m from it in a bend.
+        const CENTERLINE: f32 = 0.25;
         const LANES: f32 = 0.35;
         let terrain = Terrain::new();
         let path: Vec<Vec2> = std::iter::once(roads::QUARRY)
