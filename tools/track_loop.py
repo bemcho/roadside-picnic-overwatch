@@ -13,6 +13,7 @@ import numpy as np
 FIT_PASSES = 6  # passes of centring the loop on the faces nearest it
 MIN_PITCH = 0.004  # shorter repeats are surface detail on a link, not links
 PITCH_BIN = 0.0002  # histogram bin for the density of faces along the run
+WRAP_HALF_ANGLE = np.radians(60)  # the arc round a sprocket or idler that counts: this far either side of straight out
 
 
 def fit_loop(belt_zy, step, span=None, weights=None):
@@ -64,8 +65,22 @@ def link_pitch(lower_run_z):
     return refine_peak(correlation, lag) * PITCH_BIN / multiple
 
 
-def rust_track_module(loops, xs, links):
-    """The text of `src/player/vehicle/carrier_track.rs`: loops (z, y) and x per side, left (+X) first."""
+def wrap_radius(loop, hub, outward):
+    """The radius a wheel at the end of the loop rolls at: the belt wraps it and turns rigidly with it, so it
+    turns at the belt's speed over this distance, the mean from `hub` (z, y) to the loop points within
+    WRAP_HALF_ANGLE of straight out from it (`outward` is +1 toward +z, the sprocket, or -1, the idler).
+    A sixth of a turn either side of out stays short of where the runs leave the wheel for the road wheels
+    and rollers; the loop is evenly spaced, so the mean over points is the mean over the arc."""
+    relative = np.asarray(loop, dtype=float) - np.asarray(hub, dtype=float)
+    wrapped = np.abs(np.arctan2(relative[:, 1], relative[:, 0] * outward)) <= WRAP_HALF_ANGLE
+    if not wrapped.any():
+        raise ValueError("the loop has no points round the hub")
+    return float(np.linalg.norm(relative[wrapped], axis=1).mean())
+
+
+def rust_track_module(loops, xs, links, wraps):
+    """The text of `src/player/vehicle/carrier_track.rs`: loops (z, y), x, links and the (sprocket, idler)
+    roll radii per side, left (+X) first."""
     sides = "".join(
         "    &[\n" + "".join(f"        [{number(z)}, {number(y)}],\n" for z, y in loop) + "    ],\n" for loop in loops
     )
@@ -78,6 +93,9 @@ def rust_track_module(loops, xs, links):
         f"pub(super) const TRACK_X: [f32; {len(xs)}] = [{', '.join(number(x) for x in xs)}];\n"
         "/// Links round each track: the integer nearest loop length / scanned pitch.\n"
         f"pub(super) const TRACK_LINKS: [usize; {len(links)}] = [{', '.join(str(int(n)) for n in links)}];\n"
+        "/// Each track's roll radius at its sprocket (front) and idler (rear): the mean distance from the wheel's hub\n"
+        "/// to the loop over the arc the belt wraps it.\n"
+        f"pub(super) const TRACK_WRAP: [[f32; 2]; {len(wraps)}] = [{', '.join(f'[{number(s)}, {number(i)}]' for s, i in wraps)}];\n"
     )
 
 

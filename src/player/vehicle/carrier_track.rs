@@ -321,3 +321,6 @@ pub(super) const TRACK_LOOPS: [&[[f32; 2]]; 2] = [
 pub(super) const TRACK_X: [f32; 2] = [0.191305, -0.191009];
 /// Links round each track: the integer nearest loop length / scanned pitch.
 pub(super) const TRACK_LINKS: [usize; 2] = [77, 77];
+/// Each track's roll radius at its sprocket (front) and idler (rear): the mean distance from the wheel's hub
+/// to the loop over the arc the belt wraps it.
+pub(super) const TRACK_WRAP: [[f32; 2]; 2] = [[0.047106, 0.053994], [0.045134, 0.053732]];

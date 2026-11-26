@@ -33,7 +33,7 @@ use crate::world::{
 use super::super::Player;
 use super::super::camera::OrbitCamera;
 use super::super::orders::{MoveOrder, Turning};
-use super::carrier_track::{TRACK_LINKS, TRACK_LOOPS, TRACK_X};
+use super::carrier_track::{TRACK_LINKS, TRACK_LOOPS, TRACK_WRAP, TRACK_X};
 use super::patrol::{Patrol, in_the_way};
 use super::track_loop::{TrackLoop, link_pose};
 use super::traffic::{Traffic, keep_right, round_corners, settle_footprint};
@@ -51,9 +51,11 @@ const HALF_TRACK: f32 = 0.2;
 const TRACK_ENDS: (f32, f32) = (0.251, -0.311);
 /// Its wheels' radii, told apart by hub height: road wheels run on the
 /// track's lower run, the sprocket and idler sit higher at the track's ends,
-/// the small return rollers carry its upper run.
+/// the small return rollers carry its upper run. The belt wraps the sprocket
+/// and idler and turns with them, so those roll at the distance from their
+/// hub to the belt's loop (`TRACK_WRAP`), not at their own rims.
 const ROAD_WHEEL: (f32, f32) = (0.09, 0.049);
-const END_WHEEL: (f32, f32) = (0.13, 0.044);
+const END_WHEEL_HUB: f32 = 0.13;
 const RETURN_ROLLER: f32 = 0.019;
 /// Its bay and the apron outside the hangar door, in hangar-local meters (the
 /// hall is not turned: x across, z out of the door). The bay keeps the central
@@ -547,12 +549,14 @@ fn link_transform(carrier: &Carrier, link: &CarrierLink) -> Transform {
     )
 }
 
-/// A wheel's radius from its hub height, in model units.
-fn wheel_radius(hub: f32) -> f32 {
-    if hub < ROAD_WHEEL.0 {
+/// The radius a wheel on `side` rolls at, in model units, from its hub: the
+/// sprocket in front and the idler behind take their belt's wrap radius.
+fn wheel_radius(side: usize, hub: Vec3) -> f32 {
+    if hub.y < ROAD_WHEEL.0 {
         ROAD_WHEEL.1
-    } else if hub < END_WHEEL.0 {
-        END_WHEEL.1
+    } else if hub.y < END_WHEEL_HUB {
+        let [sprocket, idler] = TRACK_WRAP[side];
+        if hub.z > 0.0 { sprocket } else { idler }
     } else {
         RETURN_ROLLER
     }
@@ -639,7 +643,7 @@ fn attach_carrier_wheels(
             name if name.starts_with("WheelR") => 1,
             _ => continue,
         };
-        let radius = wheel_radius(transform.translation.y);
+        let radius = wheel_radius(side, transform.translation);
         commands
             .entity(entity)
             .insert(CarrierWheel { side, radius });
@@ -1065,6 +1069,46 @@ mod tests {
         let after = poses(&mut world);
         assert!(after.iter().all(|(pose, wanted)| pose == wanted));
         assert!(after.iter().zip(&before).any(|(now, was)| now.0 != was.0));
+    }
+
+    #[test]
+    fn the_end_wheels_roll_at_the_radius_their_belt_wraps() {
+        // Hubs as the carrier GLB's Wheel nodes have them (x across, then height, then z forward).
+        let hub = |y: f32, z: f32| Vec3::new(0.19, y, z);
+        let sprocket = [hub(0.1199, 0.3497), hub(0.1206, 0.3524)];
+        let idler = [hub(0.1217, -0.4173), hub(0.1229, -0.4177)];
+        for side in 0..2 {
+            assert_eq!(wheel_radius(side, sprocket[side]), TRACK_WRAP[side][0]);
+            assert_eq!(wheel_radius(side, idler[side]), TRACK_WRAP[side][1]);
+            // The idler's belt is wrapped wider than the sprocket's, and neither is the road wheels'.
+            assert!(TRACK_WRAP[side][1] > TRACK_WRAP[side][0]);
+            assert_eq!(wheel_radius(side, hub(0.063, 0.1367)), ROAD_WHEEL.1);
+            assert_eq!(wheel_radius(side, hub(0.1405, 0.0722)), RETURN_ROLLER);
+        }
+    }
+
+    #[test]
+    fn the_links_stay_put_while_the_tracks_stand() {
+        let mut world = World::new();
+        let (carrier, ..) = carrier_with_links(&mut world);
+        let mut schedule = Schedule::default();
+        schedule.add_systems(run_carrier_tracks);
+        world.get_mut::<Carrier>(carrier).expect("a carrier").tracks = [2.0, -2.0];
+        schedule.run(&mut world);
+        // Move one link by hand: with the tracks where they were, the system must not touch it.
+        let link = world
+            .query_filtered::<Entity, With<CarrierLink>>()
+            .iter(&world)
+            .next()
+            .expect("a link");
+        let moved = Transform::from_xyz(1.0, 2.0, 3.0);
+        *world.get_mut::<Transform>(link).expect("a pose") = moved;
+        schedule.run(&mut world);
+        assert_eq!(world.get::<Transform>(link), Some(&moved));
+        // Once the tracks run again it is placed afresh.
+        world.get_mut::<Carrier>(carrier).expect("a carrier").tracks = [2.5, -2.5];
+        schedule.run(&mut world);
+        assert_ne!(world.get::<Transform>(link), Some(&moved));
     }
 
     fn run(carrier: &mut Carrier, seconds: f32, blocked: bool) {

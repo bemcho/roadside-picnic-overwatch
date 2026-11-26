@@ -2,3 +2,6 @@
 
 # Agent git worktrees (each one is its own checkout)
 .claude/worktrees/
+
+# Python bytecode (tools/)
+__pycache__/

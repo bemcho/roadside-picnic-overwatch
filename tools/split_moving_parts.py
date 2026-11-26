@@ -12,13 +12,15 @@ Output contracts (top-level nodes unless noted; spin axes are local):
   carrier             Hull; WheelL0.. (+X side) and WheelR0.. (-X side) front to back, axle X;
                       TrackLinkL, TrackLinkR: one link from each lower run, origin at its centre on the
                       belt's mid-line, travel -Z (the belts themselves are cut out of Hull and dropped);
-                      --track-out writes each belt's loop, x and link count (carrier_track.rs)
+                      --track-out writes each belt's loop, x, link count and the sprocket's and idler's roll
+                      radius (the belt's wrap radius about their hubs) to carrier_track.rs
   civil/military heli Body; Rotor (on the mast at hub height, spins Y); TailRotor (hub, axle X)
   gatling/naval       Base; Head (yaw axis at the joint, yaws Y) with children
                       Barrels (barrel axis, spins Z, points +Z) and the empty Muzzle (tip centre)
 
 Rebuild. The full-quality (medium) models keep every triangle of the welded scan and its
-native textures: no simplify setting tried (down to --error 0.0001) was indistinguishable up
+native textures, except the carrier, which slim_dense_model.py slims (see its sequence below):
+no simplify setting tried (down to --error 0.0001) was indistinguishable up
 close, since the scans carry their fine detail (scratches, panel lines) in geometry. Only the
 far turret LODs (props/low, beyond ~150 m) are reduced: simplified as a whole, then split, so
 a few cut-line triangles may bridge parts there, which cannot be seen at that range.
@@ -210,6 +212,7 @@ class Track:
 
     def __init__(self, side, sprocket, idler, road, rollers, link_at):
         self.side, self.link_at = side, link_at
+        self.sprocket, self.idler = sprocket, idler  # hubs (z, y) in the source frame
         self.road_span = (min(z for z, _ in road), max(z for z, _ in road))
         circles = [(*sprocket, 0.042), (*idler, 0.046)] + [(z, y, 0.049) for z, y in road] + list(rollers)
         angles = np.linspace(0, 2 * np.pi, 48, endpoint=False)
@@ -455,7 +458,7 @@ def parse_args():
     parser.add_argument("--pose-test", type=float, default=0.0, metavar="DEG",
                         help="turn every part DEG about its spin axis (a check render, never a game asset)")
     parser.add_argument("--track-out", type=Path, metavar="RS",
-                        help="write the tracks' loops, x and link counts as Rust (carrier: src/player/vehicle/carrier_track.rs)")
+                        help="write the tracks' loops, x, link counts and end-wheel roll radii as Rust (carrier: src/player/vehicle/carrier_track.rs)")
     return parser.parse_args(sys.argv[sys.argv.index("--") + 1 :])
 
 
@@ -587,20 +590,25 @@ def drop_parts(objects, config):
 
 
 def write_tracks(path, config, shift):
-    """The tracks' loops, x and link counts, moved into the runtime frame by normalize's shift."""
+    """The tracks' loops, x, link counts and end-wheel roll radii, moved into the runtime frame by normalize's
+    shift (the same one that moves the Wheel nodes, so the hubs measured from are the nodes' own)."""
     if not config.get("tracks") or config["turn_degrees"]:
         raise ValueError("--track-out needs a model with tracks and no turn")
-    loops, xs, links = [], [], []
+    loops, xs, links, wraps = [], [], [], []
     for track in config["tracks"]:
         measured = track.measured
-        loop = measured["loop"] + np.array([shift[2], shift[1]])
+        move = np.array([shift[2], shift[1]])
+        loop = measured["loop"] + move
         length = track_loop.loop_length(loop)
         loops.append(loop)
         xs.append(measured["x"] + shift[0])
         links.append(int(round(length / measured["pitch"])))
+        wraps.append((track_loop.wrap_radius(loop, np.array(track.sprocket) + move, +1),
+                      track_loop.wrap_radius(loop, np.array(track.idler) + move, -1)))
         print(f"TRACK side {track.side:+d} x {xs[-1]:.4f} loop {length:.4f} points {len(loop)} pitch "
-              f"{measured['pitch']:.5f} length/pitch {length / measured['pitch']:.3f} links {links[-1]}")
-    path.write_text(track_loop.rust_track_module(loops, xs, links))
+              f"{measured['pitch']:.5f} length/pitch {length / measured['pitch']:.3f} links {links[-1]} "
+              f"wrap sprocket {wraps[-1][0]:.5f} idler {wraps[-1][1]:.5f}")
+    path.write_text(track_loop.rust_track_module(loops, xs, links, wraps))
     print(f"TRACK wrote {path}")
 
 
