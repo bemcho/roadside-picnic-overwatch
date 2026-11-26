@@ -358,6 +358,15 @@ the stalker stands still.
     of cut against the smoothed relief, runs at least 22.7 m apart. The tool
     refuses a road steeper than `--grade` or turning tighter than 9 m. The file is
     generated: regenerate it, never edit it.
+  - *Other pits:* those numbers are the tool's defaults (a `Site`). `--scale 1` with
+    `--centre`, `--half`, `--grid`, `--entrance`, `--heading`, `--end` and
+    `--avoid` (see the tool's docstring) plans a road in any relief in metres: to
+    a point instead of the floor, keeping every baked point 9 m (`--shoulder`)
+    clear of the no-go boxes. A node of the grid is put on `--end`, and an entrance
+    inside the box snaps to a node, so neither end has a kink. The tool prints the
+    closest approach of separate runs and of the road to a box, and a run other
+    than the quarry's writes its options and numbers into the file's header.
+    `test_quarry_ramp_regenerates_unchanged` keeps the quarry's file byte for byte.
   - *Track:* `sites::quarry_ramp()` is the junction, the entrance and the baked
     points under the site's pose, so the quarry's 60 m drive is the ramp track's
     head (`Surface::Ramp` throughout: one nearest-leg choice, so no step in the

@@ -1,14 +1,18 @@
-"""Tests for plan_quarry_ramp.py's relief parsing, path search and output (on the quarry's real relief grid).
+"""Tests for plan_quarry_ramp.py's relief parsing, path search and output: on the quarry's real relief grid,
+and on a synthetic conical pit in metres for the options a second site needs (end point, no-go boxes).
 
 python3 -m unittest tools/test_plan_quarry_ramp.py -v
 """
 
+import contextlib
+import io
 import math
 import re
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -16,6 +20,7 @@ import plan_quarry_ramp as ramp_tool  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 RELIEF_FILE = REPO / "src/world/pillars/uhd_quarry_pit_ground.rs"
+RAMP_FILE = REPO / "src/world/pillars/quarry_ramp.rs"
 GRADE = ramp_tool.DEFAULT_GRADE
 SCALE = ramp_tool.DEFAULT_SCALE
 MIN_RUN_GAP_M = 18.0  # the bed and shoulder (9 m each side) of two runs must not overlap
@@ -110,6 +115,203 @@ class RampTests(unittest.TestCase):
         for (wx, wz), (x, z) in zip(written, self.points):
             self.assertAlmostEqual(wx, x, places=5)
             self.assertAlmostEqual(wz, z, places=5)
+
+    def test_quarry_ramp_regenerates_unchanged(self):
+        with tempfile.TemporaryDirectory() as folder:
+            out = Path(folder) / "quarry_ramp.rs"
+            run_tool(RELIEF_FILE, out, "--grade", GRADE, "--scale", SCALE)
+            self.assertEqual(out.read_text(), RAMP_FILE.read_text())
+
+    def test_site_defaults_are_the_quarrys(self):
+        site = ramp_tool.Site()
+        self.assertEqual(
+            (site.entrance, site.centre, site.half, site.grid, site.heading, site.max_length_m, site.end, site.avoid),
+            (ramp_tool.ENTRANCE, (0.0, 0.0), (0.45, 0.38), 32, 6, 360.0, None, ()),
+        )
+        self.assertEqual(site.shoulder_m, 9.0)
+
+    def test_refuses_steeper_than_grade(self):
+        # The search itself keeps to the grade, so hand the tool a road that drops 48 m in 50 m.
+        steep = [ramp_tool.ENTRANCE, (0.0, 0.41655 - 25 / SCALE), (0.0, 0.41655 - 50 / SCALE)]
+        with tempfile.TemporaryDirectory() as folder, mock.patch.object(ramp_tool, "plan_path", return_value=steep):
+            out = Path(folder) / "steep.rs"
+            with self.assertRaisesRegex(SystemExit, "steeper"):
+                run_tool(RELIEF_FILE, out, "--grade", GRADE, "--scale", SCALE)
+            self.assertFalse(out.exists())
+
+
+# A conical pit in metres, centred on the origin: ground at level 0 outside a 150 m radius, falling to a flat floor
+# 40 m down inside 30 m. The road enters from the west at (-160, 0), heading +x, and ends on the floor.
+CONE_SPAN_M, CONE_RIM_M, CONE_FLOOR_M, CONE_DEPTH_M = 340.0, 150.0, 30.0, 40.0
+CONE_ENTRANCE, CONE_END, CONE_GRADE = (-160.0, 0.0), (12.0, -9.0), 0.15
+
+
+def cone_relief(size=64):
+    cell = CONE_SPAN_M / size
+    centres = [-CONE_SPAN_M / 2 + (k + 0.5) * cell for k in range(size)]
+
+    def height(x, z):
+        depth = (CONE_RIM_M - math.hypot(x, z)) / (CONE_RIM_M - CONE_FLOOR_M)
+        return -CONE_DEPTH_M * min(1.0, max(0.0, depth))
+
+    heights = [[height(x, z) for x in centres] for z in centres]
+    return ramp_tool.Relief((-CONE_SPAN_M / 2,) * 2, (cell, cell), heights)
+
+
+def relief_file_text(relief):
+    """The relief in the generated files' format, the one `parse_relief` reads."""
+    values = ", ".join(f"{h:.4f}" for row in relief.heights for h in row)
+    return (
+        f"Relief {{\n    min: Vec2::new({relief.min[0]:.4f}, {relief.min[1]:.4f}),\n"
+        f"    cell: Vec2::new({relief.cell[0]:.6f}, {relief.cell[1]:.6f}),\n    heights: &[\n        {values}\n    ],\n}}\n"
+    )
+
+
+def run_tool(*args):
+    """Run `main` with these command-line arguments; the text it prints."""
+    with contextlib.redirect_stdout(io.StringIO()) as printed:
+        ramp_tool.main([str(arg) for arg in args])
+    return printed.getvalue()
+
+
+def gap_to_box(point, box):
+    """Distance in metres from a point to an axis-aligned box (xmin, zmin, xmax, zmax), 0 inside it."""
+    return math.hypot(max(box[0] - point[0], 0.0, point[0] - box[2]), max(box[1] - point[1], 0.0, point[1] - box[3]))
+
+
+class ConePitTests(unittest.TestCase):
+    """The options a second site needs, on a pit whose floor is not the road's end by accident."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.relief = cone_relief()
+
+    def site(self, **options):
+        defaults = dict(entrance=CONE_ENTRANCE, heading=0, half=(165.0, 165.0), grid=64, end=CONE_END)
+        return ramp_tool.Site(**{**dict(max_length_m=450.0), **defaults, **options})
+
+    def plan(self, **options):
+        """The planned road and its numbers, for the site of these options."""
+        site = self.site(**options)
+        ground = ramp_tool.Ground(self.relief, 1.0, site.start)
+        points = ramp_tool.plan_path(ground, CONE_GRADE, site)
+        return points, ramp_tool.measure(ground, points, site)
+
+    def test_a_node_lies_on_the_end_point_and_the_inside_entrance_snaps_to_a_node(self):
+        site = self.site(entrance=(-157.3, 4.1), end=(31.7, 23.9))
+        i, j = site.nearest(site.end)
+        self.assertAlmostEqual(site.node(i, j)[0], 31.7)
+        self.assertAlmostEqual(site.node(i, j)[1], 23.9)
+        shift = [low - (-165.0) for low in site.low]
+        self.assertTrue(all(abs(move) < 2 * 165.0 / 63 for move in shift), shift)
+        self.assertEqual(site.start, site.node(*site.nearest(site.entrance)))
+        self.assertTrue(all(abs(a - b) < 4.0 for a, b in zip(site.start, site.entrance)), site.start)
+        self.assertEqual(ramp_tool.Site().start, ramp_tool.ENTRANCE)  # the quarry's entrance lies outside its box
+
+    def test_ends_at_the_given_point(self):
+        points, stats = self.plan()
+        self.assertEqual(points[-1], CONE_END)
+        self.assertLessEqual(stats.grade, CONE_GRADE)
+        self.assertGreaterEqual(stats.min_radius, MIN_TURN_RADIUS_M)
+
+    def test_ends_at_a_point_between_cells(self):
+        for end in [(31.7, 23.9), (-8.3, -17.7), (0.4, 11.2)]:  # on the floor, off the search cells
+            points, stats = self.plan(end=end)
+            self.assertEqual(points[-1], end)
+            self.assertLessEqual(stats.grade, CONE_GRADE, end)
+            self.assertGreaterEqual(stats.min_radius, MIN_TURN_RADIUS_M, end)
+
+    def test_keeps_out_of_avoid_boxes(self):
+        box = (-110.0, -25.0, -70.0, 25.0)  # across the straight line from the entrance to the end
+        free, _ = self.plan()
+        self.assertLess(min(gap_to_box(p, box) for p in free), 9.0, "the box is not in the way")
+        points, stats = self.plan(avoid=(box,))
+        self.assertEqual(points[-1], CONE_END)
+        for point in points:
+            self.assertGreaterEqual(gap_to_box(point, box), 9.0, point)
+        self.assertAlmostEqual(stats.clearance, min(gap_to_box(p, box) for p in points))
+        self.assertGreaterEqual(stats.min_radius, MIN_TURN_RADIUS_M)
+
+    def test_keeps_out_of_several_boxes_by_the_shoulder(self):
+        boxes = ((-100.0, -10.0, -60.0, 30.0), (-40.0, -45.0, -10.0, -15.0))
+        free, _ = self.plan()
+        self.assertLess(min(gap_to_box(p, box) for p in free for box in boxes), 15.0, "the boxes are not in the way")
+        points, stats = self.plan(avoid=boxes, shoulder_m=15.0)
+        for box in boxes:
+            self.assertGreaterEqual(min(gap_to_box(p, box) for p in points), 15.0)
+        self.assertGreaterEqual(stats.clearance, 15.0)
+
+    def test_runs_keep_apart_is_reported(self):
+        points, stats = self.plan()
+        along = ramp_tool.arc_lengths(points, 1.0)
+        apart = [
+            math.dist(a, points[j])
+            for i, a in enumerate(points)
+            for j in range(i)
+            if along[i] - along[j] >= ramp_tool.KEEP_APART_ALONG_M
+        ]
+        self.assertTrue(apart, "the pit's road never doubles back on itself")
+        self.assertAlmostEqual(stats.closest_runs, min(apart))
+        ground = ramp_tool.Ground(self.relief, 1.0, CONE_ENTRANCE)
+        short = [(0.0, 0.0), (0.0, 15.0), (0.0, 30.0)]  # no two points 40 m apart along it: no separate runs
+        self.assertEqual(ramp_tool.measure(ground, short, self.site()).closest_runs, math.inf)
+
+    def test_tool_prints_the_closest_runs_and_the_clearance(self):
+        with tempfile.TemporaryDirectory() as folder:
+            relief_file, out = Path(folder) / "cone.rs", Path(folder) / "ramp.rs"
+            relief_file.write_text(relief_file_text(self.relief))
+            printed = run_tool(
+                relief_file, out, "--grade", CONE_GRADE, "--scale", 1, "--entrance=-160,0", "--heading", 0,
+                "--half", "165,165", "--grid", 64, "--end", "12,-9", "--avoid=-110,-25,-70,25", "--max-length", 450,
+            )  # fmt: skip
+            written = out.read_text().splitlines()
+        self.assertRegex(printed, r"closest runs \d+\.\d m")
+        self.assertRegex(printed, r"clearance \d+\.\d m")
+        self.assertEqual(written[-2], "    Vec2::new(12.00000, -9.00000),")
+        # A run other than the quarry's records how it was made and what came out.
+        self.assertEqual(written[0], "// Generated by tools/plan_quarry_ramp.py from cone.rs; do not edit.")
+        self.assertIn("--end 12,-9", written[1])
+        self.assertIn("--avoid=-110,-25,-70,25", written[1])
+        self.assertEqual(written[2], "// Result: " + printed.strip())
+        self.assertEqual(written[3], "&[")
+
+    def test_says_so_when_no_road_reaches_the_end(self):
+        with tempfile.TemporaryDirectory() as folder:
+            relief_file, out = Path(folder) / "cone.rs", Path(folder) / "ramp.rs"
+            relief_file.write_text(relief_file_text(self.relief))
+            with self.assertRaisesRegex(SystemExit, "no path"):
+                run_tool(
+                    relief_file, out, "--scale", 1, "--grade", CONE_GRADE, "--entrance=-160,0", "--heading", 0,
+                    "--half", "165,165", "--grid", 64, "--end", "12,-9", "--max-length", 100,
+                )  # fmt: skip
+            self.assertFalse(out.exists())
+
+    def test_refuses_a_road_that_enters_an_avoid_box(self):
+        through = [CONE_ENTRANCE, (-90.0, 0.0), CONE_END]  # straight through the box
+        with tempfile.TemporaryDirectory() as folder:
+            relief_file, out = Path(folder) / "cone.rs", Path(folder) / "ramp.rs"
+            relief_file.write_text(relief_file_text(self.relief))
+            with mock.patch.object(ramp_tool, "plan_path", return_value=through):
+                with self.assertRaisesRegex(SystemExit, "avoid"):
+                    run_tool(
+                        relief_file, out, "--scale", 1, "--grade", 0.5, "--entrance=-160,0", "--half", "165,165",
+                        "--end", "12,-9", "--avoid=-110,-25,-70,25",
+                    )  # fmt: skip
+            self.assertFalse(out.exists())
+
+    def test_command_line_pairs_and_boxes_read_negative_numbers(self):
+        args = ramp_tool.parse_args(
+            ["in.rs", "out.rs", "--centre=-1090,-100", "--half=170,230", "--entrance=-1194.7,97.2", "--end=-1150,-40"]
+            + ["--avoid=-1095,97,-1003,205", "--avoid=-1,-2,3,4"]
+        )
+        self.assertEqual((args.centre, args.entrance, args.end), ((-1090.0, -100.0), (-1194.7, 97.2), (-1150.0, -40.0)))
+        self.assertEqual(args.avoid, [(-1095.0, 97.0, -1003.0, 205.0), (-1.0, -2.0, 3.0, 4.0)])
+        self.assertEqual(ramp_tool.parse_args(["in.rs", "out.rs"]).avoid, [])
+
+    def test_an_end_outside_the_search_box_or_a_reversed_box_is_refused(self):
+        for bad in (["--end=500,0", "--half=165,165"], ["--avoid=10,0,-10,5"], ["--avoid=0,9,5,3"]):
+            with self.subTest(bad), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                ramp_tool.parse_args(["in.rs", "out.rs", *bad])
 
 
 if __name__ == "__main__":
