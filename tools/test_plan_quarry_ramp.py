@@ -21,6 +21,7 @@ import plan_quarry_ramp as ramp_tool  # noqa: E402
 REPO = Path(__file__).resolve().parent.parent
 RELIEF_FILE = REPO / "src/world/pillars/uhd_quarry_pit_ground.rs"
 RAMP_FILE = REPO / "src/world/pillars/quarry_ramp.rs"
+CORE_RELIEF_FILE = REPO / "src/world/pillars/uhd_core_ground.rs"
 GRADE = ramp_tool.DEFAULT_GRADE
 SCALE = ramp_tool.DEFAULT_SCALE
 MIN_RUN_GAP_M = 18.0  # the bed and shoulder (9 m each side) of two runs must not overlap
@@ -128,7 +129,7 @@ class RampTests(unittest.TestCase):
             (site.entrance, site.centre, site.half, site.grid, site.heading, site.max_length_m, site.end, site.avoid),
             (ramp_tool.ENTRANCE, (0.0, 0.0), (0.45, 0.38), 32, 6, 360.0, None, ()),
         )
-        self.assertEqual(site.shoulder_m, 9.0)
+        self.assertEqual((site.shoulder_m, site.turn, site.min_separation_m), (9.0, None, None))
 
     def test_refuses_steeper_than_grade(self):
         # The search itself keeps to the grade, so hand the tool a road that drops 48 m in 50 m.
@@ -146,16 +147,16 @@ CONE_SPAN_M, CONE_RIM_M, CONE_FLOOR_M, CONE_DEPTH_M = 340.0, 150.0, 30.0, 40.0
 CONE_ENTRANCE, CONE_END, CONE_GRADE = (-160.0, 0.0), (12.0, -9.0), 0.15
 
 
-def cone_relief(size=64):
-    cell = CONE_SPAN_M / size
-    centres = [-CONE_SPAN_M / 2 + (k + 0.5) * cell for k in range(size)]
+def cone_relief(size=64, span=CONE_SPAN_M, rim=CONE_RIM_M, floor=CONE_FLOOR_M, depth=CONE_DEPTH_M):
+    cell = span / size
+    centres = [-span / 2 + (k + 0.5) * cell for k in range(size)]
 
     def height(x, z):
-        depth = (CONE_RIM_M - math.hypot(x, z)) / (CONE_RIM_M - CONE_FLOOR_M)
-        return -CONE_DEPTH_M * min(1.0, max(0.0, depth))
+        down = (rim - math.hypot(x, z)) / (rim - floor)
+        return -depth * min(1.0, max(0.0, down))
 
     heights = [[height(x, z) for x in centres] for z in centres]
-    return ramp_tool.Relief((-CONE_SPAN_M / 2,) * 2, (cell, cell), heights)
+    return ramp_tool.Relief((-span / 2,) * 2, (cell, cell), heights)
 
 
 def relief_file_text(relief):
@@ -172,6 +173,17 @@ def run_tool(*args):
     with contextlib.redirect_stdout(io.StringIO()) as printed:
         ramp_tool.main([str(arg) for arg in args])
     return printed.getvalue()
+
+
+def turn_sides(points):
+    """The side each bend of a polyline turns to, as a driver sees it in the game (y up, seen from above): -1 for
+    left (from +x towards -z), +1 for right, one per point where the polyline bends."""
+    sides = []
+    for a, b, c in zip(points, points[1:], points[2:]):
+        cross = (b[0] - a[0]) * (c[1] - b[1]) - (b[1] - a[1]) * (c[0] - b[0])
+        if abs(cross) > 1e-9 * math.dist(a, b) * math.dist(b, c):
+            sides.append(1 if cross > 0 else -1)
+    return sides
 
 
 def gap_to_box(point, box):
@@ -312,6 +324,91 @@ class ConePitTests(unittest.TestCase):
         for bad in (["--end=500,0", "--half=165,165"], ["--avoid=10,0,-10,5"], ["--avoid=0,9,5,3"]):
             with self.subTest(bad), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 ramp_tool.parse_args(["in.rs", "out.rs", *bad])
+
+
+# A deep, narrow pit whose road must wind its way down: 50 m deep inside a 70 m rim, a 20 m floor. The road
+# enters on the west rim along it, heading -z, so a right-hand spiral (+x, then +z, ...) circles the floor.
+SPIRAL_PIT = dict(span=160.0, rim=70.0, floor=20.0, depth=50.0)
+SPIRAL_ENTRANCE, SPIRAL_END, SPIRAL_GRADE = (-74.0, 0.0), (8.0, 8.0), 0.15
+SPIRAL_OPTIONS = [
+    "--scale", 1, "--grade", SPIRAL_GRADE, "--entrance=-74,0", "--half", "76,76", "--grid", 32, "--end", "8,8",
+    "--max-length", 700,
+]  # fmt: skip
+
+
+class SpiralTests(unittest.TestCase):
+    """A road that winds down a deep pit: it turns one way, keeps its laps apart and keeps to its grade as baked."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.relief = cone_relief(**SPIRAL_PIT)
+
+    def plan(self, **options):
+        defaults = dict(entrance=SPIRAL_ENTRANCE, heading=6, half=(76.0, 76.0), grid=32, end=SPIRAL_END)
+        site = ramp_tool.Site(**{**dict(max_length_m=700.0), **defaults, **options})
+        ground = ramp_tool.Ground(self.relief, 1.0, site.start)
+        points = ramp_tool.plan_path(ground, SPIRAL_GRADE, site)
+        return points, ramp_tool.measure(ground, points, site)
+
+    def run_spiral(self, *options):
+        """Run the tool on the spiral pit with these options more; the text printed and the file written."""
+        with tempfile.TemporaryDirectory() as folder:
+            relief_file, out = Path(folder) / "spiral.rs", Path(folder) / "ramp.rs"
+            relief_file.write_text(relief_file_text(self.relief))
+            printed = run_tool(relief_file, out, *SPIRAL_OPTIONS, *options)
+            return printed, out.read_text()
+
+    def test_turns_one_way_only(self):
+        free, _ = self.plan(heading=0)  # straight in: free to turn, it winds both ways
+        self.assertEqual(set(turn_sides(free)), {-1, 1}, "the free road already turns one way")
+        # Each way along the rim that circles the floor on that hand: -z for a right-hand spiral, +z for a left.
+        for turn, heading, end, side in (("left", 2, (8.0, -8.0), -1), ("right", 6, SPIRAL_END, 1)):
+            with self.subTest(turn):
+                points, stats = self.plan(turn=turn, heading=heading, end=end)
+                self.assertEqual(points[-1], end)
+                self.assertEqual(set(turn_sides(points)), {side})
+                self.assertLessEqual(stats.grade, SPIRAL_GRADE)
+                self.assertGreaterEqual(stats.min_radius, MIN_TURN_RADIUS_M)
+
+    def test_keeps_laps_apart(self):
+        free, _ = self.run_spiral("--heading", 6, "--turn", "right")
+        self.assertLess(closest_runs(free), MIN_RUN_GAP_M, "the free spiral's laps already keep apart")
+        printed, written = self.run_spiral("--heading", 6, "--turn", "right", "--min-separation", MIN_RUN_GAP_M)
+        self.assertGreaterEqual(closest_runs(printed), MIN_RUN_GAP_M)
+        self.assertIn("--min-separation 18.0", written.splitlines()[1])
+
+    def test_a_road_whose_laps_cannot_keep_apart_is_refused(self):
+        with tempfile.TemporaryDirectory() as folder:
+            relief_file, out = Path(folder) / "spiral.rs", Path(folder) / "ramp.rs"
+            relief_file.write_text(relief_file_text(self.relief))
+            options = [*SPIRAL_OPTIONS, "--heading", 6, "--turn", "right"]
+            with self.assertRaises(SystemExit) as refused:
+                run_tool(relief_file, out, *options, "--min-separation", 60)
+            self.assertNotEqual(refused.exception.code, 0)
+            # The search keeps its laps apart, so hand the tool a spiral whose laps run 5 m apart: 1.5 laps, every
+            # 3 m, its radius closing from 30 m to 22 m (no turn under 9 m).
+            angles = [k * 0.1 for k in range(95)]
+            close = [(30.0 * math.cos(a) * (1 - a / 36), 30.0 * math.sin(a) * (1 - a / 36)) for a in angles]
+            with mock.patch.object(ramp_tool, "plan_path", return_value=close):
+                with self.assertRaisesRegex(SystemExit, "apart"):
+                    run_tool(relief_file, out, *options, "--grade", 0.9, "--min-separation", MIN_RUN_GAP_M)
+            self.assertFalse(out.exists())
+
+    def test_baked_grade_meets_the_target(self):
+        # The Golden Sphere's crater: a long road with many corners, whose arcs shorten it by metres.
+        relief = ramp_tool.parse_relief(CORE_RELIEF_FILE.read_text())
+        site = ramp_tool.Site(
+            entrance=(0.0, 0.47), half=(0.43, 0.47), grid=48, heading=6, end=(0.1, 0.0), max_length_m=600.0
+        )
+        ground = ramp_tool.Ground(relief, 120.0, site.start)
+        points = ramp_tool.plan_path(ground, 0.18, site)
+        self.assertGreaterEqual(len(ramp_tool.corner_points(points)), 12, "the road has few corners")
+        self.assertLessEqual(ramp_tool.measure(ground, points, site).grade, 0.18)
+
+
+def closest_runs(printed):
+    """The closest approach of separate runs that the tool printed, in metres."""
+    return float(re.search(r"closest runs (\d+\.\d) m", printed).group(1))
 
 
 if __name__ == "__main__":

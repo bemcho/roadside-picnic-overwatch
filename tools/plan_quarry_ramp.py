@@ -30,19 +30,28 @@ are in model units, the relief's own, and a value that starts with a minus sign 
   --avoid XMIN,ZMIN,XMAX,ZMAX
               a box that no point of the road may enter, nor come within --shoulder metres of. Repeatable.
   --shoulder  that clearance, 9 m: the road's shoulder (RAMP_SHOULDER in src/world/roads.rs).
-  --max-length  the longest road the search follows, in metres.
+  --max-length  the longest road the search follows, in metres (as baked, its corners rounded).
+  --turn left|right
+              the road turns only that way, as a driver sees it in the game (y up, seen from above): a spiral, not
+              a zigzag. A road that sets out straight at the pit's middle and turns one way stays on one side of
+              its first leg (its first lap fences it in), so set it out along the rim or past the end.
+  --min-separation M
+              separate runs (points KEEP_APART_ALONG_M or more apart along the road) keep at least M metres apart:
+              the search takes no step nearer an earlier run, and the tool refuses a road that still comes nearer.
 
 Where the road starts and ends. A kink at the road's ends would be tighter than the road may turn, so the
 grid is made to fit them: it moves by under a cell to put a node exactly on --end, and an --entrance inside
 the box snaps to its nearest node (so the first point is that node, under a cell from the entrance). The
 quarry's entrance lies outside its box, 4 m from the front edge: it runs in to the nearest node as it is. An
-entrance just outside the box may therefore be refused for a kink: put it inside.
+entrance just outside the box may therefore be refused for a kink: put it inside, or far enough out (a 45 degree
+bend needs 4 m each side) that the bend from the run-in into --heading is rounded like any corner. That bend
+is not a turn of the search: with --turn it may go the other way, once, to line the spiral up.
 
 It prints the path's length and grade, its largest fill and cut (metres, against the smoothed relief the
 search follows and, in brackets, the relief as it is), how close its runs come to each other and, with
 --avoid, how close it comes to a box. It refuses to write a road steeper than --grade, turning tighter than
-MIN_TURN_RADIUS_M or closer to a box than --shoulder. A run with options other than the defaults records them
-and its numbers in the output's header.
+MIN_TURN_RADIUS_M, closer to a box than --shoulder or with runs closer than --min-separation. A run with
+options other than the defaults records them and its numbers in the output's header.
 
 The road is measured as the game builds it: graded evenly by distance from the drive's level at the
 entrance to the ground's level at the road's end, so its grade is the ground's drop over its length.
@@ -51,11 +60,17 @@ Search. Dijkstra over states (cell of the grid, heading of 8, distance travelled
 the last turn) from the start. The road's level is its grade times the distance (the exact one, which rides
 along with the cheapest way into a state; the buckets only merge states), so a step costs more the farther
 that level lies from the (smoothed) relief: per metre, a fill costs its square over 9, a cut twice that (cuts
-need banks), and each turn of one heading costs 20. A turn needs MIN_STRAIGHT_STEPS steps since the last, so
-the arcs of two corners fit between them. It ends where the relief is within FLOOR_MARGIN_M of the pit's floor
-(with --end: at the end point's node) and the level lies END_BELOW_GROUND_M under the ground there, so the
-road as built, graded up to that ground, comes out no steeper than the grade. A step whose line comes within
-the shoulder (plus AVOID_MARGIN_M, for the corners' arcs) of an --avoid box is not taken.
+need banks), and each turn of one heading costs 20 (with --turn, only that way). A turn needs
+MIN_STRAIGHT_STEPS steps since the last, so the arcs of two corners fit between them, and the road ends no
+sooner than half that after its last turn, so the last arc fits. It ends where the relief is within
+FLOOR_MARGIN_M of the pit's floor (with --end: at the end point's node) and the level lies END_BELOW_GROUND_M
+under the ground there, so the road as built, graded up to that ground, comes out no steeper than the grade.
+The arcs at the corners shorten the road (0.4 m a 45 degree corner); a state carries how much, and when that is
+more level than the window allows for, the window moves down by the rest. A step whose line comes within the
+shoulder (plus AVOID_MARGIN_M, for the corners' arcs) of an --avoid box is not taken; with --min-separation, nor
+is a step to a cell within that distance (plus SEPARATION_MARGIN_M) of a cell the road passed KEEP_APART_ALONG_M
+or more before (each state carries those cells as a bitset). The constraints that depend on the road behind a
+state make the search a heuristic: the cheapest way into a state wins, though another might have kept apart.
 
 Corners. The cell path's corners are replaced by circular arcs of TURN_RADIUS_M, tangent to both segments
 (the road is 9 m wide, so it must not pivot), and the result is resampled every ~3 m. The tool refuses to
@@ -84,6 +99,9 @@ DEFAULT_SCALE = 110.0  # metres per model unit
 GRID = 32  # search cells across the footprint, spanning +-HALF_X and +-HALF_Z (model units)
 HALF_X, HALF_Z = 0.45, 0.38
 HEADINGS = [(1, 0), (1, 1), (0, 1), (-1, 1), (-1, 0), (-1, -1), (0, -1), (1, -1)]  # 45 degrees apart
+# The turns a step may take, in HEADINGS indices. Seen from above in the game (y up), a step to the next heading
+# (+x towards +z) turns right, to the one before it (+x towards -z) left; the model's axes keep their sense.
+TURNS = {None: (-1, 0, 1), "left": (-1, 0), "right": (0, 1)}
 START_HEADING = 6  # -z, into the quarry
 MAX_LENGTH_M = 360.0
 DEFAULT_SHOULDER_M = 9.0  # RAMP_SHOULDER in src/world/roads.rs: the road keeps this far from an --avoid box
@@ -95,8 +113,10 @@ SMOOTH_RADIUS_M = 2.2  # the relief is a 3x3 mean at this distance: the road ign
 FLOOR_MARGIN_M = 4.0  # how near the pit's floor the road may end
 # The search ends with its level this far (min, max metres) below the ground there. Graded up to that ground
 # the road is then flatter than the search's grade, which absorbs the arcs at the corners (they shorten the
-# road by about 2%, 1 m of level) so it cannot come out steeper.
+# road, a 45 degree corner by 0.4 m) so it cannot come out steeper. Where the arcs remove more level than the
+# window's 1.2 m less ARC_LEVEL_SPARE_M (the many corners of a winding road), the window moves down by the rest.
 END_BELOW_GROUND_M = (1.2, 1.8)
+ARC_LEVEL_SPARE_M = 0.2  # level kept beyond what the arcs and the ground's dip at the end need
 ARC_STEP_M = 0.5  # the arcs are laid down as points this far apart, then resampled with the rest
 MIN_STRAIGHT_STEPS = 4  # a turn needs this many steps (11 m or more) since the last, room for two arcs of
 # the sharpest corner (50 degrees: the cells are not square, so a "45 degree" turn is 40 or 50)
@@ -108,6 +128,9 @@ KEEP_APART_ALONG_M = 40.0  # runs this far apart along the path count as separat
 # the cell path (a 50 degree corner of TURN_RADIUS_M), the baked chords 0.1 m, and the steps are checked every
 # ARC_STEP_M, which can miss 0.25 m.
 AVOID_MARGIN_M = 1.5
+# With --min-separation, the search keeps each cell this far beyond it from the cells of earlier runs: the baked
+# road lies up to half a step from the nodes and the arcs cut up to 1 m inside a corner.
+SEPARATION_MARGIN_M = 1.5
 
 
 @dataclass
@@ -155,6 +178,8 @@ class Site:
     end: tuple[float, float] | None = None  # the road ends here; None: on the pit's floor
     avoid: tuple[tuple[float, float, float, float], ...] = ()  # boxes (xmin, zmin, xmax, zmax) to keep clear of
     shoulder_m: float = DEFAULT_SHOULDER_M  # how clear, in metres
+    turn: str | None = None  # "left" or "right": the road turns only that way (a spiral); None: either way
+    min_separation_m: float | None = None  # separate runs keep at least this far apart; None: not enforced
 
     @functools.cached_property
     def low(self):
@@ -216,72 +241,174 @@ def clearance_m(points, boxes, scale):
     return min((box_gap(point, box) * scale for point in points for box in boxes), default=math.inf)
 
 
-def find_cells(ground, grade, site=Site()):
-    """The cheapest cell path from the entrance down to the floor (or to `site.end`), as a list of (i, j) cells."""
-    grid, scale = site.grid, ground.scale
-    reliefs = [[ground.smoothed_m(*site.node(i, j)) for j in range(grid)] for i in range(grid)]
-    cell_m = (2 * site.half[0] / (grid - 1) * scale, 2 * site.half[1] / (grid - 1) * scale)
-    start_cell = site.nearest(site.start)
-    start = (*start_cell, site.heading, 0, 1)  # (i, j, heading, bucket, steps since the last turn)
-    metres = {start: math.dist(site.node(*start_cell), site.start) * scale}  # exact distance of each state
+class RoadSearch:
+    """Dijkstra over states (i, j, heading, bucket, steps since the last turn) from the site's start: see the
+    module's docstring. Each state's exact distance, the length its corners' arcs will remove and, when the laps
+    must keep apart, the cells far behind it along its road ride along with the cheapest way into it."""
 
-    if site.end:
-        end_cell = site.nearest(site.end)
-        at_target = lambda i, j: (i, j) == end_cell
-        # The level rule below pins the road's length at the end cell: no longer road can end there.
-        longest_m = min(site.max_length_m, (END_BELOW_GROUND_M[1] - reliefs[end_cell[0]][end_cell[1]]) / grade)
-    else:
-        goal_relief = ground.floor_m + FLOOR_MARGIN_M
-        at_target = lambda i, j: reliefs[i][j] < goal_relief
-        longest_m = site.max_length_m
+    def __init__(self, ground, grade, site):
+        self.ground, self.grade, self.site = ground, grade, site
+        grid, scale = site.grid, ground.scale
+        self.reliefs = [[ground.smoothed_m(*site.node(i, j)) for j in range(grid)] for i in range(grid)]
+        # How far the ground as it is lies below the smoothed relief at each node: the baked road's grade is the
+        # drop to the ground as it is, so where that is lower the road needs more length.
+        self.dips = [
+            [max(0.0, self.reliefs[i][j] - ground.height_m(*site.node(i, j))) for j in range(grid)] for i in range(grid)
+        ]
+        self.cell_m = (2 * site.half[0] / (grid - 1) * scale, 2 * site.half[1] / (grid - 1) * scale)
+        self.turns = TURNS[site.turn]
+        start_cell = site.nearest(site.start)
+        self.start = (*start_cell, site.heading, 0, 1)
+        self.metres = {self.start: math.dist(site.node(*start_cell), site.start) * scale}
+        self.saved = {self.start: self.run_in_saving(start_cell)}  # metres the arcs so far cut off the cell path
+        self.behind = {self.start: 0}  # bitset of the cells KEEP_APART_ALONG_M or more back along the road
+        self.previous = {}
+        self.near = self.near_masks() if site.min_separation_m else None
+        self.clear_steps = {}
 
-    def is_goal(state):
-        i, j = state[:2]
-        below_ground = reliefs[i][j] + grade * metres[state]
-        return at_target(i, j) and END_BELOW_GROUND_M[0] <= below_ground <= END_BELOW_GROUND_M[1]
+        if site.end:
+            self.end_cell = site.nearest(site.end)
+            # The level rule pins the road's baked length at the end cell: no longer road can end there.
+            i, j = self.end_cell
+            deepest = self.end_window(0.0, self.dips[i][j])[1]
+            self.longest_m = min(site.max_length_m, (deepest - self.reliefs[i][j]) / grade)
+        else:
+            self.goal_relief = ground.floor_m + FLOOR_MARGIN_M
+            self.longest_m = site.max_length_m
 
-    @functools.lru_cache(maxsize=None)
-    def step_is_clear(i, j, heading):
-        """Whether the step from a cell keeps its whole line out of the avoid boxes' shoulders."""
-        if not site.avoid:
-            return True
-        (ax, az), (bx, bz) = site.node(i, j), site.node(i + HEADINGS[heading][0], j + HEADINGS[heading][1])
-        count = math.ceil(math.dist((ax, az), (bx, bz)) * scale / ARC_STEP_M)
-        line = [(ax + (bx - ax) * k / count, az + (bz - az) * k / count) for k in range(count + 1)]
-        return clearance_m(line, site.avoid, scale) >= site.shoulder_m + AVOID_MARGIN_M
+    def cells(self):
+        """The cheapest cell path from the start to the floor (or to the end point), as a list of (i, j) cells."""
+        cost, queue = {self.start: 0.0}, [(0.0, self.start)]
+        while queue:
+            spent, state = heapq.heappop(queue)
+            if spent > cost[state]:
+                continue
+            if self.is_goal(state):
+                return cells_to(self.previous, state)
+            if self.metres[state] - self.saved[state] > self.longest_m:
+                continue
+            for following, step_cost, ride_along in self.moves(state):
+                if spent + step_cost < cost.get(following, math.inf):
+                    cost[following], self.previous[following] = spent + step_cost, state
+                    self.metres[following], self.saved[following], self.behind[following] = ride_along
+                    heapq.heappush(queue, (cost[following], following))
+        raise RuntimeError(f"no path from the entrance reaches the {'end point' if self.site.end else 'floor'}")
 
-    def moves(state):
+    def at_target(self, i, j):
+        if self.site.end:
+            return (i, j) == self.end_cell
+        return self.reliefs[i][j] < self.goal_relief
+
+    def is_goal(self, state):
+        """At the target, with the last arc's room behind it, and the level within the end window under the ground."""
+        i, j, _, _, straight = state
+        if not self.at_target(i, j) or straight < MIN_STRAIGHT_STEPS // 2:
+            return False
+        below_ground = self.reliefs[i][j] + self.grade * self.metres[state]
+        low, high = self.end_window(self.saved[state], self.dips[i][j])
+        return low <= below_ground <= high
+
+    def end_window(self, saved_m, dip_m):
+        """How far (min, max metres) the search's level may end below the ground: END_BELOW_GROUND_M, lowered as
+        far as needed for a road whose arcs remove `saved_m` metres and whose end's ground lies `dip_m` below the
+        smoothed relief, so that as baked it is no steeper."""
+        shift = max(0.0, self.grade * saved_m + dip_m + ARC_LEVEL_SPARE_M - END_BELOW_GROUND_M[0])
+        return END_BELOW_GROUND_M[0] + shift, END_BELOW_GROUND_M[1] + shift
+
+    def moves(self, state):
+        """The steps out of a state: (the state it leads to, its cost, its distance, saved length and cells behind)."""
         i, j, heading, _, straight = state
-        for turn in (-1, 0, 1):
+        for turn in self.turns:
             if turn and straight < MIN_STRAIGHT_STEPS:
                 continue
             heading_next = (heading + turn) % len(HEADINGS)
-            dx, dz = HEADINGS[heading_next]
-            i_next, j_next = i + dx, j + dz
-            if not (0 <= i_next < grid and 0 <= j_next < grid) or not step_is_clear(i, j, heading_next):
+            i_next, j_next = i + HEADINGS[heading_next][0], j + HEADINGS[heading_next][1]
+            if not (0 <= i_next < self.site.grid and 0 <= j_next < self.site.grid):
                 continue
-            step_m = math.hypot(dx * cell_m[0], dz * cell_m[1])
-            metres_next = metres[state] + step_m
-            dev = -grade * metres_next - reliefs[i_next][j_next]  # > 0 fill, < 0 cut
+            if not self.step_is_clear(i, j, heading_next):
+                continue
+            metres_next = self.metres[state] + self.step_m(heading_next)
+            behind_next = self.far_behind(state, metres_next) if self.near else 0
+            if self.near and self.near[i_next][j_next] & behind_next:
+                continue  # too near an earlier lap
+            dev = -self.grade * metres_next - self.reliefs[i_next][j_next]  # > 0 fill, < 0 cut
             penalty = (dev / DEVIATION_M) ** 2 * (CUT_WEIGHT if dev < 0 else 1.0)
             straight_next = 1 if turn else min(straight + 1, MIN_STRAIGHT_STEPS)
+            saved_next = self.saved[state] + (self.arc_saving(heading, heading_next) if turn else 0.0)
             following = (i_next, j_next, heading_next, round(metres_next / BUCKET_M), straight_next)
-            yield following, metres_next, step_m * penalty + TURN_COST * abs(turn)
+            step_cost = self.step_m(heading_next) * penalty + TURN_COST * abs(turn)
+            yield following, step_cost, (metres_next, saved_next, behind_next)
 
-    cost, previous, queue = {start: 0.0}, {}, [(0.0, start)]
-    while queue:
-        spent, state = heapq.heappop(queue)
-        if spent > cost[state]:
-            continue
-        if is_goal(state):
-            return cells_to(previous, state)
-        if metres[state] > longest_m:
-            continue
-        for following, metres_next, step_cost in moves(state):
-            if spent + step_cost < cost.get(following, math.inf):
-                cost[following], metres[following], previous[following] = spent + step_cost, metres_next, state
-                heapq.heappush(queue, (cost[following], following))
-    raise RuntimeError(f"no path from the entrance reaches the {'end point' if site.end else 'floor'}")
+    def step_m(self, heading):
+        dx, dz = HEADINGS[heading]
+        return math.hypot(dx * self.cell_m[0], dz * self.cell_m[1])
+
+    def arc_saving(self, heading, heading_next):
+        """How much shorter the corner between two steps becomes as baked."""
+        (ax, az), (bx, bz) = HEADINGS[heading], HEADINGS[heading_next]
+        return corner_saving((ax * self.cell_m[0], az * self.cell_m[1]), (bx * self.cell_m[0], bz * self.cell_m[1]))
+
+    def run_in_saving(self, start_cell):
+        """The corner between the run-in from an entrance outside the box and the first step, as baked."""
+        node, scale = self.site.node(*start_cell), self.ground.scale
+        run_in = ((node[0] - self.site.start[0]) * scale, (node[1] - self.site.start[1]) * scale)
+        dx, dz = HEADINGS[self.site.heading]
+        return corner_saving(run_in, (dx * self.cell_m[0], dz * self.cell_m[1])) if any(run_in) else 0.0
+
+    def step_is_clear(self, i, j, heading):
+        """Whether the step from a cell keeps its whole line out of the avoid boxes' shoulders."""
+        site, scale = self.site, self.ground.scale
+        if not site.avoid:
+            return True
+        if (i, j, heading) not in self.clear_steps:
+            (ax, az), (bx, bz) = site.node(i, j), site.node(i + HEADINGS[heading][0], j + HEADINGS[heading][1])
+            count = math.ceil(math.dist((ax, az), (bx, bz)) * scale / ARC_STEP_M)
+            line = [(ax + (bx - ax) * k / count, az + (bz - az) * k / count) for k in range(count + 1)]
+            self.clear_steps[i, j, heading] = clearance_m(line, site.avoid, scale) >= site.shoulder_m + AVOID_MARGIN_M
+        return self.clear_steps[i, j, heading]
+
+    def far_behind(self, state, metres_next):
+        """The cells KEEP_APART_ALONG_M or more back along the road from a step out of `state` that ends
+        `metres_next` along: the state's own set, and the cells it passed since that come into range now."""
+        bits, back = self.behind[state], state
+        while back and self.metres[back] > self.metres[state] - KEEP_APART_ALONG_M:  # not in the state's set yet
+            if self.metres[back] <= metres_next - KEEP_APART_ALONG_M:
+                bits |= 1 << (back[0] * self.site.grid + back[1])
+            back = self.previous.get(back)
+        return bits
+
+    def near_masks(self):
+        """For each cell, the bitset of cells whose nodes lie closer than the runs must keep apart (plus
+        SEPARATION_MARGIN_M)."""
+        grid, reach = self.site.grid, self.site.min_separation_m + SEPARATION_MARGIN_M
+        span = [math.ceil(reach / size) for size in self.cell_m]
+        offsets = [
+            (di, dj)
+            for di in range(-span[0], span[0] + 1)
+            for dj in range(-span[1], span[1] + 1)
+            if math.hypot(di * self.cell_m[0], dj * self.cell_m[1]) < reach
+        ]
+        masks = [[0] * grid for _ in range(grid)]
+        for i in range(grid):
+            for j in range(grid):
+                for di, dj in offsets:
+                    if 0 <= i + di < grid and 0 <= j + dj < grid:
+                        masks[i][j] |= 1 << ((i + di) * grid + j + dj)
+        return masks
+
+
+def corner_saving(a, b):
+    """How much shorter a corner between two legs (vectors in metres) becomes as baked: an arc of TURN_RADIUS_M
+    in place of two tangents, and the chords that resample the arc every SAMPLE_M (each falls short of its arc by
+    about its length cubed over 24 radii squared)."""
+    angle = abs(math.atan2(a[0] * b[1] - a[1] * b[0], a[0] * b[0] + a[1] * b[1]))
+    arc = TURN_RADIUS_M * angle
+    return TURN_RADIUS_M * 2 * math.tan(angle / 2) - arc + arc * SAMPLE_M**2 / (24 * TURN_RADIUS_M**2)
+
+
+def find_cells(ground, grade, site=Site()):
+    """The cheapest cell path from the entrance down to the floor (or to `site.end`), as a list of (i, j) cells."""
+    return RoadSearch(ground, grade, site).cells()
 
 
 def cells_to(previous, state):
@@ -312,7 +439,7 @@ def round_corners(points, scale, radius_m):
     for (ax, az), (bx, bz), (cx, cz) in zip(metres, metres[1:], metres[2:]):
         len_in, len_out = math.dist((ax, az), (bx, bz)), math.dist((bx, bz), (cx, cz))
         din, dout = ((bx - ax) / len_in, (bz - az) / len_in), ((cx - bx) / len_out, (cz - bz) / len_out)
-        turn = math.atan2(din[0] * dout[1] - din[1] * dout[0], din[0] * dout[0] + din[1] * dout[1])  # + is left
+        turn = math.atan2(din[0] * dout[1] - din[1] * dout[0], din[0] * dout[0] + din[1] * dout[1])  # + is +x to +z
         tangent = min(radius_m * math.tan(abs(turn) / 2), len_in - taken, len_out)
         radius = tangent / math.tan(abs(turn) / 2)
         taken = tangent
@@ -479,6 +606,10 @@ def parse_args(argv=None):
     parser.add_argument(
         "--shoulder", type=float, default=quarry.shoulder_m, help="clearance from --avoid boxes, metres"
     )
+    parser.add_argument("--turn", choices=("left", "right"), help="turn only this way, as a driver sees it (a spiral)")
+    parser.add_argument(
+        "--min-separation", type=float, metavar="M", help="keep separate runs at least M metres apart (enforced)"
+    )
     args = parser.parse_args(argv)
     if args.end and any(abs(e - c) > h for e, c, h in zip(args.end, args.centre, args.half)):
         parser.error("--end lies outside the search box (--centre +- --half)")
@@ -500,6 +631,8 @@ def main(argv=None):
         end=args.end,
         avoid=tuple(args.avoid),
         shoulder_m=args.shoulder,
+        turn=args.turn,
+        min_separation_m=args.min_separation,
     )
 
     ground = Ground(parse_relief(args.relief.read_text()), args.scale, site.start)
@@ -514,6 +647,10 @@ def main(argv=None):
         raise SystemExit(f"the planned road turns too tightly: {stats.min_radius:.1f} m < {MIN_TURN_RADIUS_M} m")
     if stats.clearance < site.shoulder_m:
         raise SystemExit(f"the planned road comes too near an avoid box: {stats.clearance:.1f} m < {site.shoulder_m} m")
+    if site.min_separation_m and stats.closest_runs < site.min_separation_m:
+        raise SystemExit(
+            f"the planned road's runs do not keep apart: {stats.closest_runs:.1f} m < {site.min_separation_m} m"
+        )
 
     summary = f"{len(points)} points, {describe(stats)}"
     notes = []

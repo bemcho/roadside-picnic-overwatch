@@ -368,6 +368,10 @@ the stalker stands still.
     inside the box snaps to a node, so neither end has a kink. The tool prints the
     closest approach of separate runs and of the road to a box, and a run other
     than the quarry's writes its options and numbers into the file's header.
+    `--turn left|right` makes the road turn only that way (a spiral) and
+    `--min-separation M` keeps its separate runs M m apart in the search, not
+    only in the report; a road with many corners keeps to `--grade` as baked (the
+    search allows for the length its arcs remove).
     `test_quarry_ramp_regenerates_unchanged` keeps the quarry's file byte for byte.
   - *Track:* `sites::quarry_ramp()` is the junction, the entrance and the baked
     points under the site's pose, so the quarry's 60 m drive is the ramp track's
