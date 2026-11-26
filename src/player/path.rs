@@ -335,7 +335,9 @@ mod tests {
     }
 
     #[test]
-    fn a_click_order_routes_down_the_ramp() {
+    // The A* router is slope-blind and may take the front wall rather than the
+    // ramp; this only proves the pit floor is reachable.
+    fn a_click_order_reaches_the_pit_floor() {
         let terrain = Terrain::new();
         let (pose, _) = quarry_scan();
         let scan = GlobalTransform::from(pose);

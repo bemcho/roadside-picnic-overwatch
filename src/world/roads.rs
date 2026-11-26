@@ -80,7 +80,7 @@ enum Surface {
     Street,
     /// The railway's gravel bed.
     Ballast,
-    /// The quarry's haul road: dirt, graded evenly from end to end.
+    /// The quarry's haul road: dirt: the drive follows the land, then the ramp is graded evenly from the entrance, with a rounded crest there.
     Ramp,
 }
 
@@ -375,6 +375,10 @@ fn graded_track(
     }
     let (junction, entrance) = (path[0], path[1]);
     let half = CREST_LENGTH / 2.0;
+    debug_assert!(
+        junction.distance(entrance) >= half,
+        "the ramp's drive is shorter than half the crest"
+    );
     // The crest's points: the drive's last half and the ramp's first half, in
     // steps, each with its signed run from the entrance (negative on the drive).
     let toward_junction = (junction - entrance).normalize();
