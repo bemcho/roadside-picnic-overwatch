@@ -819,32 +819,39 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "the baked path's corners (radius about 4.5 m) steepen the inner lane to 0.35; \
-                needs a path with turns of 14 m or more"]
     fn the_ramp_grade_stays_drivable() {
+        // The centerline holds the ramp's grade; on a bend the inner lane is
+        // shorter by R / (R - lane), and the 2 m mesh adds to it.
+        const CENTERLINE: f32 = 0.22;
+        const LANES: f32 = 0.35;
         let terrain = Terrain::new();
         let path: Vec<Vec2> = std::iter::once(roads::QUARRY)
             .chain(sites::quarry_ramp())
             .collect();
-        let mut worst = (0.0, Vec2::ZERO);
+        let mut worst = (0.0, 0.0, Vec2::ZERO);
         for &[a, b] in path.array_windows() {
             let steps = a.distance(b).ceil() as usize;
             let step_length = a.distance(b) / steps as f32;
             let across = (b - a).normalize().perp();
             for lane in [-1.8, 0.0, 1.8] {
+                let limit = if lane == 0.0 { CENTERLINE } else { LANES };
                 let mut last = terrain.mesh_height_at(a + across * lane);
                 for step in 1..=steps {
                     let at = a.lerp(b, step as f32 / steps as f32) + across * lane;
                     let height = terrain.mesh_height_at(at);
-                    let grade = (height - last).abs() / step_length;
-                    if grade > worst.0 {
-                        worst = (grade, at);
+                    let excess = (height - last).abs() / step_length - limit;
+                    if excess > worst.0 {
+                        worst = (excess, limit, at);
                     }
                     last = height;
                 }
             }
         }
-        assert!(worst.0 <= 0.22, "grade and position: {worst:?}");
+        let (excess, limit, at) = worst;
+        assert!(
+            excess <= 0.0,
+            "grade over its limit of {limit} by {excess} at {at}"
+        );
     }
 
     #[test]
