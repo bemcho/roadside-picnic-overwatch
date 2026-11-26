@@ -66,9 +66,11 @@ Measured in the source frame (glTF axes, before turning and centering):
            y 0.122); the track's lower run tops out at y 0.0165, so the wheels stop above it
   belts    |x| 0.1435..0.2398, 0.016 thick (lower run y 0..0.016), link pitch 0.0245 (an end
            connector, then a pair of guide horns at |x| 0.179..0.189 and 0.198..0.208 standing to
-           y 0.028); the upper run (y 0.161..0.177) is open inside, fused to the hull wall at
+           y 0.028); the upper run (y 0.162..0.1775) is open inside, fused to the hull wall at
            |x| 0.175 and the plate under the fender; the road wheels and return rollers keep the
-           horn faces their regions held. Loop ~1.90 long: 77.5 pitches, so 77 links left, 78 right
+           horn faces their regions held. Loop ~1.89 long: 77.3 pitches, so 77 links a side; its
+           mid-line runs y 0.008..0.011 along the lower run, dipping under each road wheel and
+           bowing up most between the last two (the scan's own shape, not smoothed away)
   civil    nose -X; mast (x -0.0105, z 0); hub y 0.291; blades droop to y ~0.24;
            tail rotor shaft along Z at (x 0.4385, y 0.157), hub and blades at z 0.050..0.059
   military nose -X; mast (x -0.075, z 0); hub y 0.300; fenestron (x 0.4271, y 0.1762) in a

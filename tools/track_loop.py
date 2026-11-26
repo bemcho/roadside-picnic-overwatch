@@ -22,16 +22,17 @@ def fit_loop(belt_zy, step, span=None, weights=None):
     It starts under the loop's middle.
 
     A principal curve: start from the convex hull, then move each point along its normal by the mean
-    offset of the faces nearest the loop within `span` of it (default three steps; make it a whole number
-    of link pitches on a real belt, or the curve follows each link's teeth and pads), and resample, until it
-    settles in the middle of the band. Averaging offsets rather than positions keeps arcs from shrinking.
+    offset of the faces nearest the loop within a box `span` long about it (default three steps), and
+    resample, until it settles in the middle of the band. On a real belt make `span` a whole number of link
+    pitches: the box then holds whole links wherever it sits, so the curve cannot follow each link's horns
+    and pads (a box any other length lets part of that once-per-pitch swing through). Averaging offsets rather than positions keeps arcs from shrinking.
     `weights` (the faces' areas) make it the middle of the surface, however finely each part is meshed."""
     points = np.asarray(belt_zy, dtype=float)
     weights = np.ones(len(points)) if weights is None else np.asarray(weights, dtype=float)
-    reach = max(1, int(round((span or 3 * step) / step / 2)))
     loop = resample(convex_hull(points), step)
     for _ in range(FIT_PASSES):
-        loop = resample(centre_on(points, weights, loop, reach), step)
+        window = box_window((span or 3 * step) / (loop_length(loop) / len(loop)))
+        loop = resample(centre_on(points, weights, loop, window), step)
     return start_and_direction(loop)
 
 
@@ -127,13 +128,22 @@ def nearest(points, loop, chunk=20000):
     ])
 
 
-def centre_on(points, weights, loop, reach):
+def box_window(width):
+    """Weights over loop points for a box `width` points long centred on one: each point weighs the part
+    of its own one-point stretch the box covers, so the end points weigh a fraction."""
+    half = width / 2
+    reach = int(np.ceil(half - 0.5))
+    k = np.arange(-reach, reach + 1)
+    return np.clip(np.minimum(k + 0.5, half) - np.maximum(k - 0.5, -half), 0.0, 1.0)
+
+
+def centre_on(points, weights, loop, window):
     """Move each loop point along its normal by the weighted mean offset of the points nearest the loop
-    within `reach` points of it, each offset measured from the loop point it is nearest."""
+    points under `window` (weights over neighbours, centred), each offset measured from the loop point
+    it is nearest."""
     owner = nearest(points, loop)
     normals = normals_of(loop)
     offsets = ((points - loop[owner]) * normals[owner]).sum(axis=1)
-    window = np.ones(2 * reach + 1)
     count = circular_sum(np.bincount(owner, weights, minlength=len(loop)), window)
     total = circular_sum(np.bincount(owner, weights * offsets, minlength=len(loop)), window)
     shift = np.divide(total, count, out=np.zeros(len(loop)), where=count > 0)

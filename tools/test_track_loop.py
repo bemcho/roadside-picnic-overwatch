@@ -95,6 +95,28 @@ class FitLoopTests(unittest.TestCase):
         top = unweighted[(np.abs(unweighted[:, 0]) < ARC_Z * 0.8) & (unweighted[:, 1] > ARC_Y)]
         self.assertGreater(np.abs(top[:, 1] - (ARC_Y + RADIUS)).mean(), 0.001)  # the bias the weights remove
 
+    def test_fit_loop_smooths_out_a_one_pitch_zigzag(self):
+        # Links repeat along the belt, so its faces' mean offset swings once per pitch (horns, pads). Over a
+        # span of whole pitches the fit must not follow that: of a +-1 mm square wave on the centroids, under
+        # 0.05 mm of one-pitch wave is left on the straight runs (a 2.5-pitch box left 0.3-0.9 mm).
+        pitch = 0.0245
+        rng = np.random.default_rng(5)
+        points = []
+        for s in rng.uniform(0, PERIMETER, 40000):
+            z, y, nz, ny = stadium_point(s)
+            offset = 0.001 * (1.0 if (s / pitch) % 1.0 < 0.5 else -1.0) + rng.uniform(-0.004, 0.004)
+            points.append((z + offset * nz, y + offset * ny))
+        loop = track_loop.fit_loop(np.array(points), pitch / 2, span=2 * pitch)
+        straight = np.abs(loop[:, 0]) < ARC_Z - pitch
+        for upper in (False, True):
+            run = loop[straight & ((loop[:, 1] > ARC_Y) == upper)]
+            off = run[:, 1] - ARC_Y - (RADIUS if upper else -RADIUS)
+            phase = 2 * np.pi * run[:, 0] / pitch
+            wave = 2 * np.hypot(np.mean(off * np.cos(phase)), np.mean(off * np.sin(phase)))
+            self.assertLess(wave, 0.00005)
+        arcs = [distance_to_stadium(z, y) for z, y in loop[~straight]]
+        self.assertLess(max(arcs), 0.001)  # the wider window does not flatten the arcs
+
 class LinkPitchTests(unittest.TestCase):
     def test_link_pitch_finds_the_repeat(self):
         rng = np.random.default_rng(3)
