@@ -23,6 +23,7 @@ pub const STALKER_MODEL: &str = "models/soldier/uhd/soldier_rigged.glb";
 pub const TERRAIN_SHADER: &str = "shaders/terrain.wesl";
 pub const WATER_SHADER: &str = "shaders/water.wesl";
 pub const CUTAWAY_SHADER: &str = "shaders/cutaway.wesl";
+pub const RAMP_CUT_SHADER: &str = "shaders/ramp_cut.wesl";
 pub const GROUND_FOG_SHADER: &str = "shaders/ground_fog.wesl";
 pub const PLANT_WIND_SHADER: &str = "shaders/plant_wind.wesl";
 pub const TERRAIN_GRASS_ALBEDO: &str = "textures/terrain/grass_albedo.png";
@@ -331,6 +332,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         server.load::<Shader>(TERRAIN_SHADER).untyped(),
         server.load::<Shader>(WATER_SHADER).untyped(),
         server.load::<Shader>(CUTAWAY_SHADER).untyped(),
+        server.load::<Shader>(RAMP_CUT_SHADER).untyped(),
         server.load::<Shader>(GROUND_FOG_SHADER).untyped(),
         server.load::<Shader>(PLANT_WIND_SHADER).untyped(),
     ]);

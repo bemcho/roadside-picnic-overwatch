@@ -17,6 +17,7 @@ mod places;
 mod plants;
 mod quarry_ramp;
 mod railway;
+mod ramp_cut;
 mod roads;
 mod rocks;
 mod scenery;
@@ -116,6 +117,7 @@ impl Plugin for WorldPlugin {
             MaterialPlugin::<TerrainMaterial>::default(),
             MaterialPlugin::<WaterMaterial>::default(),
             MaterialPlugin::<base::CutawayMaterial>::default(),
+            MaterialPlugin::<ramp_cut::RampCutMaterial>::default(),
             MaterialPlugin::<plants::PlantMaterial>::default(),
             ground_fog::GroundFogRenderPlugin,
             shroud::ShroudPlugin,
@@ -160,7 +162,7 @@ impl Plugin for WorldPlugin {
                 cordon::prepare_cordon,
                 cordon::spawn_booms,
                 cordon::spawn_hole_sign,
-                sites::spawn_sites,
+                (ramp_cut::prepare_ramp_cut, sites::spawn_sites).chain(),
                 town::spawn_town,
                 railway::spawn_railway,
                 marsh::spawn_marsh,
