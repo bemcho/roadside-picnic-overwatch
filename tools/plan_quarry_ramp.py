@@ -61,8 +61,8 @@ the last turn) from the start. The road's level is its grade times the distance 
 along with the cheapest way into a state; the buckets only merge states), so a step costs more the farther
 that level lies from the (smoothed) relief: per metre, a fill costs its square over 9, a cut twice that (cuts
 need banks), and each turn of one heading costs 20 (with --turn, only that way). A turn needs
-MIN_STRAIGHT_STEPS steps since the last, so the arcs of two corners fit between them, and the road ends no
-sooner than half that after its last turn, so the last arc fits. It ends where the relief is within
+MIN_STRAIGHT_STEPS steps since the last (more where the cells are small), so the arcs of two corners fit between
+them, and the road ends no sooner than one arc's room after its last turn, so the last arc fits. It ends where the relief is within
 FLOOR_MARGIN_M of the pit's floor (with --end: at the end point's node) and the level lies END_BELOW_GROUND_M
 under the ground there, so the road as built, graded up to that ground, comes out no steeper than the grade.
 The arcs at the corners shorten the road (0.4 m a 45 degree corner); a state carries how much, and when that is
@@ -113,13 +113,16 @@ SMOOTH_RADIUS_M = 2.2  # the relief is a 3x3 mean at this distance: the road ign
 FLOOR_MARGIN_M = 4.0  # how near the pit's floor the road may end
 # The search ends with its level this far (min, max metres) below the ground there. Graded up to that ground
 # the road is then flatter than the search's grade, which absorbs the arcs at the corners (they shorten the
-# road, a 45 degree corner by 0.4 m) so it cannot come out steeper. Where the arcs remove more level than the
-# window's 1.2 m less ARC_LEVEL_SPARE_M (the many corners of a winding road), the window moves down by the rest.
+# road, a 45 degree corner by 0.4 m) so it cannot come out steeper. The baked grade is the drop to the ground as
+# it is, so where the end's ground lies below the smoothed relief that dip counts too: where the arcs' level and
+# the dip come to more than the window's 1.2 m less ARC_LEVEL_SPARE_M (the many corners of a winding road, a
+# cleft at the end), the window moves down by the rest.
 END_BELOW_GROUND_M = (1.2, 1.8)
 ARC_LEVEL_SPARE_M = 0.2  # level kept beyond what the arcs and the ground's dip at the end need
 ARC_STEP_M = 0.5  # the arcs are laid down as points this far apart, then resampled with the rest
-MIN_STRAIGHT_STEPS = 4  # a turn needs this many steps (11 m or more) since the last, room for two arcs of
-# the sharpest corner (50 degrees: the cells are not square, so a "45 degree" turn is 40 or 50)
+MIN_STRAIGHT_STEPS = 4  # a turn needs this many steps (11 m or more on the quarry) since the last, and more on a
+# grid whose cells are too small for that to make room for two arcs of the sharpest corner
+SHARPEST_CORNER_DEG = 50.0  # the cells are not square, so a "45 degree" turn is 40 or 50
 MIN_TURN_RADIUS_M = 9.0  # the road never turns tighter than this
 TURN_RADIUS_M = 9.5  # the arcs at the corners, a little wider than needed so the baked points stay above it
 SAMPLE_M = 3.0  # spacing of the baked points
@@ -257,6 +260,10 @@ class RoadSearch:
         ]
         self.cell_m = (2 * site.half[0] / (grid - 1) * scale, 2 * site.half[1] / (grid - 1) * scale)
         self.turns = TURNS[site.turn]
+        # Steps a leg needs between two corners (min_straight) and after the last (end_straight): room for the arcs.
+        tangent = TURN_RADIUS_M * math.tan(math.radians(SHARPEST_CORNER_DEG) / 2)
+        self.min_straight = max(MIN_STRAIGHT_STEPS, math.ceil(2 * tangent / min(self.cell_m)))
+        self.end_straight = math.ceil(tangent / min(self.cell_m))
         start_cell = site.nearest(site.start)
         self.start = (*start_cell, site.heading, 0, 1)
         self.metres = {self.start: math.dist(site.node(*start_cell), site.start) * scale}
@@ -302,7 +309,7 @@ class RoadSearch:
     def is_goal(self, state):
         """At the target, with the last arc's room behind it, and the level within the end window under the ground."""
         i, j, _, _, straight = state
-        if not self.at_target(i, j) or straight < MIN_STRAIGHT_STEPS // 2:
+        if not self.at_target(i, j) or straight < self.end_straight:
             return False
         below_ground = self.reliefs[i][j] + self.grade * self.metres[state]
         low, high = self.end_window(self.saved[state], self.dips[i][j])
@@ -319,7 +326,7 @@ class RoadSearch:
         """The steps out of a state: (the state it leads to, its cost, its distance, saved length and cells behind)."""
         i, j, heading, _, straight = state
         for turn in self.turns:
-            if turn and straight < MIN_STRAIGHT_STEPS:
+            if turn and straight < self.min_straight:
                 continue
             heading_next = (heading + turn) % len(HEADINGS)
             i_next, j_next = i + HEADINGS[heading_next][0], j + HEADINGS[heading_next][1]
@@ -333,7 +340,7 @@ class RoadSearch:
                 continue  # too near an earlier lap
             dev = -self.grade * metres_next - self.reliefs[i_next][j_next]  # > 0 fill, < 0 cut
             penalty = (dev / DEVIATION_M) ** 2 * (CUT_WEIGHT if dev < 0 else 1.0)
-            straight_next = 1 if turn else min(straight + 1, MIN_STRAIGHT_STEPS)
+            straight_next = 1 if turn else min(straight + 1, self.min_straight)
             saved_next = self.saved[state] + (self.arc_saving(heading, heading_next) if turn else 0.0)
             following = (i_next, j_next, heading_next, round(metres_next / BUCKET_M), straight_next)
             step_cost = self.step_m(heading_next) * penalty + TURN_COST * abs(turn)

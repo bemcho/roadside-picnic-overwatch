@@ -766,7 +766,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "until the re-bake: the baked spiral runs over the Sphere"]
     fn the_crater_ramp_keeps_off_the_sphere() {
         // The Sphere stands on the crater's lowest wall; no leg of the road may
         // come nearer to it than its bed and a car's width.

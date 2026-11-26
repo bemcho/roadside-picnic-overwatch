@@ -862,7 +862,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "until the re-bake: the spiral crosses the x -1280 tile edge in a deep cut"]
     fn the_crater_ramp_grade_stays_drivable() {
         // The ramp from the Sphere's junction falls at about 0.17. Where a deep
         // cut crosses a tile edge, the 8 m edge stitch pulls the mesh up to

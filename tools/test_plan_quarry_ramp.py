@@ -311,6 +311,15 @@ class ConePitTests(unittest.TestCase):
                     )  # fmt: skip
             self.assertFalse(out.exists())
 
+    def test_corners_keep_room_for_their_arcs_on_a_fine_grid(self):
+        # Cells of 1.5 m in a small pit: four steps between corners leave too little room for two arcs of 9.5 m,
+        # and a road that ended right after its last corner would cut that arc short.
+        relief = cone_relief(span=90.0, rim=40.0, floor=8.0, depth=14.0)
+        site = self.site(entrance=(-41.0, 0.0), half=(42.0, 42.0), grid=56, end=(6.0, -4.0), max_length_m=400.0)
+        ground = ramp_tool.Ground(relief, 1.0, site.start)
+        points = ramp_tool.plan_path(ground, CONE_GRADE, site)
+        self.assertGreaterEqual(ramp_tool.measure(ground, points, site).min_radius, MIN_TURN_RADIUS_M)
+
     def test_command_line_pairs_and_boxes_read_negative_numbers(self):
         args = ramp_tool.parse_args(
             ["in.rs", "out.rs", "--centre=-1090,-100", "--half=170,230", "--entrance=-1194.7,97.2", "--end=-1150,-40"]
@@ -342,37 +351,53 @@ class SpiralTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.relief = cone_relief(**SPIRAL_PIT)
+        # Grid 32 is the coarsest on which the right-hand spiral's laps, left free, come closer than 18 m.
+        cls.free_spiral, _ = cls.run_spiral("--heading", 6, "--turn", "right")
+
+    @classmethod
+    def run_spiral(cls, *options):
+        """Run the tool on the spiral pit with these options more; the text printed and the file written."""
+        with tempfile.TemporaryDirectory() as folder:
+            relief_file, out = Path(folder) / "spiral.rs", Path(folder) / "ramp.rs"
+            relief_file.write_text(relief_file_text(cls.relief))
+            printed = run_tool(relief_file, out, *SPIRAL_OPTIONS, *options)
+            return printed, out.read_text()
 
     def plan(self, **options):
-        defaults = dict(entrance=SPIRAL_ENTRANCE, heading=6, half=(76.0, 76.0), grid=32, end=SPIRAL_END)
+        defaults = dict(entrance=SPIRAL_ENTRANCE, heading=6, half=(76.0, 76.0), grid=24, end=SPIRAL_END)
         site = ramp_tool.Site(**{**dict(max_length_m=700.0), **defaults, **options})
         ground = ramp_tool.Ground(self.relief, 1.0, site.start)
         points = ramp_tool.plan_path(ground, SPIRAL_GRADE, site)
         return points, ramp_tool.measure(ground, points, site)
 
-    def run_spiral(self, *options):
-        """Run the tool on the spiral pit with these options more; the text printed and the file written."""
-        with tempfile.TemporaryDirectory() as folder:
-            relief_file, out = Path(folder) / "spiral.rs", Path(folder) / "ramp.rs"
-            relief_file.write_text(relief_file_text(self.relief))
-            printed = run_tool(relief_file, out, *SPIRAL_OPTIONS, *options)
-            return printed, out.read_text()
-
     def test_turns_one_way_only(self):
-        free, _ = self.plan(heading=0)  # straight in: free to turn, it winds both ways
+        # Straight in, free to turn, the road winds both ways; told to, it turns only left (or right) to the
+        # same entrance's end on that hand.
+        free, _ = self.plan(heading=0)
         self.assertEqual(set(turn_sides(free)), {-1, 1}, "the free road already turns one way")
-        # Each way along the rim that circles the floor on that hand: -z for a right-hand spiral, +z for a left.
-        for turn, heading, end, side in (("left", 2, (8.0, -8.0), -1), ("right", 6, SPIRAL_END, 1)):
+        for turn, end, side in (("left", SPIRAL_END, -1), ("right", (8.0, -8.0), 1)):
             with self.subTest(turn):
-                points, stats = self.plan(turn=turn, heading=heading, end=end)
+                points, stats = self.plan(turn=turn, heading=0, end=end)
                 self.assertEqual(points[-1], end)
                 self.assertEqual(set(turn_sides(points)), {side})
                 self.assertLessEqual(stats.grade, SPIRAL_GRADE)
                 self.assertGreaterEqual(stats.min_radius, MIN_TURN_RADIUS_M)
 
+    def test_the_run_in_bends_once_against_the_turn(self):
+        # The entrance lies 14 m west of the box: the run-in heads +x, and the bend into -z (a left one) is rounded
+        # like any corner; from there on the road turns right only.
+        points, stats = self.plan(entrance=(-84.0, 0.0), half=(70.0, 70.0), grid=28, turn="right")
+        self.assertEqual(points[0], (-84.0, 0.0))
+        sides = turn_sides(points)
+        bend = sides.index(1)
+        self.assertGreater(bend, 0, "the run-in does not bend left")
+        self.assertEqual(set(sides[:bend]), {-1})
+        self.assertEqual(set(sides[bend:]), {1})
+        self.assertGreaterEqual(stats.min_radius, MIN_TURN_RADIUS_M)
+        self.assertLessEqual(stats.grade, SPIRAL_GRADE)
+
     def test_keeps_laps_apart(self):
-        free, _ = self.run_spiral("--heading", 6, "--turn", "right")
-        self.assertLess(closest_runs(free), MIN_RUN_GAP_M, "the free spiral's laps already keep apart")
+        self.assertLess(closest_runs(self.free_spiral), MIN_RUN_GAP_M, "the free spiral's laps already keep apart")
         printed, written = self.run_spiral("--heading", 6, "--turn", "right", "--min-separation", MIN_RUN_GAP_M)
         self.assertGreaterEqual(closest_runs(printed), MIN_RUN_GAP_M)
         self.assertIn("--min-separation 18.0", written.splitlines()[1])
@@ -382,9 +407,9 @@ class SpiralTests(unittest.TestCase):
             relief_file, out = Path(folder) / "spiral.rs", Path(folder) / "ramp.rs"
             relief_file.write_text(relief_file_text(self.relief))
             options = [*SPIRAL_OPTIONS, "--heading", 6, "--turn", "right"]
-            with self.assertRaises(SystemExit) as refused:
+            with self.assertRaisesRegex(SystemExit, "no path"):  # no spiral down this pit keeps 60 m apart
                 run_tool(relief_file, out, *options, "--min-separation", 60)
-            self.assertNotEqual(refused.exception.code, 0)
+            self.assertFalse(out.exists())
             # The search keeps its laps apart, so hand the tool a spiral whose laps run 5 m apart: 1.5 laps, every
             # 3 m, its radius closing from 30 m to 22 m (no turn under 9 m).
             angles = [k * 0.1 for k in range(95)]
@@ -395,15 +420,14 @@ class SpiralTests(unittest.TestCase):
             self.assertFalse(out.exists())
 
     def test_baked_grade_meets_the_target(self):
-        # The Golden Sphere's crater: a long road with many corners, whose arcs shorten it by metres.
+        # Down the Golden Sphere's crater to its floor: a long road with many corners, whose arcs shorten it by
+        # metres, ending where the ground as it is lies below the smoothed relief the search follows.
         relief = ramp_tool.parse_relief(CORE_RELIEF_FILE.read_text())
-        site = ramp_tool.Site(
-            entrance=(0.0, 0.47), half=(0.43, 0.47), grid=48, heading=6, end=(0.1, 0.0), max_length_m=600.0
-        )
+        site = ramp_tool.Site(entrance=(0.0, 0.45), half=(0.43, 0.47), grid=32, heading=6, max_length_m=700.0)
         ground = ramp_tool.Ground(relief, 120.0, site.start)
-        points = ramp_tool.plan_path(ground, 0.18, site)
+        points = ramp_tool.plan_path(ground, 0.2, site)
         self.assertGreaterEqual(len(ramp_tool.corner_points(points)), 12, "the road has few corners")
-        self.assertLessEqual(ramp_tool.measure(ground, points, site).grade, 0.18)
+        self.assertLessEqual(ramp_tool.measure(ground, points, site).grade, 0.2)
 
 
 def closest_runs(printed):

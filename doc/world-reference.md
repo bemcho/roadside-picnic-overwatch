@@ -451,14 +451,14 @@ the stalker stands still.
       and -36.8 m, 0.13 up), with no step at the quarry ramp's end
       (`the_crater_ramp_continues_the_quarry_ramps_level`). The 24 m crest lies at the
       junction (a 0.30 grade change; `the_ramp_crest_is_rounded` checks both ramps), and
-      from there the ramp falls at one grade, 0.171, over 394 m to the last point's
-      level (-104.3 m). The junction lies on the saddle between the quarry's and the
+      from there the ramp falls at one grade, 0.170, over 398 m to the last point's
+      level (-104.4 m). The junction lies on the saddle between the quarry's and the
       core's ground blends: the drive cuts up to 8.7 m and fills up to 4.3 m against the
       land, and the land rises 3.4 m from the junction to the entrance, so the road
-      lies 5.1 m below the land at the entrance and 6.9 m at the front edge, a cutting
+      lies 4.9 m below the land at the entrance and 6.8 m at the front edge, a cutting
       before the crater. The drive's leg to the entrance has no corner of its own: the
-      kinks are 11.3 degrees at the junction and 6.5 degrees at the first baked point
-      (a 7 m leg, then 3 m ones), by the circle through three points 254 m and 44 m;
+      kinks are 11.3 degrees at the junction and 3.3 degrees at the first baked point
+      (a 7 m leg, then 3 m ones), by the circle through three points 254 m and 86 m;
       `the_crater_ramp_bends_no_tighter_than_9_m` holds every corner of the track
       to 9 m and `the_connector_meets_the_spiral_in_line` the last kink to 10 degrees, so
       none is rounded.
@@ -466,12 +466,15 @@ the stalker stands still.
       src/world/pillars/golden_crater_ramp.rs` with the options in the file's header
       (`--scale 120`, entrance at the front edge's middle, `--turn right`,
       `--min-separation 18`, `--end` on the floor beside the Sphere, grade at most 0.19):
-      a right-hand spiral of 127 points and 378 m, laps at least 20 m apart, corners of 9.5 m.
+      a right-hand spiral of 128 points and 381 m, laps at least 20.6 m apart, corners of 9.5 m.
+      An `--avoid` box 1 m around the Sphere and the road's 9 m shoulder keep every leg 12.3 m or
+      more from the Sphere; the road ends on the floor 13 m from it, at (-1229.3, 73.1). The
+      search box (`--centre`, `--half`) keeps the centerline 6.8 m or more off the tile edges.
       The file is generated: regenerate it, never edit it.
     - *Cut and fill:* deep by design, the road makes its way through the crater's walls
-      (nothing caps it). Against the land the ramp cuts up to 44 m through the high west
-      rim (at world (-1234, 118), 188 m along the track) and fills up to 25 m on the east
-      edge (at (-1258, 32), 314 m along), over the scan's hole there; the quarry's
+      (nothing caps it). Against the land the ramp cuts up to 49 m through the high west
+      rim (at world (-1263, 121), 215 m along the track) and fills up to 25 m on the east
+      edge (at (-1259, 32), 316 m along), over the scan's hole there; the quarry's
       cut and fill tests do not apply. The crater ramp overrides the core's ground as
       the quarry's does its own (the core's ground blend is not a limit).
     - *Not cut yet:* the core scan is neither cut along the road nor cleared of its
@@ -484,13 +487,12 @@ the stalker stands still.
       Sphere's centre, not under the bed), `the_crater_ramp_laps_keep_apart` (18 m),
       `the_crater_ramp_keeps_clear_of_other_tracks` (18 m, after its first 30 m),
       `a_ramp_is_graded_evenly` and `every_track_joins_the_network_back_to_the_gate`
-      (both ramps). Two tests fail on the first bake and are ignored until it is made
-      again: `the_crater_ramp_keeps_off_the_sphere` (the spiral runs 0.19 m from the
-      Sphere, over its glow) and `the_crater_ramp_grade_stays_drivable` (where the road
-      crosses the tile edge x = -1280 in a deep cut, at (-1280.5, 72.3), the 8 m edge
-      stitch pulls the 2 m mesh 0.17 m off the road: 0.34 against the centerline's limit
-      of 0.25). A bake must keep its centerline off the 128 m tile edges x = -1280 and
-      z = 128 (model z = -0.437, x = -0.367). Not yet driven in the game.
+      (both ramps), `the_crater_ramp_keeps_off_the_sphere` (every leg 10 m or more from
+      the Sphere's centre) and `the_crater_ramp_grade_stays_drivable` (the render mesh
+      along the centerline and 1.8 m either side; where a deep cut crosses a tile edge,
+      the 8 m edge stitch pulls the 2 m mesh up to 0.17 m off the road, so a bake must
+      keep its centerline off the 128 m tile edges x = -1280 and z = 128, model z =
+      -0.437 and x = -0.367). Not yet driven in the game.
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town
   scan (`assets/models/harmont/`) line a street grid around a paved downtown
   plaza on one level town pad; each shows its full scan near the view and a
