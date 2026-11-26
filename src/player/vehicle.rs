@@ -4,6 +4,9 @@
 mod carrier;
 mod contact;
 mod patrol;
+// Task 3 of carrier-tracks wires this to the carrier; drop the allowance then.
+#[cfg_attr(not(test), allow(dead_code))]
+mod track_loop;
 mod traffic;
 
 pub(crate) use carrier::Carrier;
