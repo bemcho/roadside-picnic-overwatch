@@ -1,4 +1,4 @@
-"""Plan the quarry's haul road: a constant-grade centerline from the pit's front edge down to its floor.
+"""Plan the quarry's haul road: a centerline of one steady grade from the pit's front edge down to its floor.
 
 The "Quarry rim" diorama carries its own ground, a 64x64 relief grid (uhd_quarry_pit_ground.rs). The dirt
 ramp the game cuts into that ground follows the centerline baked here once, not searched at every load.
@@ -7,16 +7,21 @@ Run it from the repository root (about a second, pure Python):
     python3 tools/plan_quarry_ramp.py src/world/pillars/uhd_quarry_pit_ground.rs \
         src/world/pillars/quarry_ramp.rs [--grade 0.2] [--scale 110]
 
---grade is the constant slope of the road (0.2 drops 1 m per 5 m); --scale is the metres per model unit
-of the quarry (the quarry's scale in src/world/sites.rs). It prints the path's length, its largest fill
-and cut against the relief (metres) and how close its runs come to each other.
+--grade is the steepest slope the road may have (0.2 drops 1 m per 5 m); --scale is the metres per model
+unit of the quarry (the quarry's scale in src/world/sites.rs). It prints the path's length and grade, its
+largest fill and cut (metres, against the smoothed relief the search follows and, in brackets, the relief as
+it is) and how close its runs come to each other. It refuses to write a road steeper than --grade.
+
+The road is measured as the game builds it: graded evenly by distance from the drive's level at the
+entrance to the ground's level at the road's end, so its grade is the ground's drop over its length.
 
 Search. Dijkstra over states (cell of a 32x32 grid spanning the footprint, heading of 8, distance travelled
 in 2 m buckets) from the front edge's middle, heading -z. The road's level is its grade times the distance
 (the exact one, which rides along with the cheapest way into a state; the buckets only merge states), so a
 step costs more the farther that level lies from the (smoothed) relief: per metre, a fill costs its square
 over 25, a cut adds its square over 9 (cuts need banks), and each 45 degree turn costs 20. It ends where
-the relief is within FLOOR_MARGIN_M of the pit's floor and the level meets it. The cell path is then
+the relief is within FLOOR_MARGIN_M of the pit's floor and the level lies END_BELOW_GROUND_M under it,
+so the road as built, graded up to that ground, comes out no steeper than the grade. The cell path is then
 rounded with two Chaikin passes and resampled every ~3 m.
 
 Output. quarry_ramp.rs holds one `&[Vec2]` literal (x, z in model units, the first point on the front
@@ -31,6 +36,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 ENTRANCE = (0.0, 0.41655)  # the front edge's middle, where the quarry's drive arrives: level 0
+DEFAULT_GRADE = 0.2  # the steepest the road may be, end to end
+DEFAULT_SCALE = 110.0  # metres per model unit
 
 GRID = 32  # search cells across the footprint, spanning +-HALF_X and +-HALF_Z (model units)
 HALF_X, HALF_Z = 0.45, 0.38
@@ -42,7 +49,10 @@ TURN_COST = 20.0
 FILL_STIFFNESS_M, CUT_STIFFNESS_M = 5.0, 3.0  # a fill or cut of this many metres costs 1 per metre travelled
 SMOOTH_RADIUS = 0.02  # the relief is a 3x3 mean at this distance (model units): the road ignores clefts
 FLOOR_MARGIN_M = 4.0  # how near the pit's floor the road may end
-LEVEL_TOLERANCE_M = 1.5  # how near the road's level must be to the ground there
+# The search ends with its level this far (min, max metres) below the ground there. Graded up to that ground
+# the road is then flatter than the search's grade, which absorbs the rounded corners (they shorten the road
+# by about 1%, 0.5 m of level) so it cannot come out steeper.
+END_BELOW_GROUND_M = (0.6, 0.9)
 CHAIKIN_PASSES = 2
 SAMPLE_M = 3.0  # spacing of the baked points
 KEEP_APART_ALONG_M = 40.0  # runs this far apart along the path count as separate runs
@@ -89,6 +99,10 @@ class Ground:
         self.datum = relief.height(*ENTRANCE) * scale
         self.floor_m = min(min(row) for row in relief.heights) * scale - self.datum
 
+    def height_m(self, x, z):
+        """The relief as it is, in metres above the entrance."""
+        return self.relief.height(x, z) * self.scale - self.datum
+
     def smoothed_m(self, x, z):
         """The relief the road follows: a 3x3 mean around the point, in metres above the entrance."""
         taps = [(x + dx * SMOOTH_RADIUS, z + dz * SMOOTH_RADIUS) for dx in (-1, 0, 1) for dz in (-1, 0, 1)]
@@ -111,7 +125,8 @@ def find_cells(ground, grade):
 
     def is_goal(state):
         i, j = state[:2]
-        return reliefs[i][j] < goal_relief and abs(-grade * metres[state] - reliefs[i][j]) < LEVEL_TOLERANCE_M
+        below_ground = reliefs[i][j] + grade * metres[state]
+        return reliefs[i][j] < goal_relief and END_BELOW_GROUND_M[0] <= below_ground <= END_BELOW_GROUND_M[1]
 
     def moves(state):
         i, j, heading, _ = state
@@ -198,15 +213,22 @@ def plan_path(ground, grade):
 @dataclass
 class Stats:
     length: float  # m
-    max_fill: float  # m of road above the (smoothed) relief
+    grade: float  # the road's constant slope from the entrance down to the ground at its end
+    max_fill: float  # m of road above the smoothed relief
     max_cut: float  # m of road below it
+    max_fill_raw: float  # the same against the relief as it is, clefts and all
+    max_cut_raw: float
     closest_runs: float  # m in plan between runs that are far apart along the path
 
 
-def measure(ground, points, grade):
-    """How the road, at a constant grade from the entrance, sits against the relief."""
+def measure(ground, points):
+    """How the road sits against the relief, graded as the game builds it: evenly by distance from the
+    entrance's level to the ground's level at the end."""
     along = arc_lengths(points, ground.scale)
-    devs = [-grade * s - ground.smoothed_m(*p) for p, s in zip(points, along)]
+    grade = -ground.height_m(*points[-1]) / along[-1]
+    levels = [-grade * s for s in along]
+    smooth = [level - ground.smoothed_m(*p) for level, p in zip(levels, points)]  # > 0 fill, < 0 cut
+    raw = [level - ground.height_m(*p) for level, p in zip(levels, points)]
     closest = min(
         (
             math.dist(points[i], points[j]) * ground.scale
@@ -216,7 +238,7 @@ def measure(ground, points, grade):
         ),
         default=math.inf,
     )
-    return Stats(along[-1], max(devs), -min(devs), closest)
+    return Stats(along[-1], grade, max(smooth), -min(smooth), max(raw), -min(raw), closest)
 
 
 def write_points(path, points, relief_name):
@@ -231,17 +253,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("relief", type=Path, help="the quarry's relief file (uhd_quarry_pit_ground.rs)")
     parser.add_argument("output", type=Path, help="the Rust file to write (quarry_ramp.rs)")
-    parser.add_argument("--grade", type=float, default=0.2, help="the road's constant slope")
-    parser.add_argument("--scale", type=float, default=110.0, help="metres per model unit")
+    parser.add_argument("--grade", type=float, default=DEFAULT_GRADE, help="the steepest slope of the road")
+    parser.add_argument("--scale", type=float, default=DEFAULT_SCALE, help="metres per model unit")
     args = parser.parse_args()
 
     ground = Ground(parse_relief(args.relief.read_text()), args.scale)
     points = plan_path(ground, args.grade)
+    stats = measure(ground, points)
+    if stats.grade > args.grade:
+        raise SystemExit(f"the planned road is steeper than asked: {stats.grade:.3f} > {args.grade}")
     write_points(args.output, points, args.relief.name)
-    stats = measure(ground, points, args.grade)
     print(
-        f"{len(points)} points, length {stats.length:.0f} m, max fill {stats.max_fill:.1f} m, "
-        f"max cut {stats.max_cut:.1f} m, closest runs {stats.closest_runs:.1f} m"
+        f"{len(points)} points, length {stats.length:.0f} m, grade {stats.grade:.3f}, "
+        f"max fill {stats.max_fill:.1f} m (raw {stats.max_fill_raw:.1f}), "
+        f"max cut {stats.max_cut:.1f} m (raw {stats.max_cut_raw:.1f}), closest runs {stats.closest_runs:.1f} m"
     )
 
 

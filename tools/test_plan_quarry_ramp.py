@@ -16,8 +16,9 @@ import plan_quarry_ramp as ramp_tool  # noqa: E402
 
 REPO = Path(__file__).resolve().parent.parent
 RELIEF_FILE = REPO / "src/world/pillars/uhd_quarry_pit_ground.rs"
-GRADE = 0.2
-SCALE = 110.0
+GRADE = ramp_tool.DEFAULT_GRADE
+SCALE = ramp_tool.DEFAULT_SCALE
+MIN_RUN_GAP_M = 18.0  # the bed and shoulder (9 m each side) of two runs must not overlap
 
 
 class RampTests(unittest.TestCase):
@@ -42,30 +43,34 @@ class RampTests(unittest.TestCase):
         self.assertAlmostEqual(relief.height(-9.0, 9.0), 4.0)  # clamped to the nearest corner
 
     def test_path_descends_to_the_floor(self):
-        stats = ramp_tool.measure(self.ground, self.points, GRADE)
+        stats = ramp_tool.measure(self.ground, self.points)
         self.assertTrue(180 <= stats.length <= 320, stats.length)
         floor = min(min(row) for row in self.relief.heights) * SCALE - self.ground.datum
         self.assertLessEqual(self.ground.smoothed_m(*self.points[-1]) - floor, 4.0)
 
-    def test_path_stays_near_the_relief(self):
-        stats = ramp_tool.measure(self.ground, self.points, GRADE)
+    def test_road_as_built_is_no_steeper_than_the_grade(self):
+        # The game grades the ramp evenly between its end levels, so the ground's drop over the length is its grade.
+        stats = ramp_tool.measure(self.ground, self.points)
+        drop = -self.ground.height_m(*self.points[-1])
+        self.assertAlmostEqual(stats.grade, drop / stats.length)
+        self.assertLessEqual(stats.grade, GRADE)
+
+    def test_path_stays_near_the_smoothed_relief(self):
+        stats = ramp_tool.measure(self.ground, self.points)
         self.assertLessEqual(stats.max_fill, 8.0)
         self.assertLessEqual(stats.max_cut, 3.0)
 
-    def test_grade_from_entrance_to_floor_stays_near_the_constant_one(self):
-        # The game grades the ramp evenly between its end levels, so the drop over the length is its grade.
-        stats = ramp_tool.measure(self.ground, self.points, GRADE)
-        drop = -self.ground.smoothed_m(*self.points[-1])
-        self.assertAlmostEqual(drop / stats.length, GRADE, delta=0.01)
+    def test_path_stays_near_the_relief_as_it_is(self):
+        stats = ramp_tool.measure(self.ground, self.points)
+        self.assertLessEqual(stats.max_fill_raw, 8.0)
+        self.assertLessEqual(stats.max_cut_raw, 4.5)
 
     def test_runs_keep_apart(self):
-        along = [0.0]
-        for a, b in zip(self.points, self.points[1:]):
-            along.append(along[-1] + math.dist(a, b) * SCALE)
+        along = ramp_tool.arc_lengths(self.points, SCALE)
         for i, a in enumerate(self.points):
             for j in range(i):
-                if along[i] - along[j] >= 40.0:
-                    self.assertGreaterEqual(math.dist(a, self.points[j]) * SCALE, 18.0, (j, i))
+                if along[i] - along[j] >= ramp_tool.KEEP_APART_ALONG_M:
+                    self.assertGreaterEqual(math.dist(a, self.points[j]) * SCALE, MIN_RUN_GAP_M, (j, i))
 
     def test_writes_rust_points(self):
         with tempfile.TemporaryDirectory() as folder:
