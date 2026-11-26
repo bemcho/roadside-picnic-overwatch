@@ -5,7 +5,7 @@ keeps only geometry: positions, smooth normals and UVs in the source's exact fra
 primitive with a plain material and no images. glTF Transform's simplify stalls on foliage
 (UV seams and loose leaf cards); Blender's collapse decimation reaches any triangle budget.
 
-    BLENDER=~/.cache/blender/blender-4.5.16-linux-x64/blender
+    BLENDER=~/.local/blender-4.5.16-linux-x64/blender
     "$BLENDER" -b --factory-startup --python-exit-code 1 -P tools/build_far_lod.py -- \
         assets/models/plants/medium/shrub.glb assets/models/plants/low/shrub.glb --triangles 450
 

@@ -20,6 +20,8 @@ use super::collision::{Collider, Pillar};
 use super::cordon;
 use super::map::map;
 use super::places::Place;
+use super::quarry_ramp::quarry_pillars;
+use super::ramp_cut::{RampCutImage, RampCutMaterial, RampCutScan, cut_scan_stone};
 use super::roads;
 use super::terrain::{BASE, TILE_SIZE, landform_height, lerp, smoothstep};
 use super::town;
@@ -544,6 +546,10 @@ const PAD_BLEND: f32 = 26.0;
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
 const TRAIN_PILLARS: &[Pillar] = include!("pillars/vehicle_train.rs");
 
+/// The quarry's haul road in the model's units, from the front edge's middle.
+#[allow(clippy::approx_constant, reason = "Measured model coordinates")]
+const QUARRY_RAMP: &[Vec2] = include!("pillars/quarry_ramp.rs");
+
 #[derive(Clone, Copy)]
 pub(super) struct Landmark {
     kind: Kind,
@@ -562,6 +568,15 @@ impl Landmark {
 
     fn model(self) -> &'static Model {
         &MODELS[self.kind as usize]
+    }
+
+    /// The collision this site puts in the world: the quarry's keeps its
+    /// haul ramp clear.
+    fn solids(self) -> &'static [Pillar] {
+        match self.kind {
+            QuarryRim => quarry_pillars(),
+            _ => self.model().pillars,
+        }
     }
 
     /// Inside the Zone, beyond the Perimeter (rather than in Harmont).
@@ -742,10 +757,50 @@ pub(super) fn institute_pose() -> Transform {
 }
 
 fn institute() -> Landmark {
+    landmark(Institute)
+}
+
+fn landmark(kind: Kind) -> Landmark {
     LANDMARKS
         .into_iter()
-        .find(|site| site.kind == Institute)
-        .expect("the Institute is a landmark")
+        .find(|site| site.kind == kind)
+        .expect("every kind of site is a landmark")
+}
+
+/// The quarry's haul road in world xz: its drive from the junction to the
+/// entrance, then the baked path (`tools/plan_quarry_ramp.py`) down into the pit.
+pub(crate) fn quarry_ramp() -> Vec<Vec2> {
+    let site = landmark(QuarryRim);
+    let pose = site.pose();
+    let path = QUARRY_RAMP
+        .iter()
+        .map(|at| pose.transform_point(Vec3::new(at.x, 0.0, at.y)).xz());
+    [site.junction, site.entrance()]
+        .into_iter()
+        .chain(path)
+        .collect()
+}
+
+/// The quarry scan's pose and its collision as the model carries it, before
+/// the ramp's cut corridor is cleared (`quarry_ramp::quarry_pillars`).
+pub(crate) fn quarry_scan() -> (Transform, &'static [Pillar]) {
+    let site = landmark(QuarryRim);
+    (site.pose(), site.model().pillars)
+}
+
+/// The corners of the box around the quarry scan's footprint in world xz.
+pub(super) fn quarry_footprint() -> (Vec2, Vec2) {
+    let site = landmark(QuarryRim);
+    let (pose, half) = (site.pose(), site.model().half);
+    [(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)]
+        .map(|(x, z)| {
+            pose.transform_point(Vec3::new(x * half.x, 0.0, z * half.y))
+                .xz()
+        })
+        .into_iter()
+        .fold((Vec2::MAX, Vec2::MIN), |(low, high), corner| {
+            (low.min(corner), high.max(corner))
+        })
 }
 
 /// Every site and the derailed train as a rough upright cylinder around the
@@ -861,6 +916,8 @@ pub(super) fn spawn_sites(
     server: Res<AssetServer>,
     paints: Res<Assets<GltfMaterial>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut cut_materials: ResMut<Assets<RampCutMaterial>>,
+    cut: Res<RampCutImage>,
 ) {
     let models = MODELS.each_ref().map(|model| {
         let (mesh, paint) = assets::load_single_primitive(&server, model.far);
@@ -870,17 +927,32 @@ pub(super) fn spawn_sites(
             materials.add(standard_material_from_gltf_material(paint)),
         )
     });
+    // The quarry's stand-in is drawn through the ramp's cut, as its scan is.
+    let quarry_paint = {
+        let (_, paint) = &models[QuarryRim as usize];
+        let paint = materials
+            .get(paint)
+            .expect("the stand-in's material was just added");
+        cut_materials.add(cut.material(paint.clone()))
+    };
     for (index, site) in LANDMARKS.into_iter().enumerate() {
         let (mesh, paint) = &models[site.kind as usize];
-        commands
-            .spawn((
-                WorldRoot,
-                Name::new(site.model().name),
-                SiteDisplay { index },
-                site.pose(),
-                Visibility::default(),
-            ))
-            .with_child((FarSite, Mesh3d(mesh.clone()), MeshMaterial3d(paint.clone())));
+        let mut display = commands.spawn((
+            WorldRoot,
+            Name::new(site.model().name),
+            SiteDisplay { index },
+            site.pose(),
+            Visibility::default(),
+        ));
+        if site.kind == QuarryRim {
+            display.with_child((
+                FarSite,
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(quarry_paint.clone()),
+            ));
+        } else {
+            display.with_child((FarSite, Mesh3d(mesh.clone()), MeshMaterial3d(paint.clone())));
+        }
     }
     let (mesh, paint) = assets::load_single_primitive(&server, assets::VEHICLE_TRAIN);
     let paint = paints.get(&paint).expect("preloaded train material");
@@ -944,14 +1016,16 @@ pub(super) fn stream_full_sites(
         match full {
             None if nearest < reach => {
                 if let Some(scene) = scans.scene(path) {
-                    commands
-                        .spawn((
-                            FullSite { display },
-                            ChildOf(display),
-                            WorldAssetRoot(scene),
-                            Visibility::Hidden,
-                        ))
-                        .observe(reveal_full_site);
+                    let mut full = commands.spawn((
+                        FullSite { display },
+                        ChildOf(display),
+                        WorldAssetRoot(scene),
+                        Visibility::Hidden,
+                    ));
+                    full.observe(reveal_full_site);
+                    if landmark.kind == QuarryRim {
+                        full.insert(RampCutScan).observe(cut_scan_stone);
+                    }
                 }
             }
             // Dropping the instance releases its hold on the scan's GPU copy,
@@ -992,7 +1066,7 @@ fn reveal_full_site(
 pub(super) fn spawn_solids(parent: &mut ChildSpawnerCommands, tile: IVec2) {
     for site in LANDMARKS {
         if (site.center / TILE_SIZE).floor().as_ivec2() == tile {
-            parent.spawn((site.pose(), Collider(site.model().pillars)));
+            parent.spawn((site.pose(), Collider(site.solids())));
         }
     }
     if (DERAILED_TRAIN_CENTER / TILE_SIZE).floor().as_ivec2() == tile {
@@ -1056,6 +1130,10 @@ mod tests {
                     "{kind:?} at {} flooded at {at}",
                     site.center
                 );
+                // A ramp is cut into the ground it crosses.
+                if terrain.roads.sample(at).is_some_and(|road| road.is_ramp()) {
+                    continue;
+                }
                 let ground = terrain.height_at(at.x, at.y);
                 let expected = match site.model().ground {
                     Ground::Level(datum) => pose.translation.y + datum * site.model().scale,
@@ -1269,6 +1347,32 @@ mod tests {
     fn stand_in_shows(app: &App, far: Entity) -> bool {
         let visibility = app.world().entity(far).get::<Visibility>();
         visibility == Some(&Visibility::Inherited)
+    }
+
+    #[test]
+    fn only_the_quarry_scan_is_cut_by_the_ramp() {
+        let quarry = LANDMARKS
+            .iter()
+            .position(|site| site.kind == QuarryRim)
+            .expect("the quarry is a site");
+        let mut scans = GpuScans::new(1 << 30);
+        for index in [0, quarry] {
+            scans.insert_resident(LANDMARKS[index].model().path, Handle::default());
+        }
+        let (mut app, anchor, _) = streaming_sites(scans, &[0, quarry]);
+        let stand_at = |app: &mut App, index: usize| {
+            let at = LANDMARKS[index].center;
+            app.world_mut()
+                .entity_mut(anchor)
+                .insert(Transform::from_xyz(at.x, 0.0, at.y));
+            app.update();
+            let [full] = full_sites(app)[..] else {
+                panic!("one site shows its scan");
+            };
+            app.world().entity(full).contains::<RampCutScan>()
+        };
+        assert!(!stand_at(&mut app, 0));
+        assert!(stand_at(&mut app, quarry));
     }
 
     #[test]

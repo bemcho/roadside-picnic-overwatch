@@ -241,7 +241,8 @@ fn smooth(grid: &Grid, from: Vec2, points: Vec<Vec2>) -> Vec<Vec2> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::Pillar;
+    use crate::player::STANDING;
+    use crate::world::{Pillar, quarry_pillars, quarry_ramp, quarry_scan};
 
     const WALL: &[Pillar] = &[
         Pillar {
@@ -327,6 +328,31 @@ mod tests {
             }
             previous = point;
         }
+    }
+
+    fn length(points: &[Vec2]) -> f32 {
+        points.windows(2).map(|leg| leg[0].distance(leg[1])).sum()
+    }
+
+    #[test]
+    // The A* router is slope-blind and may take the front wall rather than the
+    // ramp; this only proves the pit floor is reachable.
+    fn a_click_order_reaches_the_pit_floor() {
+        let terrain = Terrain::new();
+        let (pose, _) = quarry_scan();
+        let scan = GlobalTransform::from(pose);
+        let collider = Collider(quarry_pillars());
+        let ramp = &quarry_ramp()[1..];
+        let (entrance, pit) = (ramp[0], ramp[ramp.len() - 1]);
+
+        let path = find_path(&terrain, [(&collider, &scan)], entrance, pit, STANDING, 1.0)
+            .expect("a route down the ramp");
+        let route = length(&[&[entrance], path.as_slice()].concat());
+        let limit = length(ramp) * 1.6;
+        assert!(
+            route <= limit,
+            "the route is {route} m, the limit {limit} m"
+        );
     }
 
     fn push_free(at: Vec2, collider: &Collider, wall: &GlobalTransform, body: Body) -> Vec2 {

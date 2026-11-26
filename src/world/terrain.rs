@@ -10,7 +10,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 
 use super::hydrology::Wetlands;
-use super::roads::RoadNetwork;
+use super::roads::{RoadNetwork, RoadSample};
 
 const PLAYABLE_HALF_METRES: u32 = 1720;
 /// The traversal limit; visible terrain extends past it.
@@ -198,12 +198,18 @@ impl Terrain {
 
         // Road: the track is flattened toward a gentle ramp between its ends,
         // over pads and up to the dioramas' fronts alike.
-        if let Some(road) = self.roads.sample(Vec2::new(x, z)) {
+        let road = self.roads.sample(Vec2::new(x, z));
+        if let Some(road) = &road {
             h = lerp(h, road.height, road.mask());
         }
         h = wetlands.soil_height(x, z, h);
         if let Some(ground) = super::sites::diorama_ground(Vec2::new(x, z)) {
             h = ground;
+            // A diorama's own ground hides every road but a ramp, which is
+            // cut into it (or built up on it) after the override.
+            if let Some(ramp) = road.filter(RoadSample::is_ramp) {
+                h = lerp(h, ramp.height, ramp.mask());
+            }
         }
 
         // Base: levelled flat for the yard.
@@ -585,6 +591,7 @@ pub(super) fn fbm(x: f32, z: f32, seed: u32, octaves: u32, base_freq: f32) -> f3
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::world::{roads, sites};
 
     #[test]
     fn the_playable_area_is_fivefold_with_landscape_past_the_far_plane() {
@@ -782,6 +789,187 @@ mod tests {
             let h = terrain.height_at(BASE.0 + dx, BASE.1 + dz);
             assert!((h - level).abs() < 1e-4, "pad not level at ({dx}, {dz})");
             assert_eq!(terrain.woodland_at(BASE.0 + dx, BASE.1 + dz), 0.0);
+        }
+    }
+
+    /// The quarry's haul road in the pit's own ground, with its graded level.
+    fn ramp_in_the_diorama(terrain: &Terrain) -> Vec<(Vec2, f32, f32)> {
+        sites::quarry_ramp()
+            .into_iter()
+            .filter_map(|at| {
+                let ground = sites::diorama_ground(at)?;
+                let level = terrain.roads.sample(at).expect("the ramp is a road").height;
+                Some((at, ground, level))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_ramp_cuts_into_the_quarry() {
+        let terrain = Terrain::new();
+        let inside = ramp_in_the_diorama(&terrain);
+        assert!(inside.len() > 50, "the ramp lies in the diorama");
+        for (at, _, level) in inside {
+            let height = terrain.mesh_height_at(at);
+            assert!(
+                (height - level).abs() < 0.3,
+                "ground {height} vs ramp {level} at {at}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_ramp_grade_stays_drivable() {
+        // The centerline holds the ramp's grade; on a bend the inner lane is
+        // shorter by R / (R - lane), and the 2 m mesh adds to it.
+        // The road level is exactly 0.191; the render mesh strays up to 0.11 m from it in a bend.
+        const CENTERLINE: f32 = 0.25;
+        const LANES: f32 = 0.35;
+        let terrain = Terrain::new();
+        let path = sites::quarry_ramp();
+        let mut worst = (0.0, 0.0, Vec2::ZERO);
+        for &[a, b] in path.array_windows() {
+            let steps = a.distance(b).ceil() as usize;
+            let step_length = a.distance(b) / steps as f32;
+            let across = (b - a).normalize().perp();
+            for lane in [-1.8, 0.0, 1.8] {
+                let limit = if lane == 0.0 { CENTERLINE } else { LANES };
+                let mut last = terrain.mesh_height_at(a + across * lane);
+                for step in 1..=steps {
+                    let at = a.lerp(b, step as f32 / steps as f32) + across * lane;
+                    let height = terrain.mesh_height_at(at);
+                    let excess = (height - last).abs() / step_length - limit;
+                    if excess > worst.0 {
+                        worst = (excess, limit, at);
+                    }
+                    last = height;
+                }
+            }
+        }
+        let (excess, limit, at) = worst;
+        assert!(
+            excess <= 0.0,
+            "grade over its limit of {limit} by {excess} at {at}"
+        );
+    }
+
+    #[test]
+    fn the_ramp_crest_is_rounded() {
+        // A 24 m vertical curve over the 0.27 grade change at the entrance;
+        // a sharper break launches a car at full throttle.
+        const CURVATURE: f32 = 0.27 / 24.0 * 1.1;
+        let terrain = Terrain::new();
+        let path = sites::quarry_ramp();
+        let entrance = path[0].distance(path[1]);
+        // The road's level at each metre along the track, 20 m either side of the entrance.
+        let mut levels = Vec::new();
+        let mut start = 0.0;
+        for &[a, b] in path.array_windows() {
+            let leg = a.distance(b);
+            let mut run = (entrance - 20.0).max(start).ceil();
+            while run < start + leg && run <= entrance + 20.0 {
+                let at = a.lerp(b, (run - start) / leg);
+                levels.push(terrain.roads.sample(at).expect("a road").height);
+                run += 1.0;
+            }
+            start += leg;
+        }
+        assert!(levels.len() >= 40, "{} samples", levels.len());
+        for (i, window) in levels.array_windows::<3>().enumerate() {
+            let change = (window[2] - 2.0 * window[1] + window[0]).abs();
+            assert!(
+                change <= CURVATURE,
+                "grade changes by {change} per metre at sample {}",
+                i + 1
+            );
+        }
+    }
+
+    #[test]
+    fn the_ramp_ends_on_the_floor() {
+        let terrain = Terrain::new();
+        let (end, floor, _) = *ramp_in_the_diorama(&terrain)
+            .last()
+            .expect("the ramp lies in the diorama");
+        let height = terrain.mesh_height_at(end);
+        assert!(
+            (height - floor).abs() < 1.0,
+            "ramp end {height} vs floor {floor} at {end}"
+        );
+    }
+
+    #[test]
+    fn the_ramp_stays_near_the_scan() {
+        let terrain = Terrain::new();
+        for (at, ground, level) in ramp_in_the_diorama(&terrain) {
+            // Raw relief has clefts a ramp may span or cut, which the scan's
+            // cutaway hides. The drive's 7 m before the front edge already
+            // lower the ramp by 1.4 m there, deepening its cuts.
+            assert!(
+                (-5.0..=8.0).contains(&(level - ground)),
+                "ramp {level} vs scan {ground} at {at}"
+            );
+        }
+    }
+
+    /// Lines across the quarry's gate, a metre apart from 5 m before its
+    /// entrance to 6 m past it, where the drive and the ramp's first leg run
+    /// straight; on each, points every 0.25 m out to `half_width` either side.
+    fn lines_across_the_gate(half_width: f32) -> Vec<Vec<Vec2>> {
+        let site = sites::LANDMARKS
+            .iter()
+            .find(|site| site.junction == roads::QUARRY)
+            .expect("the quarry is a landmark");
+        let entrance = site.entrance();
+        let axis = (entrance - site.junction).normalize();
+        let steps = (half_width / 0.25) as i32;
+        (-5..=6)
+            .map(|metre| {
+                let line = entrance + axis * metre as f32;
+                (-steps..=steps)
+                    .map(|step| line + axis.perp() * step as f32 * 0.25)
+                    .collect()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn the_quarry_gate_road_has_no_step_across_it() {
+        let terrain = Terrain::new();
+        for line in lines_across_the_gate(roads::RAMP_HALF_WIDTH) {
+            let heights: Vec<f32> = line
+                .iter()
+                .map(|&at| {
+                    terrain
+                        .roads
+                        .sample(at)
+                        .expect("the gate is on the road")
+                        .height
+                })
+                .collect();
+            for (&[a, b], at) in heights.array_windows().zip(&line[1..]) {
+                assert!((a - b).abs() <= 0.1, "road height steps {a} to {b} at {at}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_quarry_gate_ground_is_level_across_it() {
+        // The axis is straight there, so each line across it lies at one level,
+        // give or take the 2 m mesh.
+        let terrain = Terrain::new();
+        for line in lines_across_the_gate(3.0) {
+            let (low, high) = line
+                .iter()
+                .map(|&at| terrain.mesh_height_at(at))
+                .fold((f32::MAX, f32::MIN), |(low, high), h| {
+                    (low.min(h), high.max(h))
+                });
+            assert!(
+                high - low <= 0.05,
+                "ground spans {low} to {high} across the line at {}",
+                line[0]
+            );
         }
     }
 }
