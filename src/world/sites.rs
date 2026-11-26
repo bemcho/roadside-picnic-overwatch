@@ -20,6 +20,7 @@ use super::collision::{Collider, Pillar};
 use super::cordon;
 use super::map::map;
 use super::places::Place;
+use super::quarry_ramp::quarry_pillars;
 use super::roads;
 use super::terrain::{BASE, TILE_SIZE, landform_height, lerp, smoothstep};
 use super::town;
@@ -568,6 +569,15 @@ impl Landmark {
         &MODELS[self.kind as usize]
     }
 
+    /// The collision this site puts in the world: the quarry's keeps its
+    /// haul ramp clear.
+    fn solids(self) -> &'static [Pillar] {
+        match self.kind {
+            QuarryRim => quarry_pillars(),
+            _ => self.model().pillars,
+        }
+    }
+
     /// Inside the Zone, beyond the Perimeter (rather than in Harmont).
     pub fn in_zone(self) -> bool {
         cordon::in_zone(self.center)
@@ -758,7 +768,7 @@ fn landmark(kind: Kind) -> Landmark {
 
 /// The quarry's haul road in world xz: its drive from the junction to the
 /// entrance, then the baked path (`tools/plan_quarry_ramp.py`) down into the pit.
-pub(super) fn quarry_ramp() -> Vec<Vec2> {
+pub(crate) fn quarry_ramp() -> Vec<Vec2> {
     let site = landmark(QuarryRim);
     let pose = site.pose();
     let path = QUARRY_RAMP
@@ -768,6 +778,13 @@ pub(super) fn quarry_ramp() -> Vec<Vec2> {
         .into_iter()
         .chain(path)
         .collect()
+}
+
+/// The quarry scan's pose and its collision as the model carries it, before
+/// the ramp's bed is cleared (`quarry_ramp::quarry_pillars`).
+pub(crate) fn quarry_scan() -> (Transform, &'static [Pillar]) {
+    let site = landmark(QuarryRim);
+    (site.pose(), site.model().pillars)
 }
 
 /// Every site and the derailed train as a rough upright cylinder around the
@@ -1014,7 +1031,7 @@ fn reveal_full_site(
 pub(super) fn spawn_solids(parent: &mut ChildSpawnerCommands, tile: IVec2) {
     for site in LANDMARKS {
         if (site.center / TILE_SIZE).floor().as_ivec2() == tile {
-            parent.spawn((site.pose(), Collider(site.model().pillars)));
+            parent.spawn((site.pose(), Collider(site.solids())));
         }
     }
     if (DERAILED_TRAIN_CENTER / TILE_SIZE).floor().as_ivec2() == tile {
