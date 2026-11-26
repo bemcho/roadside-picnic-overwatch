@@ -16,13 +16,18 @@ The road is measured as the game builds it: graded evenly by distance from the d
 entrance to the ground's level at the road's end, so its grade is the ground's drop over its length.
 
 Search. Dijkstra over states (cell of a 32x32 grid spanning the footprint, heading of 8, distance travelled
-in 2 m buckets) from the front edge's middle, heading -z. The road's level is its grade times the distance
-(the exact one, which rides along with the cheapest way into a state; the buckets only merge states), so a
-step costs more the farther that level lies from the (smoothed) relief: per metre, a fill costs its square
-over 25, a cut adds its square over 9 (cuts need banks), and each 45 degree turn costs 20. It ends where
-the relief is within FLOOR_MARGIN_M of the pit's floor and the level lies END_BELOW_GROUND_M under it,
-so the road as built, graded up to that ground, comes out no steeper than the grade. The cell path is then
-rounded with two Chaikin passes and resampled every ~3 m.
+in 2 m buckets, steps since the last turn) from the front edge's middle, heading -z. The road's level is its
+grade times the distance (the exact one, which rides along with the cheapest way into a state; the buckets
+only merge states), so a step costs more the farther that level lies from the (smoothed) relief: per metre,
+a fill costs its square over 9, a cut twice that (cuts need banks), and each turn of one heading costs 20. A
+turn needs MIN_STRAIGHT_STEPS steps since the last, so the arcs of two corners fit between them. It ends where
+the relief is within FLOOR_MARGIN_M of the pit's floor and the level lies END_BELOW_GROUND_M under it, so the
+road as built, graded up to that ground, comes out no steeper than the grade.
+
+Corners. The cell path's corners are replaced by circular arcs of TURN_RADIUS_M, tangent to both segments
+(the road is 9 m wide, so it must not pivot), and the result is resampled every ~3 m. The tool refuses to
+write a road whose baked points turn tighter than MIN_TURN_RADIUS_M (the radius of the circle through each
+three consecutive points).
 
 Output. quarry_ramp.rs holds one `&[Vec2]` literal (x, z in model units, the first point on the front
 edge's middle), which sites.rs includes as a constant and moves with the quarry's pose.
@@ -46,14 +51,19 @@ START_HEADING = 6  # -z, into the quarry
 BUCKET_M = 2.0  # a state also holds the distance travelled, in buckets of this many metres
 MAX_LENGTH_M = 360.0
 TURN_COST = 20.0
-FILL_STIFFNESS_M, CUT_STIFFNESS_M = 5.0, 3.0  # a fill or cut of this many metres costs 1 per metre travelled
+DEVIATION_M = 3.0  # a fill this many metres deep costs 1 per metre travelled
+CUT_WEIGHT = 2.0  # a cut costs this many times a fill of the same depth
 SMOOTH_RADIUS = 0.02  # the relief is a 3x3 mean at this distance (model units): the road ignores clefts
 FLOOR_MARGIN_M = 4.0  # how near the pit's floor the road may end
 # The search ends with its level this far (min, max metres) below the ground there. Graded up to that ground
-# the road is then flatter than the search's grade, which absorbs the rounded corners (they shorten the road
-# by about 1%, 0.5 m of level) so it cannot come out steeper.
-END_BELOW_GROUND_M = (0.6, 0.9)
-CHAIKIN_PASSES = 2
+# the road is then flatter than the search's grade, which absorbs the arcs at the corners (they shorten the
+# road by about 2%, 1 m of level) so it cannot come out steeper.
+END_BELOW_GROUND_M = (1.2, 1.8)
+ARC_STEP_M = 0.5  # the arcs are laid down as points this far apart, then resampled with the rest
+MIN_STRAIGHT_STEPS = 4  # a turn needs this many steps (11 m or more) since the last, room for two arcs of
+# the sharpest corner (50 degrees: the cells are not square, so a "45 degree" turn is 40 or 50)
+MIN_TURN_RADIUS_M = 9.0  # the road never turns tighter than this
+TURN_RADIUS_M = 9.5  # the arcs at the corners, a little wider than needed so the baked points stay above it
 SAMPLE_M = 3.0  # spacing of the baked points
 KEEP_APART_ALONG_M = 40.0  # runs this far apart along the path count as separate runs
 
@@ -120,7 +130,7 @@ def find_cells(ground, grade):
     cell_m = (2 * HALF_X / (GRID - 1) * ground.scale, 2 * HALF_Z / (GRID - 1) * ground.scale)
     goal_relief = ground.floor_m + FLOOR_MARGIN_M
     start_cell = (GRID // 2, GRID - 1)
-    start = (*start_cell, START_HEADING, 0)  # (i, j, heading, bucket)
+    start = (*start_cell, START_HEADING, 0, 1)  # (i, j, heading, bucket, steps since the last turn)
     metres = {start: math.dist(cell_point(*start_cell), ENTRANCE) * ground.scale}  # exact distance of each state
 
     def is_goal(state):
@@ -129,8 +139,10 @@ def find_cells(ground, grade):
         return reliefs[i][j] < goal_relief and END_BELOW_GROUND_M[0] <= below_ground <= END_BELOW_GROUND_M[1]
 
     def moves(state):
-        i, j, heading, _ = state
+        i, j, heading, _, straight = state
         for turn in (-1, 0, 1):
+            if turn and straight < MIN_STRAIGHT_STEPS:
+                continue
             heading_next = (heading + turn) % len(HEADINGS)
             dx, dz = HEADINGS[heading_next]
             i_next, j_next = i + dx, j + dz
@@ -139,8 +151,9 @@ def find_cells(ground, grade):
             step_m = math.hypot(dx * cell_m[0], dz * cell_m[1])
             metres_next = metres[state] + step_m
             dev = -grade * metres_next - reliefs[i_next][j_next]  # > 0 fill, < 0 cut
-            penalty = dev * dev / FILL_STIFFNESS_M**2 + (dev * dev / CUT_STIFFNESS_M**2 if dev < 0 else 0.0)
-            following = (i_next, j_next, heading_next, round(metres_next / BUCKET_M))
+            penalty = (dev / DEVIATION_M) ** 2 * (CUT_WEIGHT if dev < 0 else 1.0)
+            straight_next = 1 if turn else min(straight + 1, MIN_STRAIGHT_STEPS)
+            following = (i_next, j_next, heading_next, round(metres_next / BUCKET_M), straight_next)
             yield following, metres_next, step_m * penalty + TURN_COST * abs(turn)
 
     cost, previous, queue = {start: 0.0}, {}, [(0.0, start)]
@@ -168,16 +181,44 @@ def cells_to(previous, state):
     return cells[::-1]
 
 
-def chaikin(points, passes):
-    """Round the corners of a polyline by cutting each segment at its quarter points (the ends stay)."""
-    for _ in range(passes):
-        rounded = [points[0]]
-        for (ax, az), (bx, bz) in zip(points, points[1:]):
-            rounded.append((0.75 * ax + 0.25 * bx, 0.75 * az + 0.25 * bz))
-            rounded.append((0.25 * ax + 0.75 * bx, 0.25 * az + 0.75 * bz))
-        rounded.append(points[-1])
-        points = rounded
-    return points
+def corner_points(points):
+    """The polyline without the points that lie on a straight line between their neighbours."""
+    kept = [points[0]]
+    for (ax, az), (bx, bz), (cx, cz) in zip(points, points[1:], points[2:]):
+        if abs((bx - ax) * (cz - bz) - (bz - az) * (cx - bx)) > 1e-9:
+            kept.append((bx, bz))
+    kept.append(points[-1])
+    return kept
+
+
+def round_corners(points, scale, radius_m):
+    """Replace each corner of the polyline by a circular arc of `radius_m` tangent to both its segments (a
+    smaller one where the segments are too short to hold it), so the road never turns tighter than that."""
+    metres = [(x * scale, z * scale) for x, z in points]
+    rounded = [metres[0]]
+    taken = 0.0  # how much of the segment the arc before this corner already uses
+    for (ax, az), (bx, bz), (cx, cz) in zip(metres, metres[1:], metres[2:]):
+        len_in, len_out = math.dist((ax, az), (bx, bz)), math.dist((bx, bz), (cx, cz))
+        din, dout = ((bx - ax) / len_in, (bz - az) / len_in), ((cx - bx) / len_out, (cz - bz) / len_out)
+        turn = math.atan2(din[0] * dout[1] - din[1] * dout[0], din[0] * dout[0] + din[1] * dout[1])  # + is left
+        tangent = min(radius_m * math.tan(abs(turn) / 2), len_in - taken, len_out)
+        radius = tangent / math.tan(abs(turn) / 2)
+        taken = tangent
+        start = (bx - din[0] * tangent, bz - din[1] * tangent)
+        side = math.copysign(1.0, turn)
+        centre = (start[0] - din[1] * radius * side, start[1] + din[0] * radius * side)
+        steps = math.ceil(abs(turn) * radius / ARC_STEP_M)
+        for k in range(steps + 1):
+            angle = turn * k / steps
+            rx, rz = start[0] - centre[0], start[1] - centre[1]
+            rounded.append(
+                (
+                    centre[0] + rx * math.cos(angle) - rz * math.sin(angle),
+                    centre[1] + rx * math.sin(angle) + rz * math.cos(angle),
+                )
+            )
+    rounded.append(metres[-1])
+    return [(x / scale, z / scale) for x, z in rounded]
 
 
 def arc_lengths(points, scale):
@@ -205,9 +246,20 @@ def resample(points, scale, spacing_m):
 
 
 def plan_path(ground, grade):
-    """The ramp's centerline in model units: the entrance, then the rounded, resampled search result."""
-    corners = [ENTRANCE] + [cell_point(i, j) for i, j in find_cells(ground, grade)]
-    return resample(chaikin(corners, CHAIKIN_PASSES), ground.scale, SAMPLE_M)
+    """The ramp's centerline in model units: the entrance, then the search result with its corners rounded
+    into arcs, resampled."""
+    cells = [ENTRANCE] + [cell_point(i, j) for i, j in find_cells(ground, grade)]
+    return resample(round_corners(corner_points(cells), ground.scale, TURN_RADIUS_M), ground.scale, SAMPLE_M)
+
+
+def turn_radii(points, scale):
+    """The radius in metres of the circle through each three consecutive points (inf where they are in line)."""
+    radii = []
+    for a, b, c in zip(points, points[1:], points[2:]):
+        sides = math.dist(a, b) * scale, math.dist(b, c) * scale, math.dist(a, c) * scale
+        double_area = abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) * scale**2
+        radii.append(math.inf if double_area < 1e-9 else sides[0] * sides[1] * sides[2] / (2 * double_area))
+    return radii
 
 
 @dataclass
@@ -219,6 +271,7 @@ class Stats:
     max_fill_raw: float  # the same against the relief as it is, clefts and all
     max_cut_raw: float
     closest_runs: float  # m in plan between runs that are far apart along the path
+    min_radius: float  # m, the tightest turn
 
 
 def measure(ground, points):
@@ -238,7 +291,8 @@ def measure(ground, points):
         ),
         default=math.inf,
     )
-    return Stats(along[-1], grade, max(smooth), -min(smooth), max(raw), -min(raw), closest)
+    tightest = min(turn_radii(points, ground.scale))
+    return Stats(along[-1], grade, max(smooth), -min(smooth), max(raw), -min(raw), closest, tightest)
 
 
 def write_points(path, points, relief_name):
@@ -262,11 +316,14 @@ def main():
     stats = measure(ground, points)
     if stats.grade > args.grade:
         raise SystemExit(f"the planned road is steeper than asked: {stats.grade:.3f} > {args.grade}")
+    if stats.min_radius < MIN_TURN_RADIUS_M:
+        raise SystemExit(f"the planned road turns too tightly: {stats.min_radius:.1f} m < {MIN_TURN_RADIUS_M} m")
     write_points(args.output, points, args.relief.name)
     print(
         f"{len(points)} points, length {stats.length:.0f} m, grade {stats.grade:.3f}, "
         f"max fill {stats.max_fill:.1f} m (raw {stats.max_fill_raw:.1f}), "
-        f"max cut {stats.max_cut:.1f} m (raw {stats.max_cut_raw:.1f}), closest runs {stats.closest_runs:.1f} m"
+        f"max cut {stats.max_cut:.1f} m (raw {stats.max_cut_raw:.1f}), closest runs {stats.closest_runs:.1f} m, "
+        f"tightest turn {stats.min_radius:.1f} m"
     )
 
 

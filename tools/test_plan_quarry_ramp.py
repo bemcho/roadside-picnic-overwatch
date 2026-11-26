@@ -19,6 +19,7 @@ RELIEF_FILE = REPO / "src/world/pillars/uhd_quarry_pit_ground.rs"
 GRADE = ramp_tool.DEFAULT_GRADE
 SCALE = ramp_tool.DEFAULT_SCALE
 MIN_RUN_GAP_M = 18.0  # the bed and shoulder (9 m each side) of two runs must not overlap
+MIN_TURN_RADIUS_M = 9.0  # a 9 m wide bed turning on less is a pivot, not a road
 
 
 class RampTests(unittest.TestCase):
@@ -71,6 +72,23 @@ class RampTests(unittest.TestCase):
             for j in range(i):
                 if along[i] - along[j] >= ramp_tool.KEEP_APART_ALONG_M:
                     self.assertGreaterEqual(math.dist(a, self.points[j]) * SCALE, MIN_RUN_GAP_M, (j, i))
+
+    def test_turns_are_wide_enough(self):
+        self.assertGreaterEqual(min(ramp_tool.turn_radii(self.points, SCALE)), MIN_TURN_RADIUS_M)
+        self.assertGreaterEqual(ramp_tool.measure(self.ground, self.points).min_radius, MIN_TURN_RADIUS_M)
+
+    def test_turn_radii_read_a_circle(self):
+        circle = [(10 * math.cos(a / 10) / SCALE, 10 * math.sin(a / 10) / SCALE) for a in range(8)]  # 10 m radius
+        for radius in ramp_tool.turn_radii(circle, SCALE):
+            self.assertAlmostEqual(radius, 10.0, places=6)
+        self.assertEqual(ramp_tool.turn_radii([(0.0, 0.0), (0.1, 0.0), (0.2, 0.0)], SCALE), [math.inf])
+
+    def test_a_corner_becomes_an_arc_of_the_asked_radius(self):
+        corner = [(0.0, 0.0), (0.3, 0.0), (0.3, 0.3)]  # a right-angle turn, 33 m legs
+        rounded = ramp_tool.resample(ramp_tool.round_corners(corner, SCALE, 12.0), SCALE, 1.0)
+        self.assertEqual((rounded[0], rounded[-1]), (corner[0], corner[-1]))
+        radii = ramp_tool.turn_radii(rounded, SCALE)
+        self.assertAlmostEqual(min(radii), 12.0, delta=0.2)
 
     def test_writes_rust_points(self):
         with tempfile.TemporaryDirectory() as folder:
