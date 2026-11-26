@@ -45,7 +45,7 @@ along a ramp that winds down the pit.
 - Steeper ramp without a cutaway (~35%): the ramp would run inside the
   scan's stone. Rejected.
 - Carving the scan in Blender, or Tripo ramp segments: rejected earlier
-  (fidelity, no Blender here, billable, still needs a height override).
+  (fidelity, billable, still needs a height override).
 
 ## Design
 
