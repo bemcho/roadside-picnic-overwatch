@@ -502,11 +502,15 @@ the stalker stands still.
       along the spiral, and its pillars there are dropped. The terrain draws the
       banks: the ramp's mask falls from 1 at the bed's 4.5 m to 0 at 9 m, so a 49 m
       cut stands as a terrain wall over those 4.5 m, meeting the scan's uncut stone at
-      the corridor's edge (not yet looked at in the game). A click order from the quarry's junction reaches the
-      crater's floor through both scans' cleared collision
+      the corridor's edge. In the game that edge is the hard vertical seam on the deep
+      west banks: the scan stone stands to 9 m from the centerline and is cut flush
+      there, above a dark, steep terrain wall with stretched texture (not a tile
+      edge, nor the stand-in's). On the floor the cut's edge on the Sphere's wall shows
+      as a stair-stepped outline beside the road's end. In the planner a click order from the quarry's
+      junction reaches the crater's floor through both scans' cleared collision
       (`a_click_order_reaches_the_crater_floor`: 357 m, the straight line 303 m; the
       slope-blind router crosses from lap to lap down the walls rather than follow
-      the 799 m of road).
+      the 799 m of road); in the game the order fails (see *Driving and orders*).
     - *Checks:* `the_crater_ramp_starts_at_the_quarry_ramps_end`,
       `the_crater_ramp_ends_beside_the_sphere` (ground below -95 m, 5.1 to 15 m from the
       Sphere's centre, not under the bed), `the_crater_ramp_laps_keep_apart` (18 m),
@@ -517,7 +521,26 @@ the stalker stands still.
       along the centerline and 1.8 m either side; where a deep cut crosses a tile edge,
       the 8 m edge stitch pulls the 2 m mesh up to 0.17 m off the road, so a bake must
       keep its centerline off the 128 m tile edges x = -1280 and z = 128, model z =
-      -0.437 and x = -0.367). Not yet driven in the game.
+      -0.437 and x = -0.367).
+    - *Driving and orders:* driven from the quarry's junction to the floor (799 m)
+      and back by the keys: the stalker running (4.5 m/s, 176 s down) and walking
+      (1.8 m/s, no slowdown on the grade), a car at 8 m/s (103 s each way) and the
+      carrier at 4.5 m/s (189 s each way) keep within 1.1 m of the centerline,
+      without a block, a sinking or a lift off the mesh (the carrier's hull rides up
+      to 0.25 m over its tracks' tilt). A car at full throttle (24 m/s) from the
+      Quarry rim's floor over its ramp's end (the grade turning from -0.19 to +0.13)
+      and the junction's crest lifts 0.05 m for one frame at the sag and nowhere else.
+      The bends are 11-15 m (11.4 m on the lowest laps), tighter than the 16.7 m the
+      carrier turns at its 10 m/s top speed: driven flat out, it climbs the lowest
+      laps' banks and stalls there once; it holds them below 6.8 m/s (driven at 4.5).
+      Click orders do not follow the road: from the quarry's junction the stalker
+      runs straight down the Quarry rim's wall (up to a 1.4 grade) and stalls
+      climbing the core's uncut stone on the crater's rim at (-1172, 99), 80 m above
+      the floor; from the Golden Sphere's junction no mover finds a route (the
+      router's box, the trip's plus 28 m, leaves out the spiral's outer laps, and
+      the core's walls close the rest). On the main thread the crater costs at most
+      0.7 ms a frame more than the Quarry rim (7.7 against 7.0 ms); the core's cut
+      scan reaches the GPU behind the splash, with no hitch in the game.
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town
   scan (`assets/models/harmont/`) line a street grid around a paved downtown
   plaza on one level town pad; each shows its full scan near the view and a
