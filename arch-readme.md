@@ -102,7 +102,7 @@ flowchart LR
 | Vehicle | `src/player/vehicle.rs`, `vehicle/contact.rs` | Throttle/steer, traction, four-tire terrain fit, wheels, spotlight |
 | World | `src/world/mod.rs` | World plugin, terrain/material setup, sky, fog, spawn and teardown |
 | Terrain | `src/world/terrain.rs`, `hydrology.rs`, `roads.rs` | Deterministic heights, water, road grading and masks |
-| Quarry ramp | `src/world/quarry_ramp.rs`, `ramp_cut.rs`, `assets/shaders/ramp_cut.wesl` | The haul road down the Quarry rim's pit: scan pillars dropped from its cut corridor (`quarry_pillars`), the cut image and `RampCutMaterial` that hide the scan's stone over it |
+| Quarry ramp | `src/world/quarry_ramp.rs`, `ramp_cut.rs`, `assets/shaders/ramp_cut.wesl` | The haul roads down the Quarry rim's pit and the Golden Sphere's crater: per cut scan (`CutScan`), the pillars dropped from its cut corridor (`CutScan::pillars`), and its cut image and `RampCutMaterial` that hide the scan's stone over the road |
 | Day/night and weather | `src/world/weather.rs` | `WorldClock`, daily `Weather` (temperature, humidity, fog tendency), sun/moon, exposure |
 | Ground fog | `src/world/ground_fog.rs`, `ground_fog/{field,render}.rs` | Fog field texture, terrain-hugging raymarch pass with the clouds and the shroud's smoke, regional distance fog |
 | Places | `src/world/places.rs` | Named places at a point or along a ray, `Describe`, the `Explored` survey grid |
@@ -180,8 +180,8 @@ is not preloaded, the splash can report ready before that asset is available.
   water, vegetation batches, the clock and weather, sky, sun and moon, the
   fog field resource, hangar, props, yard vehicles, artifact pedestals, cordon,
   wildlife, sites and a fresh `Explored` grid. `prepare_ramp_cut` runs before
-  `spawn_sites` (chained), because the quarry's stand-in is spawned with the
-  cut image's material.
+  `spawn_sites` (chained), because the cut scans' stand-ins are spawned with
+  their cut images' materials.
 - `PlayerPlugin` spawns the stalker and its skinned scene, camera, exposure,
   atmosphere, `GroundFog` and distance-fog settings. The camera's depth texture
   is bound for sampling, because the fog pass reads it.
@@ -480,16 +480,18 @@ The car's bay comes from `parked_vehicle` as a uniform. The walkway lines,
 grate and door band are shader constants in hall meters (+Z toward the door),
 so moving the exhibit rows or the door means moving them too.
 
-The quarry's `RampCutMaterial` (`world/ramp_cut.rs`, `shaders/ramp_cut.wesl`) is
-the other `ExtendedMaterial` that discards fragments: it hides the Quarry rim
-scan's stone above the haul ramp's corridor, in the main pass and the shadow
+`RampCutMaterial` (`world/ramp_cut.rs`, `shaders/ramp_cut.wesl`) is the other
+`ExtendedMaterial` that discards fragments: it hides a cut scan's stone (the
+Quarry rim's, the Golden Sphere's crater, `quarry_ramp::CutScan`) above the haul
+ramps' corridor, in the main pass and the shadow
 pass (the extension's `AlphaMode::Mask` is what makes the shadow maps run the
 shader), so the road is lit rather than shadowed by stone that is not drawn.
 The shader's deferred-prepass variant is written but never exercised: the camera
-is forward. The height image behind it (`RampCutImage`) is built
-once from `Terrain` at entering the Zone. `cut_scan_stone`, an observer on the
-scan's `WorldInstanceReady`, swaps the material on every stream-in of the full
-scan; the stand-in gets it at spawn. A new camera prepass (normals, motion
+is forward. Each cut scan has its own height image and bounds (`RampCuts`, one
+`RampCut` extension per scan; the shader is the same), built once from `Terrain`
+at entering the Zone. `cut_scan_stone`, an observer on the scan's
+`WorldInstanceReady`, swaps the material for its scan's (`RampCutScan`) on every
+stream-in of the full scan; the stand-in gets it at spawn. A new camera prepass (normals, motion
 vectors) needs the shader's depth-only variant extended.
 
 The hangar artifacts are display models only. Each of the fourteen tables
@@ -610,8 +612,9 @@ must be represented by multiple separated vertical intervals.
 `pillars/quarry_ramp.rs` is generated differently: `tools/plan_quarry_ramp.py`
 bakes the quarry ramp's centerline (model units) from
 `pillars/uhd_quarry_pit_ground.rs`. `sites::quarry_ramp()` places it with the
-site's pose; `quarry_ramp::quarry_pillars()` is the quarry scan's collision with
-the pillars in the ramp's cut corridor left out, filtered once at first use. Regenerate
+site's pose; `CutScan::Quarry.pillars()` (`world/quarry_ramp.rs`) is the quarry
+scan's collision with the pillars in the ramps' cut corridor left out, filtered
+once at first use. Regenerate
 the path after changing the relief file, then rerun `cargo test`.
 
 The Golden Sphere's crater road is baked the same way, from the core scan's relief
@@ -619,6 +622,9 @@ The Golden Sphere's crater road is baked the same way, from the core scan's reli
 placed by `sites::crater_ramp()` under the core's pose after the quarry ramp's last
 point, the Sphere's junction and the core's entrance. It is the second `Surface::Ramp`
 track, the only road to the Sphere (the Chapter 4 route ends at the quarry).
+`CutScan::Core.pillars()` clears the core scan's collision along it, and its first
+leg, on the Quarry rim's floor, is in the quarry's cut corridor too: a cut scan's
+corridor is every ramp leg that reaches its footprint.
 
 The cordon walls' posts are not generated: `cordon::WALL_PILLAR` holds two hand-set
 discs every 0.77 m along the wall, `WALL_DISC` sized to the baked box's half thickness

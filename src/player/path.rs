@@ -242,7 +242,7 @@ fn smooth(grid: &Grid, from: Vec2, points: Vec<Vec2>) -> Vec<Vec2> {
 mod tests {
     use super::*;
     use crate::player::STANDING;
-    use crate::world::{Pillar, crater_ramp, quarry_pillars, quarry_ramp, quarry_scan};
+    use crate::world::{CutScan, Pillar, crater_ramp, cut_scan, quarry_ramp};
 
     const WALL: &[Pillar] = &[
         Pillar {
@@ -339,9 +339,9 @@ mod tests {
     // ramp; this only proves the pit floor is reachable.
     fn a_click_order_reaches_the_pit_floor() {
         let terrain = Terrain::new();
-        let (pose, _) = quarry_scan();
+        let (pose, _) = cut_scan(CutScan::Quarry);
         let scan = GlobalTransform::from(pose);
-        let collider = Collider(quarry_pillars());
+        let collider = Collider(CutScan::Quarry.pillars());
         let ramp = &quarry_ramp()[1..];
         let (entrance, pit) = (ramp[0], ramp[ramp.len() - 1]);
 
@@ -357,21 +357,25 @@ mod tests {
 
     #[test]
     // The router is slope-blind, so this only proves the crater's floor is
-    // reachable from the quarry's junction; it may cut across the pit and the
-    // crater's walls rather than follow the road. The crater scan's own
-    // collision, which stands across the road until it is cleared, is left out.
+    // reachable from the quarry's junction through both scans' cleared
+    // collision. It cuts across the pit and from lap to lap down the crater's
+    // walls (357 m against the road's 799 m), so the road's length bounds
+    // nothing: the limit, half again the straight line, catches a detour
+    // round the crater instead.
     fn a_click_order_reaches_the_crater_floor() {
         let terrain = Terrain::new();
-        let (pose, _) = quarry_scan();
-        let scan = GlobalTransform::from(pose);
-        let collider = Collider(quarry_pillars());
-        let crater = crater_ramp();
-        let road = [quarry_ramp().as_slice(), &crater[1..]].concat();
-        let (junction, floor) = (road[0], road[road.len() - 1]);
+        let scans = CutScan::ALL.map(|scan| {
+            let (pose, _) = cut_scan(scan);
+            (Collider(scan.pillars()), GlobalTransform::from(pose))
+        });
+        let (junction, floor) = (
+            quarry_ramp()[0],
+            crater_ramp().last().copied().expect("a road"),
+        );
 
         let path = find_path(
             &terrain,
-            [(&collider, &scan)],
+            scans.iter().map(|(collider, scan)| (collider, scan)),
             junction,
             floor,
             STANDING,
@@ -379,8 +383,11 @@ mod tests {
         )
         .expect("a route to the crater floor");
         let route = length(&[&[junction], path.as_slice()].concat());
-        let limit = length(&road);
-        assert!(route <= limit, "the route is {route} m, the road {limit} m");
+        let limit = junction.distance(floor) * 1.5;
+        assert!(
+            route <= limit,
+            "the route is {route} m, the limit {limit} m"
+        );
     }
 
     fn push_free(at: Vec2, collider: &Collider, wall: &GlobalTransform, body: Body) -> Vec2 {

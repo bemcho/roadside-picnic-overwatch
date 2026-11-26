@@ -864,9 +864,9 @@ mod tests {
     #[test]
     fn the_crater_ramp_grade_stays_drivable() {
         // The ramp from the Sphere's junction falls at about 0.17. Where a deep
-        // cut crosses a tile edge, the 8 m edge stitch pulls the mesh up to
-        // 0.17 m off the road: the baked spiral fails at (-1280.5, 72.3) by
-        // 0.09 on the centerline and by 0.06 in a lane.
+        // cut crosses a 128 m tile edge, the 8 m edge stitch pulls the 2 m mesh
+        // up to 0.17 m off the road and breaks the grade, so the bake keeps the
+        // centerline 6.7 m or more off the tile edges.
         let (excess, limit, at) = worst_grade_excess(&sites::crater_ramp());
         assert!(
             excess <= 0.0,
@@ -880,7 +880,7 @@ mod tests {
         // the quarry's entrance and 0.30 at the Golden Sphere's junction;
         // a sharper break launches a car at full throttle.
         let terrain = Terrain::new();
-        for (grade_change, path) in [(0.27, sites::quarry_ramp()), (0.31, sites::crater_ramp())] {
+        for (grade_change, path) in [(0.27, sites::quarry_ramp()), (0.30, sites::crater_ramp())] {
             let curvature = grade_change / 24.0 * 1.1;
             let crest = path[0].distance(path[1]);
             // The road's level at each metre along the track, 20 m either side of the crest.

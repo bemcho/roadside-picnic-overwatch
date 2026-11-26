@@ -49,10 +49,10 @@ pub(crate) use map::{MAP_SIZE, METERS_PER_PIXEL, map, map_pixel};
 pub use places::{Describe, Explored, Place, SURVEY_CELL, place_at, structure_on_ray};
 pub(crate) use plants::PlantsGrowing;
 #[cfg(test)]
-pub(crate) use quarry_ramp::quarry_pillars;
+pub(crate) use quarry_ramp::CutScan;
 pub(crate) use roads::{expedition_route, traffic_routes};
 #[cfg(test)]
-pub(crate) use sites::{crater_ramp, quarry_ramp, quarry_scan};
+pub(crate) use sites::{crater_ramp, cut_scan, quarry_ramp};
 pub(crate) use terrain::BASE;
 pub(crate) use terrain::lattice_hash;
 pub use terrain::{HALF_SIZE as TERRAIN_HALF_SIZE, SPAWN, Terrain};

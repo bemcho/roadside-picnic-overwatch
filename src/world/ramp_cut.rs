@@ -1,8 +1,9 @@
-//! The quarry scan's stone is cut away above the haul ramp, so the road the
-//! terrain was graded for shows through it instead of lying buried in the scan.
-//! The scan's file stays as it is: its material discards the fragments higher
-//! than the ground inside the ramp's corridor (`shaders/ramp_cut.wesl`), in the
-//! main pass and in the shadow maps alike.
+//! The cut scans' stone (the Quarry rim's pit and the Golden Sphere's crater,
+//! `CutScan`) is cut away above the haul ramps, so the road the terrain was
+//! graded for shows through it instead of lying buried in the scan. The scans'
+//! files stay as they are: their materials discard the fragments higher than
+//! the ground inside the ramps' corridor (`shaders/ramp_cut.wesl`), in the main
+//! pass and in the shadow maps alike. Each scan has its own image of its corridor.
 
 use std::collections::HashMap;
 
@@ -16,22 +17,26 @@ use bevy::world_serialization::WorldInstanceReady;
 
 use crate::assets;
 
-use super::quarry_ramp::in_cut_corridor;
+use super::quarry_ramp::CutScan;
 use super::roads::RAMP_SHOULDER;
 use super::sites;
-use super::terrain::Terrain;
+use super::terrain::{SPACING, Terrain};
 
 pub(super) type RampCutMaterial = ExtendedMaterial<StandardMaterial, RampCut>;
 
 /// Height meaning "not cut": above any fragment.
 const UNCUT: f32 = 1.0e6;
-/// Meters per texel of the cut image.
+/// Meters per texel of the cut image. The texels lie on the world's 0.5 m
+/// lattice, so the near ground mesh's 2 m grid lines run along their edges and
+/// its diagonals (x + z a multiple of 2 m) from corner to corner: the mesh is
+/// flat over each half of a texel and lies nowhere in it below its lowest corner.
 const TEXEL: f32 = 0.5;
+const _: () = assert!(
+    SPACING % TEXEL == 0.0,
+    "the mesh's grid lines lie on texel edges"
+);
 /// How far under the drawn ground the stone is cut, so that stone lying on the
-/// ground, which would show through it as dark slivers, goes too. The lowest
-/// corner of a texel can lie up to about 0.07 m above the mesh inside it, where
-/// a triangle's crease crosses the texel (a margin of -0.05 m left stone 0.12 m
-/// above the ground in the test), so 0.1 m keeps the cut under the ground.
+/// ground, which would show through it as dark slivers, goes too.
 const BURY: f32 = 0.1;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
@@ -66,49 +71,52 @@ impl MaterialExtension for RampCut {
     }
 }
 
-/// The cut's image and where it lies, for the quarry's materials.
+/// Each cut scan's cut (its image and where it lies), in `CutScan` order.
 #[derive(Resource)]
-pub(super) struct RampCutImage(pub Handle<Image>, pub Vec4);
+pub(super) struct RampCuts([RampCut; 2]);
 
-impl RampCutImage {
-    pub(super) fn material(&self, base: StandardMaterial) -> RampCutMaterial {
+impl RampCuts {
+    /// `base` drawn through `scan`'s cut.
+    pub(super) fn material(&self, scan: CutScan, base: StandardMaterial) -> RampCutMaterial {
         RampCutMaterial {
             base,
-            extension: RampCut {
-                bounds: self.1,
-                heights: self.0.clone(),
-            },
+            extension: self.0[scan as usize].clone(),
         }
     }
 }
 
-/// Marks the quarry's full scan, whose stone the ramp cuts.
+/// Marks a cut scan's full scan, whose stone its ramp cuts.
 #[derive(Component)]
-pub(super) struct RampCutScan;
+pub(super) struct RampCutScan(pub CutScan);
 
-/// Builds the cut image once, at entering the Zone. It follows `Terrain`, which
-/// derives from the runtime terrain (roads, relief, overrides), so baking it
-/// would need a re-run on every terrain change.
+/// Builds the cut images once, at entering the Zone. They follow `Terrain`,
+/// which derives from the runtime terrain (roads, relief, overrides), so baking
+/// them would need a re-run on every terrain change.
 pub(super) fn prepare_ramp_cut(
     mut commands: Commands,
     terrain: Res<Terrain>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    let (image, bounds) = build_ramp_cut(&terrain);
-    commands.insert_resource(RampCutImage(images.add(image), bounds));
+    let cuts = CutScan::ALL.map(|scan| {
+        let (image, bounds) = build_ramp_cut(&terrain, scan);
+        RampCut {
+            bounds,
+            heights: images.add(image),
+        }
+    });
+    commands.insert_resource(RampCuts(cuts));
 }
 
-/// The height above which the stone is cut wherever the ramp's shoulder
-/// reaches, `UNCUT` elsewhere, over the quarry's footprint and a shoulder around
+/// The height above which `scan`'s stone is cut wherever a ramp's shoulder
+/// reaches, `UNCUT` elsewhere, over the scan's footprint and a shoulder around
 /// it, and where it lies. A texel is cut from the lowest of the ground drawn at
 /// its corners (the render mesh, which is not `height_at` and falls steeply on
-/// the banks) less `BURY`. That keeps the cut under the drawn ground at the
-/// points `the_cut_lies_below_the_ground_that_is_drawn` samples; it is not a
-/// proof for every point, as the mesh may dip below its corners inside a texel.
-fn build_ramp_cut(terrain: &Terrain) -> (Image, Vec4) {
-    let (low, high) = sites::quarry_footprint();
-    let corner = low - Vec2::splat(RAMP_SHOULDER);
-    let size = ((high - low + Vec2::splat(2.0 * RAMP_SHOULDER)) / TEXEL)
+/// the banks, by tens of metres in the crater) less `BURY`, which keeps the cut
+/// under the near mesh everywhere in the texel (see `TEXEL`).
+fn build_ramp_cut(terrain: &Terrain, scan: CutScan) -> (Image, Vec4) {
+    let (low, high) = sites::cut_footprint(scan);
+    let corner = ((low - Vec2::splat(RAMP_SHOULDER)) / TEXEL).floor() * TEXEL;
+    let size = ((high + Vec2::splat(RAMP_SHOULDER) - corner) / TEXEL)
         .ceil()
         .as_uvec2();
     let extent = size.as_vec2() * TEXEL;
@@ -123,7 +131,7 @@ fn build_ramp_cut(terrain: &Terrain) -> (Image, Vec4) {
         .flat_map(|row| (0..size.x).map(move |column| UVec2::new(column, row)))
         .flat_map(|texel| {
             let at = corner + (texel.as_vec2() + 0.5) * TEXEL;
-            let height = if in_cut_corridor(at) {
+            let height = if scan.in_cut_corridor(at) {
                 let lowest = [UVec2::ZERO, UVec2::X, UVec2::Y, UVec2::ONE]
                     .map(|offset| ground(texel + offset))
                     .into_iter()
@@ -156,39 +164,43 @@ fn build_ramp_cut(terrain: &Terrain) -> (Image, Vec4) {
 #[derive(SystemParam)]
 pub(super) struct CutMaterials<'w> {
     standard: Res<'w, Assets<StandardMaterial>>,
-    cut: Res<'w, RampCutImage>,
+    cuts: Res<'w, RampCuts>,
     materials: ResMut<'w, Assets<RampCutMaterial>>,
 }
 
 impl CutMaterials<'_> {
-    /// A new material drawing `stone`'s through the cut.
-    fn of(&mut self, stone: &MeshMaterial3d<StandardMaterial>) -> Option<RampCutMaterial> {
+    /// A new material drawing `stone`'s through `scan`'s cut.
+    fn of(
+        &mut self,
+        scan: CutScan,
+        stone: &MeshMaterial3d<StandardMaterial>,
+    ) -> Option<RampCutMaterial> {
         let base = self.standard.get(&stone.0)?;
-        Some(self.cut.material(base.clone()))
+        Some(self.cuts.material(scan, base.clone()))
     }
 }
 
-/// Draws the quarry's scan through the cut once it has spawned.
+/// Draws a cut scan through its cut once it has spawned.
 ///
 /// The materials are made at each stream-in and go with the instance: handles
 /// cached elsewhere would keep the scan's textures in video memory after the
 /// scan streams out.
 pub(super) fn cut_scan_stone(
     ready: On<WorldInstanceReady>,
-    scans: Query<(), With<RampCutScan>>,
+    scans: Query<&RampCutScan>,
     children: Query<&Children>,
     stones: Query<&MeshMaterial3d<StandardMaterial>>,
     mut cut: CutMaterials,
     mut commands: Commands,
 ) {
-    if !scans.contains(ready.entity) {
+    let Ok(&RampCutScan(scan)) = scans.get(ready.entity) else {
         return;
-    }
+    };
     for child in children.iter_descendants(ready.entity) {
         let Ok(stone) = stones.get(child) else {
             continue;
         };
-        let Some(material) = cut.of(stone) else {
+        let Some(material) = cut.of(scan, stone) else {
             continue;
         };
         commands
@@ -203,17 +215,16 @@ mod tests {
     use bevy::asset::AssetPlugin;
     use bevy::world_serialization::{WorldAsset, WorldAssetRoot, WorldSerializationPlugin};
 
-    use super::super::quarry_ramp::on_ramp_bed;
     use super::super::roads::RAMP_HALF_WIDTH;
     use super::*;
 
-    /// The cut image's height under `at`, read as the shader reads it.
+    /// The cut image's height under `at`, read as the shader reads it: nothing
+    /// is cut outside the image.
     fn cut_height(image: &Image, bounds: Vec4, at: Vec2) -> f32 {
         let uv = (at - bounds.xy()) * bounds.zw();
-        assert!(
-            uv.cmpge(Vec2::ZERO).all() && uv.cmplt(Vec2::ONE).all(),
-            "{at} lies outside the cut image"
-        );
+        if uv.cmplt(Vec2::ZERO).any() || uv.cmpge(Vec2::ONE).any() {
+            return UNCUT;
+        }
         let size = image.size();
         let texel = (uv * size.as_vec2()).as_uvec2();
         let start = (texel.y * size.x + texel.x) as usize * 4;
@@ -221,24 +232,46 @@ mod tests {
         f32::from_le_bytes(data[start..start + 4].try_into().expect("four bytes"))
     }
 
-    #[test]
-    fn the_cut_image_is_uncut_off_the_ramp() {
+    fn inside(at: Vec2, (low, high): (Vec2, Vec2)) -> bool {
+        at.cmpge(low).all() && at.cmple(high).all()
+    }
+
+    /// Every metre of `ramp` inside the footprint of `scan`.
+    fn ramp_in_scan(scan: CutScan, ramp: &[Vec2]) -> Vec<Vec2> {
+        let footprint = sites::cut_footprint(scan);
+        ramp.windows(2)
+            .flat_map(|leg| {
+                let steps = leg[0].distance(leg[1]).ceil() as usize;
+                (0..steps).map(move |i| leg[0].lerp(leg[1], i as f32 / steps as f32))
+            })
+            .filter(|&at| inside(at, footprint))
+            .collect()
+    }
+
+    /// The road through `scan` lies in its cut, a little under the ground (a
+    /// texel of the 19% grade spans 0.1 m of height), and the stone 15 m from
+    /// it is not cut.
+    fn assert_the_cut_follows_the_road(scan: CutScan, road: &[Vec2]) {
         let terrain = Terrain::new();
-        let (image, bounds) = build_ramp_cut(&terrain);
+        let (image, bounds) = build_ramp_cut(&terrain, scan);
 
         // The first point of the footprint's box at least 15 m from the ramp
-        // (the hairpin runs through the middle terrace, so the middle may not do).
-        let (low, high) = sites::quarry_footprint();
+        // (the hairpin runs through the quarry's middle terrace, so the middle
+        // may not do).
+        let (low, high) = sites::cut_footprint(scan);
         let far = (0..)
             .map(|step| low + Vec2::splat(step as f32))
             .take_while(|at| at.cmple(high).all())
-            .find(|&at| !on_ramp_bed(at, 15.0 - RAMP_HALF_WIDTH))
+            .find(|&at| !scan.on_ramp_bed(at, 15.0 - RAMP_HALF_WIDTH))
             .expect("a point of the footprint is far from the ramp");
         assert_eq!(cut_height(&image, bounds, far), UNCUT);
 
-        // The baked points, past the drive's two, lie in the cut, a little
-        // under the ground (a texel of the 19% grade spans 0.1 m of height).
-        for at in sites::quarry_ramp().into_iter().skip(2) {
+        assert!(
+            road.len() > 25,
+            "only {} m of the road lie in the scan",
+            road.len()
+        );
+        for &at in road {
             let ground = terrain.height_at(at.x, at.y);
             let cut = cut_height(&image, bounds, at);
             assert!(
@@ -249,12 +282,32 @@ mod tests {
     }
 
     #[test]
-    fn the_cut_lies_below_the_ground_that_is_drawn() {
+    fn the_quarry_cut_follows_its_ramp_and_the_crater_roads_first_leg() {
+        let ramp = sites::quarry_ramp();
+        let crater = sites::crater_ramp();
+        let connector = ramp_in_scan(CutScan::Quarry, &crater[..2]);
+        // The crater road's first 23 m run in the box around the quarry.
+        assert!(
+            connector.len() >= 20,
+            "{} m of the leg lie in the quarry",
+            connector.len()
+        );
+        let road = [ramp_in_scan(CutScan::Quarry, &ramp), connector].concat();
+        assert_the_cut_follows_the_road(CutScan::Quarry, &road);
+    }
+
+    #[test]
+    fn the_core_cut_follows_the_crater_ramp() {
+        let road = ramp_in_scan(CutScan::Core, &sites::crater_ramp());
+        assert_the_cut_follows_the_road(CutScan::Core, &road);
+    }
+
+    // Stone left above the drawn ground, even by centimeters, shows through it
+    // as dark slivers; the grid is off the texels' lattice on purpose.
+    fn assert_the_cut_lies_below_the_ground_that_is_drawn(scan: CutScan) {
         let terrain = Terrain::new();
-        let (image, bounds) = build_ramp_cut(&terrain);
-        let (low, high) = sites::quarry_footprint();
-        // Stone left above the drawn ground, even by centimeters, shows through
-        // it as dark slivers; the grid is off the texels' lattice on purpose.
+        let (image, bounds) = build_ramp_cut(&terrain, scan);
+        let (low, high) = sites::cut_footprint(scan);
         let mut worst = (f32::MIN, Vec2::ZERO);
         let mut cut = 0;
         for column in 0..((high.x - low.x) / 0.37) as u32 {
@@ -279,9 +332,25 @@ mod tests {
         );
     }
 
-    /// An app that spawns world instances, with two scans' roots, each holding
-    /// a stone: the quarry's (marked) and another site's. Returns the stones.
-    fn app_with_scans() -> (App, Entity, Entity) {
+    #[test]
+    fn the_quarry_cut_lies_below_the_ground_that_is_drawn() {
+        assert_the_cut_lies_below_the_ground_that_is_drawn(CutScan::Quarry);
+    }
+
+    #[test]
+    fn the_core_cut_lies_below_the_ground_that_is_drawn() {
+        assert_the_cut_lies_below_the_ground_that_is_drawn(CutScan::Core);
+    }
+
+    /// Each cut's bounds in the test app, which tell the cuts apart.
+    fn test_bounds(scan: CutScan) -> Vec4 {
+        Vec4::splat(scan as usize as f32 + 1.0)
+    }
+
+    /// An app that spawns world instances, with a root for each cut scan and
+    /// for another site, each holding a stone. Returns the cut scans' stones,
+    /// in `CutScan` order, and the other's.
+    fn app_with_scans() -> (App, [Entity; 2], Entity) {
         let mut app = App::new();
         app.add_plugins((
             MinimalPlugins,
@@ -290,7 +359,10 @@ mod tests {
         ))
         .init_asset::<StandardMaterial>()
         .init_asset::<RampCutMaterial>()
-        .insert_resource(RampCutImage(Handle::default(), Vec4::ZERO));
+        .insert_resource(RampCuts(CutScan::ALL.map(|scan| RampCut {
+            bounds: test_bounds(scan),
+            heights: Handle::default(),
+        })));
         let scene = app
             .world_mut()
             .resource_mut::<Assets<WorldAsset>>()
@@ -299,36 +371,37 @@ mod tests {
             .world_mut()
             .resource_mut::<Assets<StandardMaterial>>()
             .add(StandardMaterial::default());
-        let mut scan = |quarry: bool| {
+        let mut scan = |cut: Option<CutScan>| {
             let mut root = app.world_mut().spawn(WorldAssetRoot(scene.clone()));
             root.observe(cut_scan_stone);
-            if quarry {
-                root.insert(RampCutScan);
+            if let Some(cut) = cut {
+                root.insert(RampCutScan(cut));
             }
             let root = root.id();
             app.world_mut()
                 .spawn((MeshMaterial3d(stone.clone()), ChildOf(root)))
                 .id()
         };
-        let quarry = scan(true);
-        let other = scan(false);
-        (app, quarry, other)
+        let cuts = CutScan::ALL.map(|cut| scan(Some(cut)));
+        let other = scan(None);
+        (app, cuts, other)
     }
 
-    #[test]
-    fn the_quarry_scan_draws_through_the_ramp_cut() {
-        let (mut app, quarry, other) = app_with_scans();
+    /// `scan`'s stone is drawn through its own cut, and the other site's is not cut.
+    fn assert_the_scan_draws_through_its_cut(scan: CutScan) {
+        let (mut app, cuts, other) = app_with_scans();
         app.update();
 
         let world = app.world();
+        let stone = cuts[scan as usize];
+        let material = world
+            .get::<MeshMaterial3d<RampCutMaterial>>(stone)
+            .and_then(|material| world.resource::<Assets<RampCutMaterial>>().get(&material.0))
+            .expect("the stone is drawn through a cut");
+        assert_eq!(material.extension.bounds, test_bounds(scan));
         assert!(
             world
-                .get::<MeshMaterial3d<RampCutMaterial>>(quarry)
-                .is_some()
-        );
-        assert!(
-            world
-                .get::<MeshMaterial3d<StandardMaterial>>(quarry)
+                .get::<MeshMaterial3d<StandardMaterial>>(stone)
                 .is_none()
         );
         assert!(
@@ -341,5 +414,15 @@ mod tests {
                 .get::<MeshMaterial3d<RampCutMaterial>>(other)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn the_quarry_scan_draws_through_the_ramp_cut() {
+        assert_the_scan_draws_through_its_cut(CutScan::Quarry);
+    }
+
+    #[test]
+    fn the_core_scan_draws_through_the_ramp_cut() {
+        assert_the_scan_draws_through_its_cut(CutScan::Core);
     }
 }

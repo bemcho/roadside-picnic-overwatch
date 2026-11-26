@@ -388,33 +388,53 @@ the stalker stands still.
     stays on the ground up to about 29 m/s; the sharp break launched the armored car at 21 m/s). The terrain
     applies a ramp after the diorama's ground (`lerp(h, ramp.height, ramp.mask())`),
     cutting and filling the pit's relief inside the corridor.
-  - *Collision:* `quarry_ramp::quarry_pillars()` is the scan's collision without
-    the pillars whose centres lie in the cut corridor (1,528 of 3,186), the one
-    rule `in_cut_corridor` shares with the cut's texels (within 9 m of the
-    centerline); filtered once at first use from the same points.
-    `Landmark::solids` serves it, so the stalker, the car, the carrier and the
-    router meet no invisible wall on the road, its banks or the rest of the cut.
+  - *Collision:* both cut scans (`quarry_ramp::CutScan`: the Quarry rim's and the
+    Golden Sphere's crater, `landmark-core`) drop the pillars whose centres lie in
+    their cut corridor. A scan's corridor is every ramp leg that reaches its
+    footprint box, a shoulder around it (so the quarry's takes in the crater road's
+    first leg, 23 m of it in the box around the scan, on the pit's floor).
+    `CutScan::pillars()` keeps 1,658 of the
+    quarry's 3,186 pillars (the crater road's leg clears none more) and 1,708 of the
+    core's 4,034 (2,326 dropped, 58%), the one rule `CutScan::in_cut_corridor` shares
+    with the cut's texels (within 9 m of a centerline); filtered once at first use
+    from the same points. `Landmark::solids` serves it, so the stalker, the car,
+    the carrier and the router meet no invisible wall on either road, its banks or
+    the rest of the cut. Tests run per scan: `no_{quarry,core}_pillar_stands_on_the_ramp`,
+    `no_kept_{quarry,core}_pillar_stands_invisible_in_the_cut`,
+    `{quarry,core}_pillars_off_the_ramp_are_kept` (at most 55% and 60%),
+    `the_widest_mover_walks_the_{quarry,crater}_ramp_unpushed` and
+    `the_quarry_corridor_covers_the_crater_roads_first_leg`.
     The centre rule leaves a sub-metre lip (pillar radius 0.9 m): 57 dropped
     pillars reach 0.5–0.82 m past the 9 m edge, stone there without its own
     pillar, and kept pillars bulge up to 0.9 m into the cut, off the bed.
-  - *Cut:* the scan is untouched. `RampCutMaterial` (`ramp_cut.rs`,
+  - *Cut:* the scans are untouched. `RampCutMaterial` (`ramp_cut.rs`,
     `ExtendedMaterial<StandardMaterial, RampCut>`) draws the stand-in and every
-    streamed full scan of the quarry (`cut_scan_stone` swaps the material on each
+    streamed full scan of both cut scans, each through its own image and bounds
+    (`RampCuts`, one `RampCut` per `CutScan`; the shader is shared and unchanged;
+    `RampCutScan(scan)` marks a full scan, and `cut_scan_stone` swaps the material on each
     stream-in; it is not cached, which would pin the scan's textures in VRAM) and
     discards the fragments above a height image of the corridor, in the main
     pass and the shadow maps' depth pass (its `AlphaMode::Mask` makes the
     shadow pass run the shader; the shader's deferred-prepass variant is
     written but never exercised, the camera is forward), so the road is
-    neither covered nor shadowed by the stone removed over it. The image
-    (`build_ramp_cut`, built once at entering the Zone in about 140 ms, 220x253
-    R32Float texels of 0.5 m, 217 KiB) holds, wherever a texel's centre is within
-    the 9 m of the centerline, the lowest of the ground drawn at the texel's corners (the 2 m
-    render mesh, `Terrain::mesh_height_at`, not `height_at`, which differs by up
-    to 0.11 m on the bed and by metres on the banks) less `BURY` (0.1 m, which
-    covers the 0.07 m by which a corner can lie above a crease inside the texel), and
-    `1.0e6` elsewhere. Stone left above the drawn ground, even by centimeters,
-    shows through it as dark slivers; `the_cut_lies_below_the_ground_that_is_drawn`
-    keeps it below. Limits: texels are read nearest, so the cut's edge on the
+    neither covered nor shadowed by the stone removed over it. Each image
+    (`build_ramp_cut`, built once at entering the Zone over the scan's footprint
+    box and a 9 m shoulder; R32Float texels of 0.5 m: the quarry's 221x253, 218 KiB,
+    96 ms, the core's 272x252, 267 KiB, 144 ms, in the playtest build) holds,
+    wherever a texel's centre is within 9 m of a centerline, the lowest of the
+    ground drawn at the texel's corners (the 2 m render mesh,
+    `Terrain::mesh_height_at`, not `height_at`, which differs by up to 0.11 m on
+    the bed and by metres, tens of metres in the crater, on the banks) less `BURY`
+    (0.1 m), and `1.0e6` elsewhere. The texels lie on the world's 0.5 m lattice, so
+    the mesh's 2 m grid lines run along their edges and its diagonals corner to
+    corner: the mesh is flat on each half texel and the lowest corner is its
+    lowest point (an unaligned image left the core's cut 0.098 m above the mesh on a
+    crater bank). Stone left above the drawn ground, even by centimeters, shows
+    through it as dark slivers; `the_{quarry,core}_cut_lies_below_the_ground_that_is_drawn`
+    keep it below (on a 0.13 m grid the cut lies exactly 0.1 m under the mesh at
+    worst, in both scans), and `the_quarry_cut_follows_its_ramp_and_the_crater_roads_first_leg`
+    and `the_core_cut_follows_the_crater_ramp` check the road in each scan is cut.
+    Limits: texels are read nearest, so the cut's edge on the
     stone is stepped in 0.5 m teeth; the main and depth-only (shadow)
     pipelines are exercised, the deferred prepass variant is written but never
     run, and a normal or motion-vector prepass is not supported (the camera
@@ -431,7 +451,7 @@ the stalker stands still.
     straight down the pit's face, which both the stalker (25 s) and the car
     (27 s) descend, against about 255 m by the ramp from the same spot (its
     251 m from the entrance to the floor, plus the 4 m to the entrance).
-  - *Golden Sphere's crater* (`sites::crater_ramp()`, `sites::core_scan()`, `roads.rs`;
+  - *Golden Sphere's crater* (`sites::crater_ramp()`, `sites::cut_scan(CutScan::Core)`, `roads.rs`;
     generated `world/pillars/golden_crater_ramp.rs`): the only road to the Golden
     Sphere, a second `Surface::Ramp` track that runs on from the end of the quarry's
     ramp and spirals down inside the Sphere's crater scan (`landmark-core`) to its
@@ -477,11 +497,16 @@ the stalker stands still.
       edge (at (-1259, 32), 316 m along), over the scan's hole there; the quarry's
       cut and fill tests do not apply. The crater ramp overrides the core's ground as
       the quarry's does its own (the core's ground blend is not a limit).
-    - *Not cut yet:* the core scan is neither cut along the road nor cleared of its
-      collision there: the stone stands above the lowered ground and its pillars stand
-      across the road, so a click order that must cross the crater has no route
-      (`a_click_order_reaches_the_crater_floor` runs against the quarry's cleared
-      collision only).
+    - *Cut and collision:* the core scan is a cut scan like the quarry's (see
+      *Collision* and *Cut* above): its stone is discarded above the drawn ground
+      along the spiral, and its pillars there are dropped. The terrain draws the
+      banks: the ramp's mask falls from 1 at the bed's 4.5 m to 0 at 9 m, so a 49 m
+      cut stands as a terrain wall over those 4.5 m, meeting the scan's uncut stone at
+      the corridor's edge (not yet looked at in the game). A click order from the quarry's junction reaches the
+      crater's floor through both scans' cleared collision
+      (`a_click_order_reaches_the_crater_floor`: 357 m, the straight line 303 m; the
+      slope-blind router crosses from lap to lap down the walls rather than follow
+      the 799 m of road).
     - *Checks:* `the_crater_ramp_starts_at_the_quarry_ramps_end`,
       `the_crater_ramp_ends_beside_the_sphere` (ground below -95 m, 5.1 to 15 m from the
       Sphere's centre, not under the bed), `the_crater_ramp_laps_keep_apart` (18 m),

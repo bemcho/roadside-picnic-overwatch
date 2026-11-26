@@ -534,7 +534,7 @@ fn tile_at(point: Vec2) -> IVec2 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::Terrain;
+    use crate::world::{CutScan, Terrain};
 
     fn on_routes(at: Vec2) -> bool {
         ROUTES.iter().any(|route| route.points.contains(&at))
@@ -673,7 +673,7 @@ mod tests {
     const SPHERE_RADIUS: f32 = 0.6;
 
     fn golden_sphere() -> Vec2 {
-        let (pose, _) = sites::core_scan();
+        let (pose, _) = sites::cut_scan(CutScan::Core);
         pose.transform_point(SPHERE).xz()
     }
 
