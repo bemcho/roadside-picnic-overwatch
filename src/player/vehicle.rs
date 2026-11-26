@@ -2,12 +2,16 @@
 //! in and out of it or the Institute's carrier (`Seat`).
 
 mod carrier;
+mod carrier_track;
 mod contact;
 mod patrol;
+mod track_loop;
 mod traffic;
 
 pub(crate) use carrier::Carrier;
-pub(super) use carrier::{CARRIER_ROUTING, drive_carrier, spawn_carrier, steer_carrier};
+pub(super) use carrier::{
+    CARRIER_ROUTING, drive_carrier, run_carrier_tracks, spawn_carrier, steer_carrier,
+};
 pub(super) use patrol::{Patrol, drive_patrol, spawn_patrol};
 pub(super) use traffic::{drive_traffic, flash_beacons, spawn_traffic};
 
