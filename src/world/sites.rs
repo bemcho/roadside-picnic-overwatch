@@ -790,7 +790,24 @@ pub(crate) fn quarry_scan() -> (Transform, &'static [Pillar]) {
 
 /// The corners of the box around the quarry scan's footprint in world xz.
 pub(super) fn quarry_footprint() -> (Vec2, Vec2) {
-    let site = landmark(QuarryRim);
+    footprint_box(landmark(QuarryRim))
+}
+
+/// Every diorama's name, the box around its footprint in world xz and the
+/// width of the slope that blends its ground into the land.
+#[cfg(test)]
+pub(super) fn diorama_footprints() -> impl Iterator<Item = (&'static str, (Vec2, Vec2), f32)> {
+    LANDMARKS
+        .into_iter()
+        .filter(|site| matches!(site.model().ground, Ground::Relief(_)))
+        .map(|site| {
+            let m = site.model();
+            (m.name, footprint_box(site), m.relief_margin())
+        })
+}
+
+/// The corners of the box around a site's footprint in world xz.
+fn footprint_box(site: Landmark) -> (Vec2, Vec2) {
     let (pose, half) = (site.pose(), site.model().half);
     [(-1.0, -1.0), (-1.0, 1.0), (1.0, -1.0), (1.0, 1.0)]
         .map(|(x, z)| {
