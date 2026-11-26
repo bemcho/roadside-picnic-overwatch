@@ -242,7 +242,7 @@ fn smooth(grid: &Grid, from: Vec2, points: Vec<Vec2>) -> Vec<Vec2> {
 mod tests {
     use super::*;
     use crate::player::STANDING;
-    use crate::world::{Pillar, quarry_pillars, quarry_ramp, quarry_scan};
+    use crate::world::{Pillar, golden_pit_ramp, quarry_pillars, quarry_ramp, quarry_scan};
 
     const WALL: &[Pillar] = &[
         Pillar {
@@ -349,6 +349,24 @@ mod tests {
             .expect("a route down the ramp");
         let route = length(&[&[entrance], path.as_slice()].concat());
         let limit = length(ramp) * 1.6;
+        assert!(
+            route <= limit,
+            "the route is {route} m, the limit {limit} m"
+        );
+    }
+
+    #[test]
+    // The router is slope-blind, so this only proves the Sphere is reachable
+    // from the rim; it may cut across the pit rather than follow the ramp.
+    fn a_click_order_reaches_the_golden_sphere() {
+        let terrain = Terrain::new();
+        let ramp = golden_pit_ramp();
+        let (rim, sphere) = (ramp[0], ramp[ramp.len() - 1]);
+
+        let path =
+            find_path(&terrain, [], rim, sphere, STANDING, 1.0).expect("a route to the Sphere");
+        let route = length(&[&[rim], path.as_slice()].concat());
+        let limit = length(&ramp) * 1.6;
         assert!(
             route <= limit,
             "the route is {route} m, the limit {limit} m"

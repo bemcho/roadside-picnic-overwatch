@@ -50,6 +50,8 @@ pub use places::{Describe, Explored, Place, SURVEY_CELL, place_at, structure_on_
 pub(crate) use plants::PlantsGrowing;
 #[cfg(test)]
 pub(crate) use quarry_ramp::quarry_pillars;
+#[cfg(test)]
+pub(crate) use roads::golden_pit_ramp;
 pub(crate) use roads::{expedition_route, traffic_routes};
 #[cfg(test)]
 pub(crate) use sites::{quarry_ramp, quarry_scan};

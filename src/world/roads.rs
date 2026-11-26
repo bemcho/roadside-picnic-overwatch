@@ -61,6 +61,9 @@ pub(super) const EMBANKMENT: Vec2 = map(907.0, 449.0);
 pub(super) const RIDGE: Vec2 = map(997.0, 395.0);
 pub(super) const QUARRY: Vec2 = map(1095.0, 320.0);
 pub(super) const GOLDEN_SPHERE: Vec2 = map(1185.0, 348.0);
+/// Where the Chapter 4 road meets the Golden Sphere's pit ramp, on the rim
+/// (world metres, not map pixels): the ramp's drive starts here.
+pub(super) const GOLDEN_RIM: Vec2 = Vec2::new(-980.2, -77.8);
 pub(super) const SWAMP: Vec2 = map(775.0, 690.0);
 pub(super) const CRATER: Vec2 = map(880.0, 700.0);
 // On the railway itself.
@@ -80,8 +83,9 @@ enum Surface {
     Street,
     /// The railway's gravel bed.
     Ballast,
-    /// The quarry's dirt haul road. The drive follows the land; the ramp is graded
-    /// evenly from the entrance, with a rounded crest there.
+    /// A pit's dirt haul road, the quarry's or the Golden Sphere's. The drive
+    /// follows the land; the ramp is graded evenly from the entrance, with a
+    /// rounded crest there.
     Ramp,
 }
 
@@ -199,8 +203,11 @@ const ROUTES: &[Route] = &[
         map(1057.0, 318.0),
         QUARRY,
         map(1100.0, 368.0),
-        map(1146.0, 368.0),
-        GOLDEN_SPHERE,
+        // Along the pit's rim, on the low ridge, to where its ramp starts.
+        Vec2::new(-962.0, 10.0),
+        Vec2::new(-966.0, -20.0),
+        Vec2::new(-972.0, -48.0),
+        GOLDEN_RIM,
     ]),
     // The short track between the highway's end and the Chapter 4 route.
     dirt(&[RED_LINK, map(737.0, 395.0), RED_TURN]),
@@ -264,6 +271,23 @@ pub(super) fn country_roads() -> impl Iterator<Item = &'static [Vec2]> {
         .map(|route| route.points)
 }
 
+/// The Golden Sphere's haul road in world xz (`tools/plan_quarry_ramp.py`),
+/// from the entrance in the pit's rim down to the Sphere's junction.
+#[allow(
+    clippy::excessive_precision,
+    reason = "The planner writes 5 decimals; the file is generated, not edited"
+)]
+const GOLDEN_PIT_RAMP: &[Vec2] = include!("pillars/golden_pit_ramp.rs");
+
+/// The Golden Sphere's haul road: its drive from the Chapter 4 road's end on
+/// the rim to the baked entrance, then the baked path down the pit to the Sphere.
+pub(crate) fn golden_pit_ramp() -> Vec<Vec2> {
+    [GOLDEN_RIM]
+        .into_iter()
+        .chain(GOLDEN_PIT_RAMP.iter().copied())
+        .collect()
+}
+
 /// The railway's bed: the map's line, split into graded runs.
 fn railway_bed() -> Vec<Vec2> {
     let mut bed = vec![RAILWAY[0]];
@@ -275,7 +299,8 @@ fn railway_bed() -> Vec<Vec2> {
 }
 
 /// Every graded path: the routes, each site's drive, the railway bed and the
-/// quarry's ramp, which carries the quarry's drive as its head.
+/// two ramps: the quarry's, which carries the quarry's drive as its head, and
+/// the Golden Sphere's, which starts at the end of the Chapter 4 road.
 fn tracks() -> Vec<(Surface, Vec<Vec2>)> {
     let routes = ROUTES
         .iter()
@@ -289,6 +314,7 @@ fn tracks() -> Vec<(Surface, Vec<Vec2>)> {
         .chain([
             (Surface::Ballast, railway_bed()),
             (Surface::Ramp, sites::quarry_ramp()),
+            (Surface::Ramp, golden_pit_ramp()),
         ])
         .collect()
 }
@@ -552,8 +578,19 @@ mod tests {
             );
         }
         assert!(bed.contains(&RAIL_CROSSING) && on_routes(RAIL_CROSSING));
+        // A ramp track is the road's end for a site it leads to.
+        let ramp_ends: Vec<Vec2> = ramp_tracks()
+            .iter()
+            .map(|path| path[path.len() - 1])
+            .collect();
         for site in LANDMARKS {
-            assert!(on_routes(site.junction) || bed.contains(&site.junction));
+            assert!(
+                on_routes(site.junction)
+                    || bed.contains(&site.junction)
+                    || ramp_ends.contains(&site.junction),
+                "{:?} has no road",
+                site.junction
+            );
         }
     }
 
@@ -596,13 +633,22 @@ mod tests {
         );
     }
 
-    fn quarry_ramp_track() -> Vec<Vec2> {
-        let mut ramps = tracks()
+    /// The quarry's haul road and the Golden Sphere's.
+    fn ramp_tracks() -> Vec<Vec<Vec2>> {
+        let ramps: Vec<_> = tracks()
             .into_iter()
-            .filter(|(surface, _)| *surface == Surface::Ramp);
-        let (_, path) = ramps.next().expect("the quarry has a ramp track");
-        assert!(ramps.next().is_none(), "one ramp track only");
-        path
+            .filter(|(surface, _)| *surface == Surface::Ramp)
+            .map(|(_, path)| path)
+            .collect();
+        assert_eq!(ramps.len(), 2, "the quarry's and the Golden Sphere's ramps");
+        ramps
+    }
+
+    fn quarry_ramp_track() -> Vec<Vec2> {
+        ramp_tracks()
+            .into_iter()
+            .find(|path| path[0] == QUARRY)
+            .expect("the quarry has a ramp track")
     }
 
     /// The point halfway along `path`, by length.
@@ -632,29 +678,189 @@ mod tests {
     }
 
     #[test]
-    fn a_ramp_is_graded_evenly() {
-        let track = quarry_ramp_track();
-        let (drive, ramp) = track.split_at(1);
-        let roads = RoadNetwork::new(|at| at.x);
-        let ends = (ramp[0].x, ramp[ramp.len() - 1].x);
-        assert!((ends.0 - ends.1).abs() > 10.0, "the ramp must change level");
-        let sample = |at| {
-            roads
-                .sample(at)
-                .expect("the ramp's middle is on the network")
-        };
-        let road = sample(midway(ramp));
-        assert_eq!(road.surface, Surface::Ramp);
-        let mean = (ends.0 + ends.1) / 2.0;
+    fn the_golden_ramp_starts_on_the_chapter_4_road() {
+        let chapter_4 = ROUTES
+            .iter()
+            .find(|route| route.points.contains(&QUARRY))
+            .expect("the Chapter 4 route passes the quarry");
+        assert_eq!(chapter_4.points.last(), Some(&GOLDEN_RIM));
+        assert_eq!(golden_pit_ramp()[0], GOLDEN_RIM);
+        assert!(ramp_tracks().contains(&golden_pit_ramp()));
+        // The old chute along the pit's floor is gone.
+        let chute = map(1146.0, 368.0);
+        assert!(!ROUTES.iter().any(|route| route.points.contains(&chute)));
+    }
+
+    #[test]
+    fn the_golden_ramp_ends_at_the_golden_sphere() {
+        assert_eq!(golden_pit_ramp().last(), Some(&GOLDEN_SPHERE));
+    }
+
+    /// A point on a path, its run from the path's start and the direction across it.
+    struct Station {
+        run: f32,
+        at: Vec2,
+        across: Vec2,
+    }
+
+    /// Points along `path` every `step` meters, and its last point.
+    fn stations(path: &[Vec2], step: f32) -> Vec<Station> {
+        let mut found = Vec::new();
+        let (mut start, mut next) = (0.0, 0.0);
+        for &[a, b] in path.array_windows() {
+            let leg = a.distance(b);
+            let across = (b - a).normalize().perp();
+            while next < start + leg {
+                let at = a.lerp(b, (next - start) / leg);
+                found.push(Station {
+                    run: next,
+                    at,
+                    across,
+                });
+                next += step;
+            }
+            start += leg;
+        }
+        let last = path.len() - 1;
+        let across = (path[last] - path[last - 1]).normalize().perp();
+        found.push(Station {
+            run: start,
+            at: path[last],
+            across,
+        });
+        found
+    }
+
+    /// How far `at` lies from the segment from `a` to `b`.
+    fn distance_to_leg(at: Vec2, a: Vec2, b: Vec2) -> f32 {
+        let leg = b - a;
+        let t = ((at - a).dot(leg) / leg.length_squared()).clamp(0.0, 1.0);
+        at.distance(a + leg * t)
+    }
+
+    #[test]
+    fn the_golden_ramp_keeps_clear_of_other_tracks() {
+        // Its first 30 m leave the Chapter 4 road at the rim and its last 30 m
+        // join the Sphere's own drive; between them no other track's nearest
+        // leg may take the road's level.
+        const JOINS: f32 = 30.0;
+        let ramp = golden_pit_ramp();
+        let length = stations(&ramp, 1.0).last().map_or(0.0, |end| end.run);
+        let others: Vec<_> = tracks()
+            .into_iter()
+            .filter(|(_, path)| *path != ramp)
+            .collect();
+        let mut worst = (f32::INFINITY, Vec2::ZERO);
+        for station in stations(&ramp, 1.0) {
+            if station.run < JOINS || station.run > length - JOINS {
+                continue;
+            }
+            for (_, path) in &others {
+                for &[a, b] in path.array_windows() {
+                    let gap = distance_to_leg(station.at, a, b);
+                    if gap < worst.0 {
+                        worst = (gap, station.at);
+                    }
+                }
+            }
+        }
         assert!(
-            (road.height - mean).abs() < 0.01,
-            "height {} vs mean {mean}",
-            road.height
+            worst.0 > 2.0 * RAMP_SHOULDER,
+            "another track comes within {} m of the ramp at {}",
+            worst.0,
+            worst.1
         );
-        // Its drive follows the land from the junction to the entrance.
-        let middle = sample(midway(&[drive[0], ramp[0]]));
-        let mean = (drive[0].x + ramp[0].x) / 2.0;
-        assert!((middle.height - mean).abs() < 0.01);
+    }
+
+    #[test]
+    fn the_golden_ramp_meets_the_chapter_4_road_level() {
+        let terrain = Terrain::new();
+        let ramp = golden_pit_ramp();
+        let chapter_4 = ROUTES
+            .iter()
+            .find(|route| route.points.contains(&QUARRY))
+            .expect("the Chapter 4 route passes the quarry");
+        let before = chapter_4.points[chapter_4.points.len() - 2];
+        let level = |toward: Vec2| {
+            let at = GOLDEN_RIM + (toward - GOLDEN_RIM).normalize();
+            terrain
+                .roads
+                .sample(at)
+                .expect("the rim is on the road")
+                .height
+        };
+        let step = (level(before) - level(ramp[1])).abs();
+        assert!(step < 0.2, "the road steps {step} m at the rim");
+    }
+
+    #[test]
+    fn the_golden_ramp_keeps_off_the_dioramas() {
+        // The ramp may pass a scan's ground blend, but not its footprint: that
+        // is the Golden Sphere's own pad and the Quarry rim's scan.
+        let footprints: Vec<_> = sites::diorama_footprints().collect();
+        for name in ["The Golden Sphere", "Quarry rim"] {
+            assert!(footprints.iter().any(|(found, ..)| *found == name));
+        }
+        for station in stations(&golden_pit_ramp(), 3.0) {
+            for side in [-RAMP_SHOULDER, 0.0, RAMP_SHOULDER] {
+                let at = station.at + station.across * side;
+                assert!(
+                    sites::diorama_ground(at).is_none(),
+                    "a diorama's ground lies {side} m from the ramp's {} m at {at}",
+                    station.run
+                );
+                for (name, (low, high), _) in &footprints {
+                    assert!(
+                        at.cmplt(*low).any() || at.cmpgt(*high).any(),
+                        "{name}'s footprint holds the point {side} m from the ramp's {} m at {at}",
+                        station.run
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_golden_ramp_is_dry() {
+        let terrain = Terrain::new();
+        for station in stations(&golden_pit_ramp(), 1.0) {
+            for side in [-RAMP_HALF_WIDTH, 0.0, RAMP_HALF_WIDTH] {
+                let at = station.at + station.across * side;
+                let depth = terrain.water_depth_at(at.x, at.y);
+                assert_eq!(
+                    depth, 0.0,
+                    "{depth} m of water {side} m from the ramp's {} m at {at}",
+                    station.run
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_ramp_is_graded_evenly() {
+        for track in ramp_tracks() {
+            let (drive, ramp) = track.split_at(1);
+            let roads = RoadNetwork::new(|at| at.x);
+            let ends = (ramp[0].x, ramp[ramp.len() - 1].x);
+            assert!((ends.0 - ends.1).abs() > 10.0, "the ramp must change level");
+            let sample = |at| {
+                roads
+                    .sample(at)
+                    .expect("the ramp's middle is on the network")
+            };
+            let road = sample(midway(ramp));
+            assert_eq!(road.surface, Surface::Ramp);
+            let mean = (ends.0 + ends.1) / 2.0;
+            assert!(
+                (road.height - mean).abs() < 0.01,
+                "height {} vs mean {mean}",
+                road.height
+            );
+            // Its drive follows the land from the junction to the entrance.
+            let middle = sample(midway(&[drive[0], ramp[0]]));
+            let mean = (drive[0].x + ramp[0].x) / 2.0;
+            assert!((middle.height - mean).abs() < 0.01);
+        }
     }
 
     #[test]

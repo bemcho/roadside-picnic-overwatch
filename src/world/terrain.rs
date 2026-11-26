@@ -822,27 +822,29 @@ mod tests {
     fn the_ramp_grade_stays_drivable() {
         // The centerline holds the ramp's grade; on a bend the inner lane is
         // shorter by R / (R - lane), and the 2 m mesh adds to it.
-        // The road level is exactly 0.191; the render mesh strays up to 0.11 m from it in a bend.
+        // The quarry's road level is exactly 0.191, the Golden Sphere's 0.118;
+        // the render mesh strays up to 0.11 m from it in a bend.
         const CENTERLINE: f32 = 0.25;
         const LANES: f32 = 0.35;
         let terrain = Terrain::new();
-        let path = sites::quarry_ramp();
         let mut worst = (0.0, 0.0, Vec2::ZERO);
-        for &[a, b] in path.array_windows() {
-            let steps = a.distance(b).ceil() as usize;
-            let step_length = a.distance(b) / steps as f32;
-            let across = (b - a).normalize().perp();
-            for lane in [-1.8, 0.0, 1.8] {
-                let limit = if lane == 0.0 { CENTERLINE } else { LANES };
-                let mut last = terrain.mesh_height_at(a + across * lane);
-                for step in 1..=steps {
-                    let at = a.lerp(b, step as f32 / steps as f32) + across * lane;
-                    let height = terrain.mesh_height_at(at);
-                    let excess = (height - last).abs() / step_length - limit;
-                    if excess > worst.0 {
-                        worst = (excess, limit, at);
+        for path in [sites::quarry_ramp(), roads::golden_pit_ramp()] {
+            for &[a, b] in path.array_windows() {
+                let steps = a.distance(b).ceil() as usize;
+                let step_length = a.distance(b) / steps as f32;
+                let across = (b - a).normalize().perp();
+                for lane in [-1.8, 0.0, 1.8] {
+                    let limit = if lane == 0.0 { CENTERLINE } else { LANES };
+                    let mut last = terrain.mesh_height_at(a + across * lane);
+                    for step in 1..=steps {
+                        let at = a.lerp(b, step as f32 / steps as f32) + across * lane;
+                        let height = terrain.mesh_height_at(at);
+                        let excess = (height - last).abs() / step_length - limit;
+                        if excess > worst.0 {
+                            worst = (excess, limit, at);
+                        }
+                        last = height;
                     }
-                    last = height;
                 }
             }
         }
@@ -851,6 +853,30 @@ mod tests {
             excess <= 0.0,
             "grade over its limit of {limit} by {excess} at {at}"
         );
+    }
+
+    #[test]
+    fn the_golden_ramp_cuts_and_fills_within_its_limits() {
+        // The planner measured 4 m of cut and 5 m of fill (at most) against its
+        // 96 x 96 grid of the land; against the land itself, a little more
+        // than the grid's resolution allows.
+        const CUT: f32 = 4.3;
+        const FILL: f32 = 5.3;
+        let terrain = Terrain::new();
+        let (mut cut, mut fill) = ((0.0, Vec2::ZERO), (0.0, Vec2::ZERO));
+        // The entrance ends the drive, which follows the land.
+        for &at in &roads::golden_pit_ramp()[1..] {
+            let level = terrain.roads.sample(at).expect("the ramp is a road").height;
+            let rise = level - sited_height(at.x, at.y);
+            if -rise > cut.0 {
+                cut = (-rise, at);
+            }
+            if rise > fill.0 {
+                fill = (rise, at);
+            }
+        }
+        assert!(cut.0 <= CUT, "{} m of cut at {}", cut.0, cut.1);
+        assert!(fill.0 <= FILL, "{} m of fill at {}", fill.0, fill.1);
     }
 
     #[test]
