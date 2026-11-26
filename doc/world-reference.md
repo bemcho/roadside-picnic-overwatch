@@ -360,7 +360,9 @@ the stalker stands still.
     points under the site's pose, so the quarry's 60 m drive is the ramp track's
     head (`Surface::Ramp` throughout: one nearest-leg choice, no step where a drive
     and a ramp would meet). The drive follows the land to the entrance; from there
-    the ramp falls 48 m over 251 m (0.191) to the floor. The terrain
+    the ramp falls 48 m over 251 m (0.191) to the floor. A parabolic crest, 24 m long and centred on the
+    entrance (`graded_track`, points every 1 m), rounds the 0.27 grade change (radius about 89 m, so a car
+    stays on the ground up to about 29 m/s; the sharp break launched the armored car at its 21 m/s top speed). The terrain
     applies a ramp after the diorama's ground (`lerp(h, ramp.height, ramp.mask())`),
     cutting and filling the pit's relief inside the corridor.
   - *Collision:* `quarry_ramp::quarry_pillars()` is the scan's collision without

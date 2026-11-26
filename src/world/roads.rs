@@ -353,30 +353,66 @@ fn ruts(d: f32) -> f32 {
     smoothstep(0.83, 0.32, (d - 1.51).abs())
 }
 
-/// The graded level at each point of a track. A ramp's first leg is its drive,
-/// following the land like any other; from the drive's end the ramp falls
-/// evenly with its length to its last point's level, however the land between
-/// lies. Other tracks follow the land at every corner.
-fn track_levels(surface: Surface, path: &[Vec2], level: impl Fn(Vec2) -> f32) -> Vec<f32> {
+/// A ramp's vertical curve at its entrance spans this many meters, half on
+/// the drive and half down the ramp.
+const CREST_LENGTH: f32 = 24.0;
+/// How far apart the crest's points lie; at 1 m a chord's grade breaks stay under the curve's own bend.
+const CREST_STEP: f32 = 1.0;
+
+/// A track's points with the graded level at each. A ramp's first leg is its
+/// drive, following the land like any other; from the drive's end the ramp
+/// falls evenly with its length to its last point's level, however the land
+/// between lies. A parabola rounds the break between the two grades: left
+/// sharp, it launches a car at full throttle off the entrance. Other tracks
+/// follow the land at every corner.
+fn graded_track(
+    surface: Surface,
+    path: &[Vec2],
+    level: impl Fn(Vec2) -> f32,
+) -> (Vec<Vec2>, Vec<f32>) {
     if surface != Surface::Ramp {
-        return path.iter().map(|&at| level(at)).collect();
+        return (path.to_vec(), path.iter().map(|&at| level(at)).collect());
     }
-    let (drive, ramp) = path.split_at(1);
-    let runs: Vec<f32> = ramp
-        .iter()
-        .scan((ramp[0], 0.0), |(previous, run), &at| {
-            *run += previous.distance(at);
-            *previous = at;
-            Some(*run)
-        })
+    let (junction, entrance) = (path[0], path[1]);
+    let half = CREST_LENGTH / 2.0;
+    // The crest's points: the drive's last half and the ramp's first half, in
+    // steps, each with its signed run from the entrance (negative on the drive).
+    let toward_junction = (junction - entrance).normalize();
+    let mut points: Vec<(Vec2, f32)> = (0..=(half / CREST_STEP) as usize)
+        .rev()
+        .map(|i| i as f32 * CREST_STEP)
+        .map(|back| (entrance + toward_junction * back, -back))
         .collect();
-    let total = runs[runs.len() - 1];
-    let (top, bottom) = (level(ramp[0]), level(ramp[ramp.len() - 1]));
-    drive
-        .iter()
-        .map(|&at| level(at))
-        .chain(runs.iter().map(|run| lerp(top, bottom, run / total)))
-        .collect()
+    points.insert(0, (junction, -junction.distance(entrance)));
+    for &[a, b] in path[1..].array_windows() {
+        let (_, start) = points[points.len() - 1];
+        let pieces = if start < half {
+            (a.distance(b) / CREST_STEP).ceil()
+        } else {
+            1.0
+        };
+        for i in 1..=pieces as usize {
+            let t = i as f32 / pieces;
+            points.push((a.lerp(b, t), start + a.distance(b) * t));
+        }
+    }
+
+    let (drive, total) = (-points[0].1, points[points.len() - 1].1);
+    let (start, top, bottom) = (
+        level(junction),
+        level(entrance),
+        level(path[path.len() - 1]),
+    );
+    let (drive_grade, ramp_grade) = ((top - start) / drive, (bottom - top) / total);
+    points
+        .into_iter()
+        .map(|(at, run)| {
+            let line = top + run * if run < 0.0 { drive_grade } else { ramp_grade };
+            let beyond = (half - run.abs()).max(0.0);
+            let round = (ramp_grade - drive_grade) * beyond * beyond / (2.0 * CREST_LENGTH);
+            (at, line + round)
+        })
+        .unzip()
 }
 
 impl RoadNetwork {
@@ -385,7 +421,7 @@ impl RoadNetwork {
         let mut max = Vec2::splat(f32::NEG_INFINITY);
         let mut tiles: HashMap<_, Vec<_>> = HashMap::default();
         for (surface, path) in tracks() {
-            let levels = track_levels(surface, &path, &level);
+            let (path, levels) = graded_track(surface, &path, &level);
             for (&[a, b], &levels) in path.array_windows().zip(levels.array_windows()) {
                 let delta = b - a;
                 let length = delta.length();

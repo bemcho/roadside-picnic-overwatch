@@ -854,6 +854,38 @@ mod tests {
     }
 
     #[test]
+    fn the_ramp_crest_is_rounded() {
+        // A 24 m vertical curve over the 0.27 grade change at the entrance;
+        // a sharper break launches a car at full throttle.
+        const CURVATURE: f32 = 0.27 / 24.0 * 1.1;
+        let terrain = Terrain::new();
+        let path = sites::quarry_ramp();
+        let entrance = path[0].distance(path[1]);
+        // The road's level at each metre along the track, 20 m either side of the entrance.
+        let mut levels = Vec::new();
+        let mut start = 0.0;
+        for &[a, b] in path.array_windows() {
+            let leg = a.distance(b);
+            let mut run = (entrance - 20.0).max(start).ceil();
+            while run < start + leg && run <= entrance + 20.0 {
+                let at = a.lerp(b, (run - start) / leg);
+                levels.push(terrain.roads.sample(at).expect("a road").height);
+                run += 1.0;
+            }
+            start += leg;
+        }
+        assert!(levels.len() >= 40, "{} samples", levels.len());
+        for (i, window) in levels.array_windows::<3>().enumerate() {
+            let change = (window[2] - 2.0 * window[1] + window[0]).abs();
+            assert!(
+                change <= CURVATURE,
+                "grade changes by {change} per metre at sample {}",
+                i + 1
+            );
+        }
+    }
+
+    #[test]
     fn the_ramp_ends_on_the_floor() {
         let terrain = Terrain::new();
         let (end, floor, _) = *ramp_in_the_diorama(&terrain)
