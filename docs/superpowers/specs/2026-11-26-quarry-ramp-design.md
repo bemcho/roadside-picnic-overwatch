@@ -53,30 +53,38 @@ along a ramp that winds down the pit.
    the relief grid (`src/world/pillars/uhd_quarry_pit_ground.rs`) and writes
    the ramp's centerline in the quarry's model units to a generated file,
    `src/world/pillars/quarry_ramp.rs`. It searches a 32×32 grid over the
-   footprint, with 8 headings and turns of at most 45° per step, for the
-   path from the front edge's middle down to the floor that keeps closest to
-   the relief (fill and, at a higher cost, cut both penalized, turns
-   penalized) at a constant 20% grade, then smooths it. Prototyped: 226 m,
-   one turn (west along the front, down the west wall, east along the back,
-   a hairpin north through the middle terrace, east to the floor), at most
-   7.2 m of fill and 2.3 m of cut, runs at least 24 m apart.
+   footprint, with 8 headings, turns of at most 45° per step and at least
+   11 m between turns, for the path from the front edge's middle down to the
+   floor that keeps closest to the relief (fill and, at twice the cost, cut
+   both penalized, turns penalized) at a constant 20% grade. The cell path's
+   corners are then rounded into circular arcs of 9.5 m (a 9 m wide bed must
+   not pivot) and the path is resampled every 3 m. As built: 244 m, grade
+   0.198, at most 6.8 m of fill and 2.2 m of cut against the smoothed relief
+   the search follows (7.9 and 3.2 m against the raw relief), runs at least
+   22.7 m apart, tightest turn 9.5 m. It winds down the pit in an S: along
+   the front, down the near wall, across the back, a hairpin back through the
+   middle terrace and down to the floor.
 2. **Ramp surface.** A new `Surface::Ramp` in `world/roads.rs`: dirt look
    (gravel and ruts in the mask), a 4.5 m half-width bed and a 9 m shoulder
    (the cut banks), narrower than the 8.5 m roads.
 3. **Grade.** A ramp is graded at one constant grade along its whole length,
    from the drive's level at the entrance to the land's level at its floor
-   end, instead of leg by leg. Its points are the quarry's entrance followed
-   by the baked path transformed by the site's pose.
+   end, instead of leg by leg: 0.191 over 251 m, 48 m down. Its points are
+   the quarry's junction and entrance followed by the baked path transformed
+   by the site's pose, so the 60 m drive is the ramp track's head (it follows
+   the land to the entrance) and no second road meets the ramp end to end.
 4. **Terrain.** Inside the diorama the scan's ground overrides roads today;
    ramp legs apply after that override, so the terrain follows the ramp in
    its corridor, cut or fill.
-5. **Cutaway.** At entering the Zone, a height image of the corridor (terrain
-   height where the ramp's shoulder reaches, "uncut" elsewhere, 0.5 m texels,
-   world-aligned over the quarry's footprint) is built once from `Terrain`.
-   The quarry's stand-in and its streamed full scan draw with
-   `ExtendedMaterial<StandardMaterial, RampCut>`: main, prepass and shadow
-   passes discard fragments more than 5 cm above that height, so the ramp,
-   its banks and its light are not covered.
+5. **Cutaway.** At entering the Zone, a height image of the corridor (where
+   the ramp's shoulder reaches, the lowest drawn ground over the texel less
+   0.1 m, "uncut" elsewhere, 0.5 m texels, world-aligned over the quarry's
+   footprint) is built once from `Terrain`. The drawn ground is the render
+   mesh (`mesh_height_at`), not `height_at`: stone left above it, even by
+   centimeters, shows through as dark slivers. The quarry's stand-in and its
+   streamed full scan draw with `ExtendedMaterial<StandardMaterial, RampCut>`:
+   main, prepass and shadow passes discard fragments above that height, so the
+   ramp, its banks and its light are not covered.
 6. **Collision.** Scan pillars whose footprint reaches the ramp's bed are
    dropped from the quarry's collider, once (cached).
 7. **Docs.** Terrain/roads and Sites sections of `doc/world-reference.md`,

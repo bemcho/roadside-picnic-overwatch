@@ -60,7 +60,8 @@ points every 2 m (at most 64 steps a leg) laid on the ground, or on the water wh
 the stalker wades. It shrinks as waypoints are reached and goes with the order (WASD,
 arrival, a stall, boarding or leaving the car). The draped line through the waypoints
 is rebuilt only when they change; only the leg to the next one is laid each frame.
-Routes pass through the yard gate's boom, and a car
+The router is slope-blind: it weighs no grade, so an order crosses a downhill wall
+as readily as a road (see **Quarry ramp**). Routes pass through the yard gate's boom, and a car
 with an `InstitutePass` through the Institute gate's; each lifts as it arrives. A yellow ring (`ui/locator.rs`) lies on the ground around
 the stalker, or the car they drive, at every zoom: its vertices follow the
 rendered terrain (or the water when wading), it never shrinks under 34 px wide,
@@ -77,8 +78,14 @@ the stalker stands still.
   the Chapter 4 track through the breach, the marsh road and the quarry. Roads
   are graded over the sited land (pads and dioramas), then paved. Each route
   is dirt, old asphalt (`Surface::Asphalt`: the highway, Harmont's main road,
-  the Institute and Plague roads) or New Harmont's smooth streets
-  (`Surface::Street`); the road mask texture holds gravel (R), tire ruts (G),
+  the Institute and Plague roads), New Harmont's smooth streets
+  (`Surface::Street`) or, for the quarry's haul road alone, a ramp
+  (`Surface::Ramp`: dirt with a 4.5 m half-width bed and a 9 m shoulder,
+  `RAMP_HALF_WIDTH`, `RAMP_SHOULDER`, narrower than the 8.5 m roads). A ramp
+  is graded at one constant grade along its length, from its first leg's level
+  to its last point's, instead of following the land at every corner, and it
+  overrides a diorama's own ground, which hides every other road, so the pit
+  follows it inside its corridor (see **Quarry ramp**); the road mask texture holds gravel (R), tire ruts (G),
   asphalt (B) and the old, broken share of that asphalt (A, `Surface::Asphalt`
   only: New Harmont's streets and plaza keep A = 0), and `terrain.wesl` paints
   smooth weathered tar from B and the old asphalt (see Old roads) from A.
@@ -334,6 +341,60 @@ the stalker stands still.
   stand-in as below. Build a stand-in from the JPEG source
   with glTF Transform `simplify --ratio 0.02 --error 0.002` and `resize --width
   1024 --height 1024`, then compress; never ground or recenter it.
+- **Quarry ramp** (`src/world/{quarry_ramp,ramp_cut}.rs`, `roads.rs`, `terrain.rs`,
+  `sites.rs`, `assets/shaders/ramp_cut.wesl`, `tools/plan_quarry_ramp.py`): a haul
+  road winds down the Quarry rim diorama's pit (48 m deep) to its floor, walkable
+  and drivable by the stalker, the car and the carrier.
+  - *Path:* `python3 tools/plan_quarry_ramp.py src/world/pillars/uhd_quarry_pit_ground.rs
+    src/world/pillars/quarry_ramp.rs` (about a second; `python3 -m unittest
+    tools/test_plan_quarry_ramp.py`) searches a 32x32 grid over the footprint (8
+    headings, turns of at most 45 degrees, at least 11 m between turns) for the
+    path from the front edge's middle down to the floor that keeps closest to the
+    relief at a constant grade (a fill costs its square over 9 m, a cut twice that;
+    each turn costs), rounds the corners into 9.5 m arcs and writes the centerline
+    in model units: 83 points, 244 m, grade 0.198, at most 6.8 m of fill and 2.2 m
+    of cut against the smoothed relief, runs at least 22.7 m apart. The tool
+    refuses a road steeper than `--grade` or turning tighter than 9 m. The file is
+    generated: regenerate it, never edit it.
+  - *Track:* `sites::quarry_ramp()` is the junction, the entrance and the baked
+    points under the site's pose, so the quarry's 60 m drive is the ramp track's
+    head (`Surface::Ramp` throughout: one nearest-leg choice, no step where a drive
+    and a ramp would meet). The drive follows the land to the entrance; from there
+    the ramp falls 48 m over 251 m (0.191) to the floor. The terrain
+    applies a ramp after the diorama's ground (`lerp(h, ramp.height, ramp.mask())`),
+    cutting and filling the pit's relief inside the corridor.
+  - *Collision:* `quarry_ramp::quarry_pillars()` is the scan's collision without
+    the pillars whose footprint reaches the bed (930 of 3,186), filtered once at
+    first use from the same points; `Landmark::solids` serves it, so the stalker,
+    the car, the carrier and the router meet no invisible wall on the road.
+  - *Cut:* the scan is untouched. `RampCutMaterial` (`ramp_cut.rs`,
+    `ExtendedMaterial<StandardMaterial, RampCut>`) draws the stand-in and every
+    streamed full scan of the quarry (`cut_scan_stone` swaps the material on each
+    stream-in; it is not cached, which would pin the scan's textures in VRAM) and
+    discards the fragments above a height image of the corridor, in the main
+    pass, the deferred prepass and the shadow maps' depth pass alike (its
+    `AlphaMode::Mask` makes the shadow pass run the shader), so the road is
+    neither covered nor shadowed by the stone removed over it. The image
+    (`build_ramp_cut`, built once at entering the Zone in about 140 ms, 220x253
+    R32Float texels of 0.5 m, 217 KiB) holds, wherever a texel's centre is within
+    the 9 m of the centerline, the lowest ground drawn over the texel (the 2 m
+    render mesh, `Terrain::mesh_height_at`, not `height_at`, which differs by up
+    to 0.11 m on the bed and by metres on the banks) less `BURY` (0.1 m), and
+    `1.0e6` elsewhere. Stone left above the drawn ground, even by centimeters,
+    shows through it as dark slivers; `the_cut_lies_below_the_ground_that_is_drawn`
+    keeps it below. Limits: texels are read nearest, so the cut's edge on the
+    stone is stepped in 0.5 m teeth; only the main, deferred and depth-only
+    prepass pipelines are written (the camera runs no normal or motion-vector
+    prepass); the image follows the 2 m near mesh, so the far 8 m ground tiles
+    may leave slivers at a distance.
+  - *Driving and orders:* the stalker running, a car at 7-10 m/s and the
+    carrier at 4.5 m/s (its turn rate of 0.6 rad/s makes a 9.5 m arc a 5.7 m/s
+    limit) drive or walk from the junction to the floor and back by the keys,
+    without a block, a sinking or a lift off the mesh; a car at full throttle (21 m/s) leaves the ground over the
+    crest at the entrance, where the grade breaks from +0.08 to -0.19. Orders go
+    down the front wall, not the ramp: a click from the rim at the entrance to
+    the floor is a 96 m route straight down the pit's face, which both the
+    stalker (25 s) and the car (27 s) descend, against 255 m by the ramp.
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town
   scan (`assets/models/harmont/`) line a street grid around a paved downtown
   plaza on one level town pad; each shows its full scan near the view and a
