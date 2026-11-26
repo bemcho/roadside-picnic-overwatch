@@ -321,6 +321,10 @@ impl RoadSample {
         smoothstep(shoulder, half_width, self.distance)
     }
 
+    pub fn is_ramp(&self) -> bool {
+        self.surface == Surface::Ramp
+    }
+
     /// The material mask: gravel, tire ruts, asphalt, and the share of that asphalt
     /// that is old and broken (New Harmont's streets are smooth tar).
     fn surface(&self) -> [u8; 4] {

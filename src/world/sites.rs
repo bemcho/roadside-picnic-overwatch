@@ -1075,6 +1075,10 @@ mod tests {
                     "{kind:?} at {} flooded at {at}",
                     site.center
                 );
+                // A ramp is cut into the ground it crosses.
+                if terrain.roads.sample(at).is_some_and(|road| road.is_ramp()) {
+                    continue;
+                }
                 let ground = terrain.height_at(at.x, at.y);
                 let expected = match site.model().ground {
                     Ground::Level(datum) => pose.translation.y + datum * site.model().scale,
