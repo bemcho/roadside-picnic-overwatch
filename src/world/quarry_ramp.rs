@@ -104,7 +104,16 @@ impl CutScan {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world::{Body, Collider, STEP_HEIGHT, Terrain, push_out};
+    use crate::world::{Body, Collider, Terrain, push_out};
+
+    /// The Institute carrier's routing body (`CARRIER_ROUTING`, its radius and
+    /// `HULL_HEIGHT` rounded up), the widest and tallest mover.
+    const CARRIER: Body = Body {
+        radius: 2.3,
+        height: 3.0,
+    };
+    /// The most a kept pillar's body may reach into the cut past its edge.
+    const MAX_LIP: f32 = 1.0;
 
     fn assert_no_pillar_stands_on_the_ramp(scan: CutScan) {
         let (pose, _) = sites::cut_scan(scan);
@@ -130,38 +139,49 @@ mod tests {
         assert_no_pillar_stands_on_the_ramp(CutScan::Core);
     }
 
-    // A guard against narrowing the filter: with the centre rule no kept pillar lies
-    // wholly inside the corridor, so today this examines none.
-    fn assert_no_kept_pillar_stands_invisible_in_the_cut(scan: CutScan) {
-        let terrain = Terrain::new();
+    // The centre rule keeps a pillar whose body reaches into the cut, where the
+    // stone is hidden, so that lip is solid nobody sees: it must stay a sliver of
+    // the bank beside the bed, and clear of the widest mover hugging the bed's edge.
+    fn assert_kept_pillars_leave_only_a_small_lip_in_the_cut(scan: CutScan) {
         let (pose, _) = sites::cut_scan(scan);
+        let bank = RAMP_SHOULDER - RAMP_HALF_WIDTH;
+        let mut lips = 0;
         for pillar in scan.pillars() {
             let center = pose.transform_point(Vec3::new(pillar.x, 0.0, pillar.z));
             let radius = pillar.radius * pose.scale.x;
-            if scan.distance_to_ramp(center.xz()) + radius >= RAMP_SHOULDER {
+            // From the pillar's body to the bed's edge; the bank is that wide.
+            let from_bed = scan.distance_to_ramp(center.xz()) - radius - RAMP_HALF_WIDTH;
+            let lip = bank - from_bed;
+            if lip <= 0.0 {
                 continue;
             }
-            // The cut hides the stone here, so a solid taller than a step
-            // would be a climbable column nobody can see.
-            let top = center.y + pillar.top * pose.scale.y;
-            let ground = terrain.mesh_height_at(center.xz());
+            lips += 1;
             assert!(
-                top <= ground + STEP_HEIGHT,
-                "a pillar at {} rises {} m above the drawn ground inside the cut",
+                lip <= MAX_LIP,
+                "a pillar at {} reaches {lip} m into the cut, over {MAX_LIP} m",
+                center.xz()
+            );
+            assert!(
+                from_bed >= CARRIER.radius,
+                "a pillar at {} is {from_bed} m off the bed, the carrier reaches {} m",
                 center.xz(),
-                top - ground
+                CARRIER.radius
             );
         }
+        assert!(
+            lips > 0,
+            "no kept pillar reaches into the cut: nothing examined"
+        );
     }
 
     #[test]
-    fn no_kept_quarry_pillar_stands_invisible_in_the_cut() {
-        assert_no_kept_pillar_stands_invisible_in_the_cut(CutScan::Quarry);
+    fn kept_quarry_pillars_leave_only_a_small_lip_in_the_cut() {
+        assert_kept_pillars_leave_only_a_small_lip_in_the_cut(CutScan::Quarry);
     }
 
     #[test]
-    fn no_kept_core_pillar_stands_invisible_in_the_cut() {
-        assert_no_kept_pillar_stands_invisible_in_the_cut(CutScan::Core);
+    fn kept_core_pillars_leave_only_a_small_lip_in_the_cut() {
+        assert_kept_pillars_leave_only_a_small_lip_in_the_cut(CutScan::Core);
     }
 
     /// At least one pillar is dropped and at most `percent` of them.
@@ -193,19 +213,13 @@ mod tests {
         let (pose, _) = sites::cut_scan(scan);
         let transform = GlobalTransform::from(pose);
         let collider = Collider(scan.pillars());
-        // The Institute carrier's routing body (`CARRIER_ROUTING`, its radius and
-        // `HULL_HEIGHT` rounded up), wider and taller than the car's.
-        let carrier = Body {
-            radius: 2.3,
-            height: 3.0,
-        };
         for [from, to] in &CORRIDORS[scan as usize] {
             let steps = from.distance(*to).ceil() as usize;
             for i in 0..=steps {
                 let at = from.lerp(*to, i as f32 / steps as f32);
                 let feet = terrain.mesh_height_at(at);
                 assert_eq!(
-                    push_out(at, feet, carrier, [(&collider, &transform)]),
+                    push_out(at, feet, CARRIER, [(&collider, &transform)]),
                     at,
                     "the scan's collision stands on the ramp at {at}"
                 );

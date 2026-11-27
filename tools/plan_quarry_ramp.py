@@ -62,9 +62,10 @@ along with the cheapest way into a state; the buckets only merge states), so a s
 that level lies from the (smoothed) relief: per metre, a fill costs its square over 9, a cut twice that (cuts
 need banks), and each turn of one heading costs 20 (with --turn, only that way). A turn needs
 MIN_STRAIGHT_STEPS steps since the last (more where the cells are small), so the arcs of two corners fit between
-them, and the road ends no sooner than one arc's room after its last turn, so the last arc fits. It ends where the relief is within
-FLOOR_MARGIN_M of the pit's floor (with --end: at the end point's node) and the level lies END_BELOW_GROUND_M
-under the ground there, so the road as built, graded up to that ground, comes out no steeper than the grade.
+them, and the road ends no sooner than one arc's room after its last turn, so the last arc fits. It ends where the
+relief is within FLOOR_MARGIN_M of the pit's floor (with --end: at the end point's node) and the level lies
+END_BELOW_GROUND_M under the ground there, so the road as built, graded up to that ground, comes out no steeper
+than the grade.
 The arcs at the corners shorten the road (0.4 m a 45 degree corner); a state carries how much, and when that is
 more level than the window allows for, the window moves down by the rest. A step whose line comes within the
 shoulder (plus AVOID_MARGIN_M, for the corners' arcs) of an --avoid box is not taken; with --min-separation, nor
@@ -199,7 +200,7 @@ class Site:
         return tuple(lo + 2 * half * k / (self.grid - 1) for lo, half, k in zip(self.low, self.half, (i, j)))
 
     def nearest(self, point, low=None):
-        """The search cell nearest a point, clamped into the grid (a point midway between two cells takes the higher)."""
+        """The search cell nearest a point, clamped into the grid (midway between two cells, the higher)."""
         cell = [
             math.floor((p - lo) / (2 * half) * (self.grid - 1) + 0.5)
             for p, lo, half in zip(point, self.low if low is None else low, self.half)

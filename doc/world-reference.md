@@ -439,9 +439,10 @@ the stalker stands still.
     cutting and filling the pit's relief inside the corridor.
   - *Collision:* both cut scans (`quarry_ramp::CutScan`: the Quarry rim's and the
     Golden Sphere's crater, `landmark-core`) drop the pillars whose centres lie in
-    their cut corridor. A scan's corridor is every ramp leg that reaches its
-    footprint box, a shoulder around it (so the quarry's takes in the crater road's
-    first leg, 23 m of it in the box around the scan, on the pit's floor).
+    their cut corridor. A scan's corridor is every ramp leg whose box comes within
+    two shoulders (18 m: the leg's own and the cut image's) of its footprint box
+    (so the quarry's takes in the crater road's first leg, 23 m of it in the box
+    around the scan, on the pit's floor).
     `CutScan::pillars()` keeps 1,658 of the
     quarry's 3,186 pillars (the crater road's leg clears none more) and 1,708 of the
     core's 4,034 (2,326 dropped, 58%), the one rule `CutScan::in_cut_corridor` shares
@@ -449,13 +450,15 @@ the stalker stands still.
     from the same points. `Landmark::solids` serves it, so the stalker, the car,
     the carrier and the router meet no invisible wall on either road, its banks or
     the rest of the cut. Tests run per scan: `no_{quarry,core}_pillar_stands_on_the_ramp`,
-    `no_kept_{quarry,core}_pillar_stands_invisible_in_the_cut`,
+    `kept_{quarry,core}_pillars_leave_only_a_small_lip_in_the_cut`,
     `{quarry,core}_pillars_off_the_ramp_are_kept` (at most 55% and 60%),
     `the_widest_mover_walks_the_{quarry,crater}_ramp_unpushed` and
     `the_quarry_corridor_covers_the_crater_roads_first_leg`.
-    The centre rule leaves a sub-metre lip (pillar radius 0.9 m): 57 dropped
-    pillars reach 0.5–0.82 m past the 9 m edge, stone there without its own
-    pillar, and kept pillars bulge up to 0.9 m into the cut, off the bed.
+    The centre rule leaves a sub-metre lip (pillar radius 0.9 m): dropped pillars
+    reach up to 0.9 m past the 9 m edge (quarry 135, core 311), stone there without
+    its own pillar, and kept pillars bulge up to 0.9 m into the cut (quarry 133,
+    core 269), at least 3.6 m off the 4.5 m bed. The tests above bound that lip
+    at 1 m and keep it off the bed by the carrier's 2.3 m reach.
   - *Cut:* the scans are untouched. `RampCutMaterial` (`ramp_cut.rs`,
     `ExtendedMaterial<StandardMaterial, RampCut>`) draws the stand-in and every
     streamed full scan of both cut scans, each through its own image and bounds
@@ -546,9 +549,9 @@ the stalker stands still.
       (`--scale 120`, entrance at the front edge's middle, `--turn right`,
       `--min-separation 18`, `--end` on the floor beside the Sphere, grade at most 0.19):
       a right-hand spiral of 128 points and 381 m, laps at least 20.6 m apart, corners of 9.5 m.
-      An `--avoid` box 1 m around the Sphere and the road's 9 m shoulder keep every leg 12.3 m or
+      An `--avoid` box 1 m around the Sphere and the road's 9 m shoulder keep every leg 12 m or
       more from the Sphere; the road ends on the floor 13 m from it, at (-1229.3, 73.1). The
-      search box (`--centre`, `--half`) keeps the centerline 6.8 m or more off the tile edges.
+      search box (`--centre`, `--half`) keeps the centerline 6.7 m or more off the tile edges.
       The file is generated: regenerate it, never edit it.
     - *Cut and fill:* deep by design, the road makes its way through the crater's walls
       (nothing caps it). Against the land the ramp cuts up to 49 m through the high west
@@ -590,8 +593,8 @@ the stalker stands still.
       to 0.25 m over its tracks' tilt). A car at full throttle (24 m/s) from the
       Quarry rim's floor over its ramp's end (the grade turning from -0.19 to +0.13)
       and the junction's crest lifts 0.05 m for one frame at the sag and nowhere else.
-      The bends are 11-15 m (11.4 m on the lowest laps), tighter than the 16.7 m the
-      carrier turns at its 10 m/s top speed: driven flat out, it climbs the lowest
+      The bends are 9.5-15 m (the baked corners' tightest arcs are 9.5 m), tighter
+      than the 16.7 m the carrier turns at its 10 m/s top speed: driven flat out, it climbs the lowest
       laps' banks and stalls there once; it holds them below 6.8 m/s (driven at 4.5).
       Click orders keep to ground each mover can climb, so the car's and the
       carrier's follow the spiral road down (the stalker's cut across where the
@@ -602,10 +605,10 @@ the stalker stands still.
       slope-blind routes took the walls, up to a 1.64 grade;
       `a_car_ordered_down_the_crater_road_arrives` drives the car's order). The
       trip's box with 28 m around it leaves out the spiral's outer laps, so these
-      orders take the wider second search (84 m): a click costs 0.19-0.23 s from
-      the Golden Sphere's junction and 0.43-0.52 s from the Quarry rim's (playtest
-      build, both scans streamed in). By click (release-speed playtest build): the
-      stalker takes 81 s from the Golden Sphere's junction (a 365 m route) and 129 s
+      orders take the wider second search (84 m): a click costs 0.2-0.6 s near
+      the crater (0.19-0.23 s from the Golden Sphere's junction and 0.43-0.52 s from
+      the Quarry rim's in the playtest build, both scans streamed in). By click
+      (release-speed playtest build): the stalker takes 81 s from the Golden Sphere's junction (a 365 m route) and 129 s
       from the Quarry rim's (582 m, planned before the core streams in); the car
       32 s (380 m) and 63 s (770 m), on the ground all the way (at most 0.06 m off
       the mesh, 3.5 m off the centreline at the first bend), slowing for the bends
