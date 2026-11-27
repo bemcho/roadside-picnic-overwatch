@@ -37,6 +37,10 @@ pub const TERRAIN_ASPHALT_ALBEDO: &str = "textures/terrain/asphalt_albedo.ktx2";
 pub const TERRAIN_ASPHALT_NORMAL: &str = "textures/terrain/asphalt_normal.ktx2";
 pub const TERRAIN_ASPHALT_SURFACE: &str = "textures/terrain/asphalt_surface.ktx2";
 pub const TERRAIN_ASPHALT_CRACK: &str = "textures/terrain/asphalt_crack.ktx2";
+/// The road kit's strip, laid along the Zone's asphalt (tools/bake_road_kit.py).
+pub const TERRAIN_OLD_ROAD_ALBEDO: &str = "textures/terrain/old_road_albedo.ktx2";
+pub const TERRAIN_OLD_ROAD_NORMAL: &str = "textures/terrain/old_road_normal.ktx2";
+pub const TERRAIN_OLD_ROAD_HEIGHT: &str = "textures/terrain/old_road_height.ktx2";
 /// The rock steep ground is dressed in (`tools/prepare_rock_textures.py`).
 pub const TERRAIN_ROCK_ALBEDO: &str = "textures/terrain/rock_albedo.ktx2";
 pub const TERRAIN_ROCK_NORMAL: &str = "textures/terrain/rock_normal.ktx2";
@@ -273,6 +277,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         TERRAIN_GRASS_ALBEDO,
         TERRAIN_EARTH_ALBEDO,
         TERRAIN_ASPHALT_ALBEDO,
+        TERRAIN_OLD_ROAD_ALBEDO,
         TERRAIN_ROCK_ALBEDO,
         HANGAR_FLOOR_ALBEDO,
     ];
@@ -284,6 +289,8 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         TERRAIN_ASPHALT_NORMAL,
         TERRAIN_ASPHALT_SURFACE,
         TERRAIN_ASPHALT_CRACK,
+        TERRAIN_OLD_ROAD_NORMAL,
+        TERRAIN_OLD_ROAD_HEIGHT,
         TERRAIN_ROCK_NORMAL,
         TERRAIN_ROCK_SURFACE,
         HANGAR_FLOOR_NORMAL,

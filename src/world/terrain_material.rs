@@ -8,9 +8,19 @@ use bevy::shader::ShaderRef;
 
 use crate::assets::{self, load_repeating};
 
+use super::cordon::PERIMETER_X;
 use super::roads::RoadNetwork;
 
 pub(super) type TerrainMaterial = ExtendedMaterial<StandardMaterial, GroundLayers>;
+
+/// How far inside the Perimeter the Zone's asphalt starts to give way to the old road
+/// kit, and where it is all kit.
+const OLD_ROAD_FROM: f32 = 20.0;
+const OLD_ROAD_FULL: f32 = 35.0;
+/// The kit strip's period along the road and its width across, in metres, as
+/// tools/bake_road_kit.py printed them (STRIP_PERIOD, STRIP_WIDTH).
+const OLD_ROAD_PERIOD: f32 = 60.2789;
+const OLD_ROAD_WIDTH: f32 = 17.8677;
 
 const FOG_SETTINGS_EPSILON: f32 = 0.25;
 
@@ -49,6 +59,18 @@ pub(super) struct GroundLayers {
     rock_normal: Handle<Image>,
     #[texture(116)]
     rock_surface: Handle<Image>,
+    #[texture(117)]
+    old_road_albedo: Handle<Image>,
+    #[texture(118)]
+    old_road_normal: Handle<Image>,
+    #[texture(119)]
+    old_road_height: Handle<Image>,
+    #[texture(120, sample_type = "u_int")]
+    road_legs: Handle<Image>,
+    #[texture(121, sample_type = "float", filterable = false)]
+    leg_table: Handle<Image>,
+    #[uniform(122)]
+    old_road_band: Vec4,
 }
 
 impl MaterialExtension for GroundLayers {
@@ -68,6 +90,7 @@ pub(super) fn load_terrain_material(
 ) -> TerrainMaterial {
     let load = |path, is_srgb| load_repeating(server, path, is_srgb);
     let (road_surface, road_bounds) = roads.surface_texture();
+    let (road_legs, leg_table) = roads.leg_frame();
     TerrainMaterial {
         base: StandardMaterial {
             // The terrain shader applies distance fog with a low-ground mask.
@@ -92,8 +115,25 @@ pub(super) fn load_terrain_material(
             rock_albedo: load(assets::TERRAIN_ROCK_ALBEDO, true),
             rock_normal: load(assets::TERRAIN_ROCK_NORMAL, false),
             rock_surface: load(assets::TERRAIN_ROCK_SURFACE, false),
+            old_road_albedo: load(assets::TERRAIN_OLD_ROAD_ALBEDO, true),
+            old_road_normal: load(assets::TERRAIN_OLD_ROAD_NORMAL, false),
+            old_road_height: load(assets::TERRAIN_OLD_ROAD_HEIGHT, false),
+            road_legs: images.add(road_legs),
+            leg_table: images.add(leg_table),
+            old_road_band: old_road_band(),
         },
     }
+}
+
+/// Where the Zone's old road shows, for the shader: the x at which it starts and the
+/// x at which it is complete (it grows toward -x), then the strip's period and width.
+fn old_road_band() -> Vec4 {
+    Vec4::new(
+        PERIMETER_X - OLD_ROAD_FROM,
+        PERIMETER_X - OLD_ROAD_FULL,
+        OLD_ROAD_PERIOD,
+        OLD_ROAD_WIDTH,
+    )
 }
 
 pub(super) fn update_terrain_fog_settings(
@@ -209,6 +249,16 @@ mod tests {
     use bevy::render::render_resource::{Extent3d, TextureDimension};
 
     use super::*;
+
+    #[test]
+    fn old_road_band_starts_20_m_inside_and_completes_at_35_m() {
+        let band = old_road_band();
+        assert_eq!(band.x, 680.0);
+        assert_eq!(band.y, 665.0);
+        // The strip tools/bake_road_kit.py printed: its period along the road and width across.
+        assert_eq!(band.z, 60.2789);
+        assert_eq!(band.w, 17.8677);
+    }
 
     /// A `const NAME: f32 = value;` of the terrain shader.
     fn shader_const(name: &str) -> f32 {

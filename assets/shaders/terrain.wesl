@@ -30,6 +30,12 @@ import bevy_pbr::render::forward_io::{VertexOutput, FragmentOutput};
 @group(constants::MATERIAL_BIND_GROUP) @binding(114) var rock_albedo: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(115) var rock_normal: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(116) var rock_surface: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(117) var old_road_albedo: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(118) var old_road_normal: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(119) var old_road_height: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(120) var road_legs: texture_2d<u32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(121) var leg_table: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(122) var<uniform> old_road_band: vec4<f32>;
 
 const TAU: f32 = 6.2831855;
 
@@ -54,6 +60,22 @@ const CRACK_DEPTH: f32 = 0.03;
 // The relief march's steps, and the ground's pixel size (m per pixel) under which it runs.
 const RELIEF_STEPS: i32 = 12;
 const RELIEF_NEAR: f32 = 0.02;
+
+// The Zone's old road (tools/bake_road_kit.py): the retired road kit baked into a strip that is
+// laid along every asphalt leg (roads.rs `leg_frame`), growing in from `old_road_band.x` inside
+// the Perimeter until it is whole at `.y`; `.z` is the strip's period along the road, `.w` its
+// width. Metres its relief spans in the parallax: the bake's own 1.16 m (heaved slabs, pothole
+// floors) would sink the road out of the ground it is painted on, so the parallax keeps a tenth.
+const OLD_ROAD_RELIEF: f32 = 0.12;
+// The ground's pixel size (m per pixel) under which the parallax runs, and under which the photo
+// grain starts to show in the kit, once the kit's own 16 mm texels are magnified.
+const OLD_ROAD_NEAR: f32 = 0.05;
+const OLD_ROAD_TEXEL: f32 = 0.016;
+// How much nearer one leg must be than its bend's other leg to be laid alone; inside that the
+// two frames blend, so the kit does not break along the bend's bisector.
+const OLD_ROAD_BEND: f32 = 1.5;
+// Metres per cell of the noise that decides which patches break up first.
+const OLD_ROAD_PATCH: f32 = 3.0;
 
 // Steep ground (cut banks, fill faces, pit walls) is dressed in rock
 // (tools/prepare_rock_textures.py). Metres one repeat of the rock maps covers.
@@ -243,6 +265,186 @@ fn old_asphalt(
     return asphalt;
 }
 
+// How far the Zone's old road has taken over at a world point: 0 outside the band, 1 past it.
+fn old_road_wear(xz: vec2<f32>) -> f32 {
+    return 1.0 - smoothstep(old_road_band.y, old_road_band.x, xz.x);
+}
+
+struct RoadLeg {
+    start: vec2<f32>,
+    along: vec2<f32>,
+    length: f32,
+    // How far along its route the leg starts.
+    route: f32,
+}
+
+// Row `id` - 1 of the leg table.
+fn road_leg(id: u32) -> RoadLeg {
+    let a = textureLoad(leg_table, vec2<i32>(0, i32(id) - 1), 0);
+    let b = textureLoad(leg_table, vec2<i32>(1, i32(id) - 1), 0);
+    return RoadLeg(a.xy, a.zw, b.x, b.y);
+}
+
+fn leg_distance(leg: RoadLeg, xz: vec2<f32>) -> f32 {
+    let run = clamp(dot(xz - leg.start, leg.along), 0.0, leg.length);
+    return distance(xz, leg.start + leg.along * run);
+}
+
+// Whether `next` carries on from `leg` along the same route (a new route starts at 0).
+fn continues(leg: RoadLeg, next: RoadLeg) -> bool {
+    return next.route > 0.0 && abs(leg.route + leg.length - next.route) < 0.01;
+}
+
+// The legs the kit is laid along at a world point: the nearer of the mask texel's leg and its
+// bend neighbours, the other one, and how much the other weighs (0 away from the bisector).
+struct LegPair {
+    near: RoadLeg,
+    other: RoadLeg,
+    blend: f32,
+    found: bool,
+}
+
+fn old_road_legs(xz: vec2<f32>) -> LegPair {
+    var pair: LegPair;
+    let size = textureDimensions(road_legs);
+    let texel = vec2<i32>(floor((xz - road_bounds.xy) * road_bounds.zw * vec2<f32>(size)));
+    if any(texel < vec2<i32>(0)) || any(texel >= vec2<i32>(size)) {
+        return pair;
+    }
+    let id = textureLoad(road_legs, texel, 0).r;
+    if id == 0u {
+        return pair;
+    }
+    let leg = road_leg(id);
+    var other = leg;
+    var other_distance = 1.0e9;
+    if id > 1u {
+        let before = road_leg(id - 1u);
+        if continues(before, leg) {
+            other = before;
+            other_distance = leg_distance(before, xz);
+        }
+    }
+    if id < textureDimensions(leg_table).y {
+        let after = road_leg(id + 1u);
+        let after_distance = leg_distance(after, xz);
+        if continues(leg, after) && after_distance < other_distance {
+            other = after;
+            other_distance = after_distance;
+        }
+    }
+    let own_distance = leg_distance(leg, xz);
+    pair.near = leg;
+    pair.other = other;
+    if other_distance < own_distance {
+        pair.near = other;
+        pair.other = leg;
+    }
+    pair.blend = 0.5 * (1.0 - smoothstep(0.0, OLD_ROAD_BEND, abs(other_distance - own_distance)));
+    pair.found = true;
+    return pair;
+}
+
+// The strip's texture coordinates at a world point of a leg, and their screen gradients. Across
+// runs toward the kit's +x, the leg's direction turned clockwise.
+struct StripUv {
+    uv: vec2<f32>,
+    dx: vec2<f32>,
+    dy: vec2<f32>,
+    across: vec2<f32>,
+}
+
+fn strip_uv(leg: RoadLeg, xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> StripUv {
+    var strip: StripUv;
+    strip.across = vec2<f32>(leg.along.y, -leg.along.x);
+    let scale = old_road_band.wz;
+    let offset = xz - leg.start;
+    strip.uv = vec2<f32>(dot(offset, strip.across), leg.route + dot(offset, leg.along)) / scale
+        + vec2<f32>(0.5, 0.0);
+    strip.dx = vec2<f32>(dot(dx, strip.across), dot(dx, leg.along)) / scale;
+    strip.dy = vec2<f32>(dot(dy, strip.across), dot(dy, leg.along)) / scale;
+    return strip;
+}
+
+struct Kit {
+    albedo: vec3<f32>,
+    // 1 on the asphalt, 0 in potholes and the gaps between slabs.
+    cover: f32,
+    height: f32,
+    tilt: vec2<f32>,
+}
+
+fn kit_at(leg: RoadLeg, xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>) -> Kit {
+    let strip = strip_uv(leg, xz, dx, dy);
+    let colour = textureSampleGrad(old_road_albedo, ground_sampler, strip.uv, strip.dx, strip.dy);
+    // The normal's xy lie in the road's frame (across, along); no y flip, unlike the photo maps.
+    let xy = textureSampleGrad(old_road_normal, ground_sampler, strip.uv, strip.dx, strip.dy).xy * 2.0 - 1.0;
+    let z = sqrt(max(1.0 - dot(xy, xy), 0.0));
+    var kit: Kit;
+    kit.albedo = colour.rgb;
+    kit.cover = colour.a;
+    kit.height = textureSampleGrad(old_road_height, ground_sampler, strip.uv, strip.dx, strip.dy).r;
+    kit.tilt = (strip.across * xy.x + leg.along * xy.y) / max(z, 0.3);
+    return kit;
+}
+
+// Where the view ray meets the kit's relief near the camera, in one parallax step: the ray goes
+// as deep as the strip's height there says. A march like `asphalt_hit`'s would fetch the strip
+// twelve times per road pixel out to a wider range than the grain's; the normal map carries the
+// slab edges, so one fetch keeps the potholes' depth for little.
+fn kit_hit(leg: RoadLeg, xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, along: vec2<f32>, pixel_size: f32) -> vec2<f32> {
+    let relief = OLD_ROAD_RELIEF * (1.0 - smoothstep(0.5 * OLD_ROAD_NEAR, OLD_ROAD_NEAR, pixel_size));
+    if relief <= 0.0 {
+        return xz;
+    }
+    let strip = strip_uv(leg, xz, dx, dy);
+    let height = textureSampleGrad(old_road_height, ground_sampler, strip.uv, strip.dx, strip.dy).r;
+    return xz + along * (1.0 - height) * relief;
+}
+
+// Today's asphalt (`current`) giving way to the old road kit as `wear` grows: patches chosen by
+// a noise below `wear` take the kit, its potholes and cracks first, whole slabs from mid-band on.
+// The kit's gaps show `ground`, the bare ground under the road, shaded toward their floor. Close
+// up, the photo grain of `current` modulates the kit, whose own texels are OLD_ROAD_TEXEL.
+fn old_road(
+    xz: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, along: vec2<f32>, pixel_size: f32, wear: f32,
+    ground: vec3<f32>, current: OldAsphalt,
+) -> OldAsphalt {
+    let legs = old_road_legs(xz);
+    if !legs.found {
+        return current;
+    }
+    let at = kit_hit(legs.near, xz, dx, dy, along, pixel_size);
+    var kit = kit_at(legs.near, at, dx, dy);
+    if legs.blend > 0.0 {
+        let other = kit_at(legs.other, at, dx, dy);
+        kit.albedo = mix(kit.albedo, other.albedo, legs.blend);
+        kit.cover = mix(kit.cover, other.cover, legs.blend);
+        kit.height = mix(kit.height, other.height, legs.blend);
+        kit.tilt = mix(kit.tilt, other.tilt, legs.blend);
+    }
+    let noise = patch_noise(xz / OLD_ROAD_PATCH) * 0.7 + patch_noise(xz / 0.9 + 11.0) * 0.3;
+    let lows = 1.0 - smoothstep(0.3, 0.5, kit.height);
+    let take = smoothstep(noise - 0.06, noise + 0.06, wear * 1.2 - 0.1)
+        * mix(lows, 1.0, smoothstep(0.35, 0.75, wear));
+    let detail = 1.0 - smoothstep(0.5 * OLD_ROAD_TEXEL, OLD_ROAD_TEXEL, pixel_size);
+    let grain = mix(
+        vec3<f32>(1.0), current.albedo / max(map_mean(asphalt_albedo).rgb, vec3<f32>(1.0e-3)), detail,
+    );
+    let pit = ground * mix(0.45, 0.8, kit.height);
+    var road: OldAsphalt;
+    road.albedo = mix(pit, kit.albedo * grain, kit.cover);
+    road.tilt = kit.tilt + current.tilt * 0.5 * kit.cover * detail;
+    road.roughness = mix(0.95, current.roughness, kit.cover);
+    road.occlusion = current.occlusion * mix(0.5, 1.0, kit.height);
+    var out: OldAsphalt;
+    out.albedo = mix(current.albedo, road.albedo, take);
+    out.tilt = mix(current.tilt, road.tilt, take);
+    out.roughness = mix(current.roughness, road.roughness, take);
+    out.occlusion = mix(current.occlusion, road.occlusion, take);
+    return out;
+}
+
 // The rock on one projection plane, weighted: colour, packed surface and the
 // tangent normal's slope along the plane's (u, v). The maps' y runs up the
 // texture, against v.
@@ -380,6 +582,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let road_uv = clamp((p.xz - road_bounds.xy) * road_bounds.zw, vec2<f32>(0.0), vec2<f32>(1.0));
     // Road mask: red gravel, green tire ruts, blue asphalt, alpha the old, broken share of it.
     let road = textureSampleLevel(road_surface, ground_sampler, road_uv, 0.0);
+    // The ground the old road's potholes open onto: half gravel, half what grows beside it.
+    let bare = albedo;
     let gravel = (vec3<f32>(0.23, 0.184, 0.124) + earth * 0.48) * (1.0 - road.g * 0.34);
     albedo = mix(albedo, gravel, road.r);
     // Weathered asphalt, grained by the earth map.
@@ -391,7 +595,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var asphalt: OldAsphalt;
     if road.a > 0.0 {
         let along = -tangent_view.xz / max(facing, 0.32);
-        asphalt = old_asphalt(p.xz, ground_dx, ground_dy, along, road.a, pixel_size);
+        // In the Zone the kit takes over, and today's crack decals give way to its own cracks.
+        let wear = old_road_wear(p.xz);
+        asphalt = old_asphalt(p.xz, ground_dx, ground_dy, along, road.a * (1.0 - wear), pixel_size);
+        if wear > 0.0 {
+            let ground = mix(gravel, bare, 0.5);
+            asphalt = old_road(p.xz, ground_dx, ground_dy, along, pixel_size, wear, ground, asphalt);
+        }
     }
     albedo = mix(albedo, asphalt.albedo, road.a);
     albedo *= mix(vec3<f32>(1.0), vec3<f32>(0.48, 0.56, 0.42), wetness);
