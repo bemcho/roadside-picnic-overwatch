@@ -11,6 +11,7 @@
 mod recovery;
 mod residency;
 mod streaming;
+pub mod tier;
 mod vram;
 
 use std::collections::{BTreeMap, HashSet};
@@ -20,6 +21,7 @@ use bevy::prelude::*;
 
 pub use streaming::GpuScansPlugin;
 use streaming::ScanHandles;
+pub use tier::{GpuTier, TierLevel};
 
 /// Seconds a scan stays on the GPU after it last showed, whatever other scans
 /// want (only a budget shrunk below the resident scans drops it sooner).
@@ -61,6 +63,8 @@ pub const OOM_SQUEEZE_GB: f32 = 0.5;
 pub struct VramReading {
     pub budget: u64,
     pub usage: u64,
+    /// The heap's size: the card's VRAM.
+    pub card: u64,
 }
 
 /// What `GpuScans::plan` decided: scans to start loading and scans to drop.
@@ -873,6 +877,7 @@ mod tests {
         let reading = VramReading {
             budget: gib(3.9),
             usage: gib(3.0),
+            card: 0,
         };
         assert_eq!(
             live_scan_budget(reading, gib(2.5), None),
@@ -902,6 +907,7 @@ mod tests {
         let loading = VramReading {
             budget: gib(6.0),
             usage: gib(2.0) + 300 * MB,
+            card: 0,
         };
         assert!(scans.apply_reading(loading, None, 2.0), "loading");
         let budget = live_scan_budget(loading, gib(2.0), None);
@@ -932,6 +938,7 @@ mod tests {
         let reading = VramReading {
             budget: rest + 200 * MB + gib(MARGIN_GB),
             usage: rest + 200 * MB,
+            card: 0,
         };
         assert!(scans.apply_reading(reading, None, 20.0));
         assert_eq!(scans.budget(), 200 * MB);
@@ -954,6 +961,7 @@ mod tests {
         let roomy = VramReading {
             budget: full.budget + gib(1.0),
             usage: full.usage - 200 * MB,
+            card: 0,
         };
         assert!(scans.apply_reading(roomy, None, 60.0));
         assert_eq!(scans.budget(), 200 * MB + gib(1.0) - gib(OOM_SQUEEZE_GB));
@@ -1070,6 +1078,7 @@ mod tests {
             let reading = VramReading {
                 budget: driver,
                 usage,
+                card: 0,
             };
             assert!(scans.apply_reading(reading, None, at));
             scans.budget()

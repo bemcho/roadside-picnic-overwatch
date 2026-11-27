@@ -22,7 +22,7 @@ use crate::states::AppState;
 use super::recovery::handle_render_error;
 use super::residency::{ScanParts, ScanResidency, publish_scan_residency, scan_bytes};
 use super::vram::track_vram_budget;
-use super::{GpuScans, State, gb, scan_budget};
+use super::{GpuScans, GpuTier, State, gb, scan_budget};
 
 /// Loads the scans `GpuScans` admits, learns when they are on the GPU, and
 /// keeps the budget on the driver's live VRAM reading.
@@ -32,13 +32,15 @@ impl Plugin for GpuScansPlugin {
     fn build(&self, app: &mut App) {
         // The budget until the first live reading, and for good where the
         // driver cannot report VRAM.
-        let vram_gb = app
+        let launch = app
             .world()
             .get_resource::<LaunchOptions>()
-            .and_then(|launch| launch.vram_gb)
-            .unwrap_or(DEFAULT_VRAM_GB);
+            .cloned()
+            .unwrap_or_default();
+        let vram_gb = launch.vram_gb.unwrap_or(DEFAULT_VRAM_GB);
         let residency = ScanResidency::default();
         app.insert_resource(GpuScans::entering(scan_budget(vram_gb)))
+            .insert_resource(GpuTier::fallback(vram_gb, launch.gpu_tier))
             .insert_resource(residency.clone())
             .insert_resource(RenderErrorHandler(handle_render_error))
             .add_systems(

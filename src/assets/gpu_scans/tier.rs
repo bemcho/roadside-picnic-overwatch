@@ -1,0 +1,140 @@
+//! How much the GPU can take, judged once a session from the card's size.
+//!
+//! The live budget (`vram`) drops whenever another program holds VRAM, which
+//! would judge a 6 GB card as a 4 GB one; the card's size does not. Effects
+//! that scale with the GPU (the Golden Sphere's reflections) read the level.
+
+use bevy::prelude::*;
+
+use super::{VramReading, gib};
+
+/// The card sizes, in GiB, from which a GPU counts as strong (6 GB cards) and
+/// exceptional (16 GB cards): drivers report a little under the size sold.
+const STRONG_GB: f32 = 5.5;
+const EXCEPTIONAL_GB: f32 = 15.0;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TierLevel {
+    /// Under 6 GB (a 4 GB laptop card).
+    Modest,
+    /// 6 GB and above.
+    #[default]
+    Strong,
+    /// 16 GB and above.
+    Exceptional,
+}
+
+impl TierLevel {
+    /// `--gpu-tier`'s value.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "modest" => Some(Self::Modest),
+            "strong" => Some(Self::Strong),
+            "exceptional" => Some(Self::Exceptional),
+            _ => None,
+        }
+    }
+}
+
+/// The level of a card of `card_bytes`, or of `cap` (`--vram`) if smaller.
+pub fn tier_for(card_bytes: u64, cap: Option<u64>) -> TierLevel {
+    let card = cap.map_or(card_bytes, |cap| cap.min(card_bytes));
+    if card >= gib(EXCEPTIONAL_GB) {
+        TierLevel::Exceptional
+    } else if card >= gib(STRONG_GB) {
+        TierLevel::Strong
+    } else {
+        TierLevel::Modest
+    }
+}
+
+/// The session's GPU level: assumed from `--vram` (or the 6 GB fallback) until
+/// the first driver reading or the first effect that needs it settles it.
+#[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GpuTier {
+    level: TierLevel,
+    settled: bool,
+}
+
+impl GpuTier {
+    /// The level a card of `vram_gb` would have, unless `forced` (`--gpu-tier`).
+    pub fn fallback(vram_gb: f32, forced: Option<TierLevel>) -> Self {
+        Self {
+            level: forced.unwrap_or_else(|| tier_for(gib(vram_gb), None)),
+            settled: false,
+        }
+    }
+
+    pub fn level(&self) -> TierLevel {
+        self.level
+    }
+
+    /// Settles the level the first time: from the card's size in `reading`
+    /// (capped by `cap`), or the fallback without one; `forced` always wins.
+    /// Later calls change nothing.
+    pub fn settle_with(
+        &mut self,
+        reading: Option<VramReading>,
+        cap: Option<u64>,
+        forced: Option<TierLevel>,
+    ) {
+        if self.settled {
+            return;
+        }
+        self.settled = true;
+        if let Some(level) = forced {
+            self.level = level;
+        } else if let Some(reading) = reading {
+            self.level = tier_for(reading.card, cap);
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn gib(gb: f32) -> u64 {
+        (gb * (1u64 << 30) as f32) as u64
+    }
+
+    fn reading(card_gb: f32) -> Option<VramReading> {
+        Some(VramReading {
+            budget: gib(card_gb - 1.0),
+            usage: 0,
+            card: gib(card_gb),
+        })
+    }
+
+    #[test]
+    fn the_tier_follows_the_cards_size_capped_by_vram() {
+        assert_eq!(tier_for(gib(4.0), None), TierLevel::Modest);
+        assert_eq!(tier_for(gib(6.0), None), TierLevel::Strong);
+        assert_eq!(tier_for(gib(16.0), None), TierLevel::Exceptional);
+        assert_eq!(tier_for(gib(16.0), Some(gib(4.0))), TierLevel::Modest);
+    }
+
+    #[test]
+    fn the_tier_is_decided_once() {
+        let mut tier = GpuTier::fallback(6.0, None);
+        assert_eq!(tier.level(), TierLevel::Strong);
+        tier.settle_with(reading(4.0), None, None);
+        assert_eq!(tier.level(), TierLevel::Modest);
+        tier.settle_with(reading(16.0), None, None);
+        assert_eq!(tier.level(), TierLevel::Modest, "settled for the session");
+    }
+
+    #[test]
+    fn without_a_reading_the_fallback_settles_and_a_forced_tier_wins() {
+        let mut tier = GpuTier::fallback(6.0, None);
+        tier.settle_with(None, None, None);
+        assert_eq!(tier.level(), TierLevel::Strong);
+        tier.settle_with(reading(4.0), None, None);
+        assert_eq!(tier.level(), TierLevel::Strong, "settled on the fallback");
+        let forced = Some(TierLevel::Exceptional);
+        let mut tier = GpuTier::fallback(4.0, forced);
+        assert_eq!(tier.level(), TierLevel::Exceptional);
+        tier.settle_with(reading(4.0), None, forced);
+        assert_eq!(tier.level(), TierLevel::Exceptional);
+    }
+}

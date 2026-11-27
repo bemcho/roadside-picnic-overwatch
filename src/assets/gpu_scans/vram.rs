@@ -6,7 +6,7 @@ use bevy::render::renderer::RenderDevice;
 
 use crate::launch::{DEFAULT_VRAM_GB, LaunchOptions};
 
-use super::{GpuScans, VramReading, gb, gib};
+use super::{GpuScans, GpuTier, VramReading, gb, gib};
 
 /// Seconds between two readings of the driver's budget.
 const READ_EVERY: f32 = 1.0;
@@ -29,6 +29,7 @@ pub struct VramLog {
 /// one is warned about once, and only while none has come.
 pub fn track_vram_budget(
     mut scans: ResMut<GpuScans>,
+    mut tier: ResMut<GpuTier>,
     device: Res<RenderDevice>,
     launch: Res<LaunchOptions>,
     time: Res<Time<Real>>,
@@ -50,13 +51,16 @@ pub fn track_vram_budget(
         }
         return;
     };
+    tier.settle_with(Some(reading), launch.vram_gb.map(gib), launch.gpu_tier);
     if !scans.apply_reading(reading, launch.vram_gb.map(gib), now) {
         return;
     }
     if !log.read {
         log.read = true;
         let (b, u, s) = (gb(reading.budget), gb(reading.usage), gb(scans.budget()));
+        let (card, level) = (gb(reading.card), tier.level());
         info!("VRAM: driver budget {b:.1} GB, game using {u:.1} GB; UHD scans may use {s:.1} GB");
+        info!("GPU: a {card:.1} GB card, effects at the {level:?} tier");
     }
 }
 
@@ -65,14 +69,18 @@ pub fn track_vram_budget(
 /// `None` without a device-local heap, or when its budget is 0 (the driver
 /// does not report one).
 pub fn heap_reading(heaps: &[(bool, u64)], budgets: &[u64], usages: &[u64]) -> Option<VramReading> {
-    let (heap, _) = heaps
+    let (heap, &(_, card)) = heaps
         .iter()
         .enumerate()
         .filter(|(_, (device_local, _))| *device_local)
         .max_by_key(|(_, (_, size))| *size)?;
     let budget = *budgets.get(heap)?;
     let usage = *usages.get(heap)?;
-    (budget > 0).then_some(VramReading { budget, usage })
+    (budget > 0).then_some(VramReading {
+        budget,
+        usage,
+        card,
+    })
 }
 
 /// The driver's reading for the game's device, where it runs on Vulkan with
@@ -160,7 +168,8 @@ mod tests {
             heap_reading(&heaps, &[gib(15.0), gib(3.9), gib(0.2)], &usages),
             Some(VramReading {
                 budget: gib(3.9),
-                usage: gib(3.0)
+                usage: gib(3.0),
+                card: gib(4.0),
             })
         );
         assert_eq!(
