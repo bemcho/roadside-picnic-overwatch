@@ -57,6 +57,23 @@ pub(super) struct Ferrofluid {
     /// z, w: the small spikes' least and greatest height.
     #[uniform(103)]
     flow: Vec4,
+    /// The live probe's faces (`reflection.rs`), on 5 GB GPUs and up.
+    #[texture(104)]
+    #[sampler(110)]
+    pub face_px: Option<Handle<Image>>,
+    #[texture(105)]
+    pub face_nx: Option<Handle<Image>>,
+    #[texture(106)]
+    pub face_py: Option<Handle<Image>>,
+    #[texture(107)]
+    pub face_ny: Option<Handle<Image>>,
+    #[texture(108)]
+    pub face_pz: Option<Handle<Image>>,
+    #[texture(109)]
+    pub face_nz: Option<Handle<Image>>,
+    /// xyz: the Sphere's centre, w: its radius; 0 while the faces are not live.
+    #[uniform(111)]
+    pub probe: Vec4,
 }
 
 impl Ferrofluid {
@@ -74,6 +91,31 @@ impl Ferrofluid {
             shape: Vec4::new(SPHERE_POOL_RADIUS, RIM, PEAK_SIGMA, 0.0),
             rings,
             flow: Vec4::new(RING_START, RING_END, SMALL_SPIKE[0], SMALL_SPIKE[1]),
+            face_px: None,
+            face_nx: None,
+            face_py: None,
+            face_ny: None,
+            face_pz: None,
+            face_nz: None,
+            probe: Vec4::ZERO,
+        }
+    }
+
+    /// The liquid mirroring the live probe's `faces`, the Sphere `radius`
+    /// across, where there are faces.
+    pub fn mirroring(self, faces: Option<&[Handle<Image>; 6]>, radius: f32) -> Self {
+        let Some([px, nx, py, ny, pz, nz]) = faces.cloned() else {
+            return self;
+        };
+        Self {
+            face_px: Some(px),
+            face_nx: Some(nx),
+            face_py: Some(py),
+            face_ny: Some(ny),
+            face_pz: Some(pz),
+            face_nz: Some(nz),
+            probe: Vec4::W * radius,
+            ..self
         }
     }
 

@@ -9,6 +9,8 @@ use bevy::mesh::{
 };
 use bevy::prelude::*;
 
+use crate::player::PlayerCamera;
+
 use super::downed::Downed;
 use super::movement::{Wildlife, smooth};
 use super::mutants::is_mutant;
@@ -685,7 +687,7 @@ type Posed<'w, 's> = Query<
 
 pub(in crate::world) fn pose_wildlife(
     terrain: Res<Terrain>,
-    camera: Query<&Transform, (With<Camera3d>, Without<VisualPart>)>,
+    camera: Query<&Transform, (With<PlayerCamera>, Without<VisualPart>)>,
     wildlife: Posed,
     mut parts: Query<(&mut Transform, Option<&mut Visibility>), With<VisualPart>>,
 ) {

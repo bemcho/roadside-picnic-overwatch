@@ -34,6 +34,16 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 // x: where the rings start, y: where they end (from the middle), z, w: the
 // small spikes' least and greatest height.
 @group(constants::MATERIAL_BIND_GROUP) @binding(103) var<uniform> flow: vec4<f32>;
+// The probe's six faces (`reflection.rs`), sampled the way it renders them.
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var face_px: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var face_nx: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var face_py: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(107) var face_ny: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(108) var face_pz: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(109) var face_nz: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(110) var face_sampler: sampler;
+// xyz: the Sphere's centre, w: its radius; 0 while the faces are not live.
+@group(constants::MATERIAL_BIND_GROUP) @binding(111) var<uniform> probe: vec4<f32>;
 
 const HALF_SQRT3: f32 = 0.8660254;
 const TAU: f32 = 6.2831855;
@@ -60,6 +70,68 @@ const RISEN: f32 = 0.3;
 // they stand in full.
 const SETTLED_PIXELS: f32 = 3.0;
 const STANDING_PIXELS: f32 = 8.0;
+
+// What the probe saw along `d`: rgb, and alpha 0 where it saw only sky. The
+// faces and their cameras' up follow `FACES` in `reflection.rs`; the twin of
+// this function lives in the other of `golden_sphere.wesl`/`ferrofluid.wesl`.
+fn probe_sample(d: vec3<f32>) -> vec4<f32> {
+    let a = abs(d);
+    var face = 0;
+    var forward = vec3<f32>(1.0, 0.0, 0.0);
+    var up = vec3<f32>(0.0, 1.0, 0.0);
+    if a.x >= a.y && a.x >= a.z {
+        if d.x < 0.0 {
+            face = 1;
+            forward = vec3<f32>(-1.0, 0.0, 0.0);
+        }
+    } else if a.y >= a.z {
+        if d.y > 0.0 {
+            face = 2;
+            forward = vec3<f32>(0.0, 1.0, 0.0);
+            up = vec3<f32>(0.0, 0.0, -1.0);
+        } else {
+            face = 3;
+            forward = vec3<f32>(0.0, -1.0, 0.0);
+            up = vec3<f32>(0.0, 0.0, 1.0);
+        }
+    } else if d.z > 0.0 {
+        face = 4;
+        forward = vec3<f32>(0.0, 0.0, 1.0);
+    } else {
+        face = 5;
+        forward = vec3<f32>(0.0, 0.0, -1.0);
+    }
+    let along = dot(d, forward);
+    let uv = vec2<f32>(0.5 + 0.5 * dot(d, cross(forward, up)) / along, 0.5 - 0.5 * dot(d, up) / along);
+    var seen = vec4<f32>(0.0);
+    switch face {
+        case 0: { seen = textureSampleLevel(face_px, face_sampler, uv, 0.0); }
+        case 1: { seen = textureSampleLevel(face_nx, face_sampler, uv, 0.0); }
+        case 2: { seen = textureSampleLevel(face_py, face_sampler, uv, 0.0); }
+        case 3: { seen = textureSampleLevel(face_ny, face_sampler, uv, 0.0); }
+        case 4: { seen = textureSampleLevel(face_pz, face_sampler, uv, 0.0); }
+        default: { seen = textureSampleLevel(face_nz, face_sampler, uv, 0.0); }
+    }
+    return seen;
+}
+
+// The Sphere's gold, as its metal's colour.
+const GOLD: vec3<f32> = vec3<f32>(1.0, 0.766, 0.336);
+
+// What the liquid mirrors along `rd` from `ro`: the Sphere if the ray meets
+// it, bouncing on into the probe's faces, else the faces themselves; `fallback`
+// stands in where the probe saw only sky.
+fn mirrored(ro: vec3<f32>, rd: vec3<f32>, fallback: vec3<f32>) -> vec4<f32> {
+    let oc = ro - probe.xyz;
+    let b = dot(oc, rd);
+    let h = b * b - (dot(oc, oc) - probe.w * probe.w);
+    if h > 0.0 && -b - sqrt(h) > 0.0 {
+        let on_sphere = ro + rd * (-b - sqrt(h));
+        let seen = probe_sample(reflect(rd, normalize(on_sphere - probe.xyz)));
+        return vec4<f32>(GOLD * mix(fallback, seen.rgb, seen.a), 1.0);
+    }
+    return probe_sample(rd);
+}
 
 // Meters per pixel at `distance` from the camera.
 fn pixel_at(distance: f32) -> f32 {
@@ -205,6 +277,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let pbr_input = pbr_input_from_standard_material(in, is_front);
     var out: FragmentOutput;
     out.color = apply_pbr_lighting(pbr_input);
+    if probe.w > 0.0 {
+        let n = pbr_input.N;
+        let v = pbr_input.V;
+        let f0 = pbr_input.material.base_color.rgb;
+        let fresnel = f0 + (1.0 - f0) * pow(1.0 - max(dot(n, v), 0.0), 5.0);
+        let seen = mirrored(in.world_position.xyz, reflect(-v, n), out.color.rgb / max(fresnel, vec3<f32>(0.01)));
+        out.color = vec4<f32>(mix(out.color.rgb, seen.rgb * fresnel, seen.a), out.color.a);
+    }
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
     return out;
 }

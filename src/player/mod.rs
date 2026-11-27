@@ -10,6 +10,7 @@ pub(crate) mod vehicle;
 use std::f32::consts::PI;
 
 use bevy::camera::Exposure;
+use bevy::camera::visibility::RenderLayers;
 use bevy::core_pipeline::tonemapping::Tonemapping;
 use bevy::light::AtmosphereEnvironmentMapLight;
 use bevy::pbr::AtmosphereSettings;
@@ -20,8 +21,8 @@ use bevy::render::render_resource::TextureUsages;
 use crate::assets::STALKER_MODEL;
 use crate::states::{AppState, InGamePhase};
 use crate::world::{
-    Body, CAMERA_FAR, Collider, Crusher, SPAWN, StreamAnchor, TERRAIN_HALF_SIZE, Terrain,
-    Unclimbable, Weight, camera_distance_fog, camera_fog, climb_top, fence_out, push_out,
+    Body, CAMERA_FAR, Collider, Crusher, SPAWN, SPHERE_LAYER, StreamAnchor, TERRAIN_HALF_SIZE,
+    Terrain, Unclimbable, Weight, camera_distance_fog, camera_fog, climb_top, fence_out, push_out,
     support_height,
 };
 
@@ -266,6 +267,8 @@ fn spawn_player(mut commands: Commands, asset_server: Res<AssetServer>, terrain:
         AtmosphereSettings::default(),
         AtmosphereEnvironmentMapLight::default(),
         Exposure { ev100: 13.0 },
+        // The Golden Sphere is alone on its own layer, out of its probe's sight.
+        RenderLayers::from_layers(&[0, SPHERE_LAYER]),
         Tonemapping::AcesFitted,
         Bloom::NATURAL,
     ));

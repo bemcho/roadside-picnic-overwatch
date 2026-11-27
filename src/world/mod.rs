@@ -43,6 +43,7 @@ pub use collision::{
 };
 pub(crate) use cordon::in_zone;
 pub(crate) use cordon::{Boom, InstitutePass, PATROL_RADIUS, PATROL_TURNS};
+pub(crate) use golden_sphere::SPHERE_LAYER;
 pub(crate) use ground_fog::{CAMERA_FAR, camera_distance_fog, camera_fog};
 #[cfg(test)]
 pub(crate) use hydrology::SWAMP;
@@ -62,7 +63,7 @@ pub(crate) use turrets::{Gun, GunSound};
 pub use weather::{Sky, Weather, Wind, WorldClock};
 pub(crate) use wildlife::{CreatureSound, Cue as CreatureCue, Kind as CreatureKind};
 
-use bevy::camera::visibility::VisibilityRange;
+use bevy::camera::visibility::{RenderLayers, VisibilityRange};
 use bevy::light::atmosphere::ScatteringMedium;
 use bevy::light::{Atmosphere, SunDisk, light_consts::lux};
 use bevy::prelude::*;
@@ -448,6 +449,8 @@ fn spawn_sky(mut commands: Commands, mut mediums: ResMut<Assets<ScatteringMedium
             let hour = WorldClock::default().hour();
             world.spawn((
                 Sun,
+                // The Golden Sphere's layer too, so it casts its shadow.
+                RenderLayers::from_layers(&[0, SPHERE_LAYER]),
                 DirectionalLight {
                     illuminance: lux::RAW_SUNLIGHT,
                     shadow_maps_enabled: true,

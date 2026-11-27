@@ -3,9 +3,12 @@
 
 mod ferrofluid;
 mod mirror;
+mod reflection;
 
 use std::f32::consts::TAU;
 
+use bevy::camera::visibility::RenderLayers;
+use bevy::diagnostic::FrameCount;
 use bevy::gltf::GltfMaterial;
 use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::prelude::*;
@@ -20,7 +23,9 @@ use super::collision::{Collider, Pillar, Unclimbable};
 use super::sites::{SPHERE_POOL_RADIUS, golden_sphere_spot};
 use super::{Sun, Terrain, WorldRoot, detail_range};
 use ferrofluid::{Ferrofluid, FerrofluidMaterial};
-use mirror::{CAR_PAINT, CARRIER_PAINT, Hull, Mirror, MirrorMaterial, Stalker, stand_ins};
+use mirror::{CAR_PAINT, CARRIER_PAINT, Hull, Mirror, MirrorMaterial, REACH, Stalker, stand_ins};
+pub(crate) use reflection::SPHERE_LAYER;
+use reflection::{ProbeFace, ReflectionProbe, spawn_reflection_probe, steer_reflection_probe};
 
 /// The Sphere's diameter in metres (the user asked for 1 m).
 pub(super) const SPHERE_DIAMETER: f32 = 1.0;
@@ -116,13 +121,19 @@ impl Plugin for GoldenSpherePlugin {
         .init_resource::<HoverClock>()
         .add_systems(
             OnEnter(AppState::InGame),
-            (spawn_golden_sphere, spawn_ferrofluid_pool),
+            (
+                spawn_reflection_probe,
+                spawn_golden_sphere,
+                spawn_ferrofluid_pool,
+            )
+                .chain(),
         )
         .add_systems(
             Update,
             (
                 pose_golden_sphere,
                 pull_ferrofluid,
+                reflect_surroundings,
                 gather_stand_ins.run_if(on_modest_gpu),
             )
                 .chain()
@@ -155,6 +166,7 @@ fn spawn_golden_sphere(
     terrain: Res<Terrain>,
     paints: Res<Assets<GltfMaterial>>,
     mut mirrors: ResMut<Assets<MirrorMaterial>>,
+    probe: Option<Res<ReflectionProbe>>,
 ) {
     let pool = pool_centre(&terrain);
     let (mesh, paint) = assets::load_single_primitive(&server, assets::ARTIFACT_PREVIEWS[1]);
@@ -178,8 +190,10 @@ fn spawn_golden_sphere(
             Mesh3d(mesh),
             MeshMaterial3d(mirrors.add(MirrorMaterial {
                 base: gold,
-                extension: Mirror::default(),
+                extension: Mirror::of(probe.as_deref().map(|probe| &probe.faces)),
             })),
+            // Out of its own probe's sight.
+            RenderLayers::layer(SPHERE_LAYER),
             Transform::from_translation(Vec3::NEG_Y * SOURCE_CENTRE),
             detail_range(300.0, 30.0),
         ));
@@ -192,6 +206,7 @@ fn spawn_ferrofluid_pool(
     tier: Option<Res<GpuTier>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut fluids: ResMut<Assets<FerrofluidMaterial>>,
+    probe: Option<Res<ReflectionProbe>>,
 ) {
     let pool = pool_centre(&terrain);
     // Black metal, as the user asked: a mirror dark enough to read black, the
@@ -210,7 +225,10 @@ fn spawn_ferrofluid_pool(
         Mesh3d(meshes.add(Ferrofluid::pool_mesh(level, floor))),
         MeshMaterial3d(fluids.add(FerrofluidMaterial {
             base: liquid,
-            extension: Ferrofluid::under(Hover::at(0.0)),
+            extension: Ferrofluid::under(Hover::at(0.0)).mirroring(
+                probe.as_deref().map(|probe| &probe.faces),
+                SPHERE_DIAMETER / 2.0,
+            ),
         })),
         Transform::from_translation(pool),
         detail_range(120.0, 20.0),
@@ -244,15 +262,45 @@ fn pose_golden_sphere(
 /// the small ones in.
 fn pull_ferrofluid(
     clock: Res<HoverClock>,
-    pools: Query<&MeshMaterial3d<FerrofluidMaterial>, With<FerrofluidPool>>,
+    pools: Query<(&MeshMaterial3d<FerrofluidMaterial>, &Transform), With<FerrofluidPool>>,
     mut fluids: ResMut<Assets<FerrofluidMaterial>>,
 ) {
     let hover = Hover::at(clock.0);
-    for pool in &pools {
+    let pulled = Ferrofluid::under(hover);
+    for (pool, at) in &pools {
         if let Some(mut fluid) = fluids.get_mut(&pool.0) {
-            fluid.extension = Ferrofluid::under(hover);
+            // Only what moves: the probe's faces stay bound.
+            let liquid = &mut fluid.extension;
+            liquid.field = pulled.field;
+            liquid.rings = pulled.rings;
+            if liquid.probe.w > 0.0 {
+                let centre = at.translation + Vec3::Y * hover.height;
+                liquid.probe = centre.extend(liquid.probe.w);
+            }
         }
     }
+}
+
+/// Keeps the probe at the Sphere, rendering its faces while the stalker or a
+/// vehicle is near enough to show in it.
+fn reflect_surroundings(
+    tier: Option<Res<GpuTier>>,
+    frame: Res<FrameCount>,
+    spheres: Query<&Transform, (With<GoldenSphere>, Without<ProbeFace>)>,
+    stalkers: Query<&Transform, (With<Player>, Without<ProbeFace>)>,
+    seats: Query<&Transform, (With<Seat>, Without<ProbeFace>)>,
+    mut cameras: Query<(&ProbeFace, &mut Camera, &mut Transform)>,
+) {
+    let Ok(sphere) = spheres.single() else {
+        return;
+    };
+    let centre = sphere.translation;
+    let someone_near = stalkers
+        .iter()
+        .chain(&seats)
+        .any(|at| at.translation.distance(centre) <= REACH);
+    let level = tier.map_or(TierLevel::default(), |tier| tier.level());
+    steer_reflection_probe(centre, someone_near, level, &frame, &mut cameras);
 }
 
 /// Modest GPUs get no live reflection map: the Sphere mirrors stand-ins.
@@ -295,10 +343,8 @@ fn gather_stand_ins(
     });
     for mirror in &mirrors {
         if let Some(mut material) = materials.get_mut(&mirror.0) {
-            material.extension = Mirror {
-                stand_ins: shown,
-                sun,
-            };
+            material.extension.stand_ins = shown;
+            material.extension.sun = sun;
         }
     }
 }

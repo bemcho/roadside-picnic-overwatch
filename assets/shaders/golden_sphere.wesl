@@ -1,6 +1,7 @@
-// The Golden Sphere's mirror on modest GPUs: the standard PBR gold, and where
-// its reflection ray meets one of the bodies standing in for the stalker, the
-// car or the carrier, that body lit by the Sun and the sky in its place.
+// The Golden Sphere's mirror: the standard PBR gold, and in its place what the
+// live probe saw (5 GB GPUs and up) or, on modest GPUs, where its reflection
+// ray meets one of the bodies standing in for the stalker, the car or the
+// carrier, that body lit by the Sun and the sky.
 
 import bevy_pbr::render::{
     mesh_view_bindings::view,
@@ -20,11 +21,65 @@ struct StandIn {
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> stand_ins: array<StandIn, 3>;
 // xyz: the way to the Sun, w: its illuminance in lux.
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> sun: vec4<f32>;
+// The probe's six faces (`reflection.rs`), sampled the way it renders them.
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var face_px: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var face_nx: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var face_py: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var face_ny: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var face_pz: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(107) var face_nz: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(108) var face_sampler: sampler;
+// x: 1 while the probe's faces are live.
+@group(constants::MATERIAL_BIND_GROUP) @binding(109) var<uniform> live: vec4<f32>;
 
 const PI: f32 = 3.14159265;
 // The sky's light on a body, as a share of the Sun's.
 const SKY: f32 = 0.2;
 const MISS: f32 = 1.0e9;
+
+// What the probe saw along `d`: rgb, and alpha 0 where it saw only sky. The
+// faces and their cameras' up follow `FACES` in `reflection.rs`; the twin of
+// this function lives in the other of `golden_sphere.wesl`/`ferrofluid.wesl`.
+fn probe_sample(d: vec3<f32>) -> vec4<f32> {
+    let a = abs(d);
+    var face = 0;
+    var forward = vec3<f32>(1.0, 0.0, 0.0);
+    var up = vec3<f32>(0.0, 1.0, 0.0);
+    if a.x >= a.y && a.x >= a.z {
+        if d.x < 0.0 {
+            face = 1;
+            forward = vec3<f32>(-1.0, 0.0, 0.0);
+        }
+    } else if a.y >= a.z {
+        if d.y > 0.0 {
+            face = 2;
+            forward = vec3<f32>(0.0, 1.0, 0.0);
+            up = vec3<f32>(0.0, 0.0, -1.0);
+        } else {
+            face = 3;
+            forward = vec3<f32>(0.0, -1.0, 0.0);
+            up = vec3<f32>(0.0, 0.0, 1.0);
+        }
+    } else if d.z > 0.0 {
+        face = 4;
+        forward = vec3<f32>(0.0, 0.0, 1.0);
+    } else {
+        face = 5;
+        forward = vec3<f32>(0.0, 0.0, -1.0);
+    }
+    let along = dot(d, forward);
+    let uv = vec2<f32>(0.5 + 0.5 * dot(d, cross(forward, up)) / along, 0.5 - 0.5 * dot(d, up) / along);
+    var seen = vec4<f32>(0.0);
+    switch face {
+        case 0: { seen = textureSampleLevel(face_px, face_sampler, uv, 0.0); }
+        case 1: { seen = textureSampleLevel(face_nx, face_sampler, uv, 0.0); }
+        case 2: { seen = textureSampleLevel(face_py, face_sampler, uv, 0.0); }
+        case 3: { seen = textureSampleLevel(face_ny, face_sampler, uv, 0.0); }
+        case 4: { seen = textureSampleLevel(face_pz, face_sampler, uv, 0.0); }
+        default: { seen = textureSampleLevel(face_nz, face_sampler, uv, 0.0); }
+    }
+    return seen;
+}
 
 // `v` turned by `angle` about the vertical, as a Y rotation turns it.
 fn turn(v: vec3<f32>, angle: f32) -> vec3<f32> {
@@ -104,6 +159,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     let ro = in.world_position.xyz;
     let rd = reflect(-pbr_input.V, pbr_input.N);
+    let gold = pbr_input.material.base_color.rgb;
+    if live.x > 0.5 {
+        let seen = probe_sample(rd);
+        color = vec4<f32>(mix(color.rgb, seen.rgb * gold, seen.a), color.a);
+    }
     var nearest = vec4<f32>(0.0, 0.0, 0.0, MISS);
     var paint = vec3<f32>(0.0);
     for (var i = 0; i < 3; i++) {
@@ -121,7 +181,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     }
     if nearest.w < MISS {
         let light = sun.w * (max(dot(nearest.xyz, sun.xyz), 0.0) + SKY);
-        let gold = pbr_input.material.base_color.rgb;
         color = vec4<f32>(paint * light / PI * view.exposure * gold, color.a);
     }
 

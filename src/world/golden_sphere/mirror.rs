@@ -12,7 +12,7 @@ use crate::assets;
 pub(super) type MirrorMaterial = ExtendedMaterial<StandardMaterial, Mirror>;
 
 /// How far from the Sphere a body still shows in it, in metres.
-const REACH: f32 = 15.0;
+pub(super) const REACH: f32 = 15.0;
 /// The stalker's capsule: standing and lying heights, and its radius.
 const STANDING: f32 = 1.8;
 const LYING: f32 = 0.5;
@@ -47,6 +47,42 @@ pub(super) struct Mirror {
     /// xyz: the way to the Sun, w: its illuminance in lux.
     #[uniform(101)]
     pub sun: Vec4,
+    /// The live probe's faces (`reflection.rs`), on 5 GB GPUs and up.
+    #[texture(102)]
+    #[sampler(108)]
+    pub face_px: Option<Handle<Image>>,
+    #[texture(103)]
+    pub face_nx: Option<Handle<Image>>,
+    #[texture(104)]
+    pub face_py: Option<Handle<Image>>,
+    #[texture(105)]
+    pub face_ny: Option<Handle<Image>>,
+    #[texture(106)]
+    pub face_pz: Option<Handle<Image>>,
+    #[texture(107)]
+    pub face_nz: Option<Handle<Image>>,
+    /// x: 1 while the faces are live.
+    #[uniform(109)]
+    live: Vec4,
+}
+
+impl Mirror {
+    /// A mirror of the live probe's `faces`, or of stand-ins without them.
+    pub fn of(faces: Option<&[Handle<Image>; 6]>) -> Self {
+        let Some([px, nx, py, ny, pz, nz]) = faces.cloned() else {
+            return Self::default();
+        };
+        Self {
+            face_px: Some(px),
+            face_nx: Some(nx),
+            face_py: Some(py),
+            face_ny: Some(ny),
+            face_pz: Some(pz),
+            face_nz: Some(nz),
+            live: Vec4::X,
+            ..default()
+        }
+    }
 }
 
 impl MaterialExtension for Mirror {

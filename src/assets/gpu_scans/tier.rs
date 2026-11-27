@@ -8,9 +8,10 @@ use bevy::prelude::*;
 
 use super::{VramReading, gib};
 
-/// The card sizes, in GiB, from which a GPU counts as strong (6 GB cards) and
-/// exceptional (16 GB cards): drivers report a little under the size sold.
-const STRONG_GB: f32 = 5.5;
+/// The card sizes, in GiB, from which a GPU counts as strong (5 GB cards, as the
+/// user asked) and exceptional (16 GB cards): drivers report a little under
+/// the size sold.
+const STRONG_GB: f32 = 4.75;
 const EXCEPTIONAL_GB: f32 = 15.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -109,6 +110,11 @@ mod tests {
     #[test]
     fn the_tier_follows_the_cards_size_capped_by_vram() {
         assert_eq!(tier_for(gib(4.0), None), TierLevel::Modest);
+        assert_eq!(
+            tier_for(gib(4.9), None),
+            TierLevel::Strong,
+            "a 5 GB card as its driver reports it"
+        );
         assert_eq!(tier_for(gib(6.0), None), TierLevel::Strong);
         assert_eq!(tier_for(gib(16.0), None), TierLevel::Exceptional);
         assert_eq!(tier_for(gib(16.0), Some(gib(4.0))), TierLevel::Modest);

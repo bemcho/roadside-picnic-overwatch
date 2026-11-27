@@ -21,7 +21,7 @@ use bevy::platform::collections::HashMap;
 use bevy::prelude::*;
 
 use crate::assets::{self, PreloadedAssets};
-use crate::player::Player;
+use crate::player::{Player, PlayerCamera};
 
 use super::collision::{Collider, Pillar, Unclimbable};
 use super::hydrology::{WATER_LEVEL, Wetlands};
@@ -877,11 +877,11 @@ impl OnWall {
     }
 }
 
-/// Draws the wall within `VIEW_TILES` of each camera, one chunk a frame nearest
+/// Draws the wall within `VIEW_TILES` of the player's camera, one chunk a frame nearest
 /// first (a chunk's three meshes take a few ms to build), and drops the rest.
 pub(super) fn stream_wall_view(
     mut commands: Commands,
-    cameras: Query<&Transform, With<Camera3d>>,
+    cameras: Query<&Transform, With<PlayerCamera>>,
     terrain: Res<Terrain>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut cordon: ResMut<Cordon>,
@@ -2043,7 +2043,7 @@ mod tests {
             .spawn((Player::default(), Transform::from_translation(yard)))
             .id();
         let camera = world
-            .spawn((Camera3d::default(), Transform::from_translation(yard)))
+            .spawn((PlayerCamera, Transform::from_translation(yard)))
             .id();
         let gun = world
             .spawn((
