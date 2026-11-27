@@ -2,7 +2,7 @@
   "source": {
     "repository": "git@github.com:bemcho/agentic-tooling.git",
     "fallback_repository": "https://github.com/bemcho/agentic-tooling.git",
-    "revision": "d93d12a"
+    "revision": "d3d6029"
   },
   "skills": [
     "bevy-game-dev",
