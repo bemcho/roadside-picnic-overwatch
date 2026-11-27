@@ -28,7 +28,8 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> field: vec4<f32>;
 // x: the pool's radius, y: its rim's width, z: the field peak's sigma.
 @group(constants::MATERIAL_BIND_GROUP) @binding(101) var<uniform> shape: vec4<f32>;
-// How far each ring of small spikes has come from the rim (0..1); w unused.
+// How far each ring of small spikes has come from the rim (0..1); w: the
+// seconds of their pulse, wrapping every PULSE_WRAP.
 @group(constants::MATERIAL_BIND_GROUP) @binding(102) var<uniform> rings: vec4<f32>;
 // x: where the rings start, y: where they end (from the middle), z, w: the
 // small spikes' least and greatest height.
@@ -46,6 +47,11 @@ const SMALL_SPIKES: f32 = 12.0;
 const SMALL_FOOT: f32 = 0.09;
 const RISING: f32 = 0.15;
 const SINKING: f32 = 0.7;
+// Each small spike pulses up and down between the least and greatest height,
+// at its own pace: a whole number of times (PULSES, plus up to PULSES more)
+// in PULSE_WRAP seconds, so the wrapping clock never jumps.
+const PULSE_WRAP: f32 = 60.0;
+const PULSES: f32 = 20.0;
 // The field (times the peak's falloff) under which the liquid stays smooth,
 // and over which its spikes stand at their full share.
 const CALM: f32 = 0.15;
@@ -99,9 +105,10 @@ fn cone(off: vec2<f32>, foot: f32, tip: f32) -> vec3<f32> {
     return vec3<f32>(t * t, falloff * off / max(length(off), 1.0e-5));
 }
 
-// A value in 0..1 that stays with spike `i` of ring `ring`.
-fn spike_hash(ring: f32, i: f32) -> f32 {
-    return fract(sin(ring * 12.9898 + i * 78.233) * 43758.547);
+// A value in 0..1 that stays with spike `i` of ring `ring`, `salt` choosing
+// one of several.
+fn spike_hash(ring: f32, i: f32, salt: f32) -> f32 {
+    return fract(sin(ring * 12.9898 + i * 78.233 + salt * 37.719) * 43758.547);
 }
 
 // The crown's spikes at `p`: height and slope (d/dx, d/dz).
@@ -129,7 +136,11 @@ fn small_ring(p: vec2<f32>, k: i32, progress: f32) -> vec3<f32> {
     let i = round((atan2(p.y, p.x) - start) / step);
     let angle = start + i * step;
     let axis = radius * vec2<f32>(cos(angle), sin(angle));
-    let tall = mix(flow.z, flow.w, spike_hash(f32(k), i - SMALL_SPIKES * floor(i / SMALL_SPIKES)));
+    let spike = i - SMALL_SPIKES * floor(i / SMALL_SPIKES);
+    let pulses = PULSES + floor(PULSES * spike_hash(f32(k), spike, 0.0));
+    let phase = TAU * spike_hash(f32(k), spike, 1.0);
+    let pulse = 0.5 + 0.5 * sin(TAU * pulses * rings.w / PULSE_WRAP + phase);
+    let tall = mix(flow.z, flow.w, pulse);
     let height = tall * smoothstep(0.0, RISING, progress) * (1.0 - smoothstep(SINKING, 1.0, progress));
     return height * cone(p - axis, SMALL_FOOT, SMALL_TIP);
 }

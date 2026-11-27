@@ -36,6 +36,9 @@ const RING_START: f32 = 1.2;
 const RING_END: f32 = 0.55;
 const SMALL_SPIKE: [f32; 2] = [0.2, 0.4];
 const RINGS: usize = 3;
+/// Seconds after which the small spikes' pulse clock wraps: each spike pulses
+/// a whole number of times in it (`ferrofluid.wesl`), so the wrap never shows.
+const PULSE_WRAP: f32 = 60.0;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub(super) struct Ferrofluid {
@@ -47,7 +50,7 @@ pub(super) struct Ferrofluid {
     #[uniform(101)]
     shape: Vec4,
     /// How far each of the three rings of small spikes has come from the rim
-    /// in to the crown (0..1); w unused.
+    /// in to the crown (0..1); w: the seconds of their pulse, wrapping.
     #[uniform(102)]
     pub rings: Vec4,
     /// x: where the rings start, y: where they end (metres from the middle),
@@ -61,7 +64,7 @@ impl Ferrofluid {
     pub fn under(hover: Hover) -> Self {
         let strength = (hover.field - WEAKEST_FIELD) / (1.0 - WEAKEST_FIELD);
         let tallest = SHORTEST_TALLEST + (TALLEST - SHORTEST_TALLEST) * strength;
-        let mut rings = Vec4::ZERO;
+        let mut rings = Vec4::W * hover.seconds.rem_euclid(PULSE_WRAP);
         for ring in 0..RINGS {
             let stagger = ring as f32 / RINGS as f32;
             rings[ring] = (hover.seconds / RING_SECONDS + stagger).rem_euclid(1.0);
@@ -279,5 +282,12 @@ mod tests {
             flow.y
         );
         assert_eq!((flow.z, flow.w), (0.2, 0.4), "20 to 40 cm tall");
+    }
+
+    #[test]
+    fn the_small_spikes_pulse_on_a_clock_that_wraps_without_a_jump() {
+        let pulse = |seconds: f32| Ferrofluid::under(Hover::at(seconds)).rings.w;
+        assert!((pulse(10.0) - 10.0).abs() < 1e-4);
+        assert!((pulse(PULSE_WRAP + 1.0) - 1.0).abs() < 1e-3, "wrapped");
     }
 }
