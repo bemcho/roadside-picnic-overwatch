@@ -6,34 +6,42 @@ Picnic*, it drops a stalker into a dangerous Zone of anomalies, artifacts,
 mutants, abandoned industry, and hostile wilderness.
 
 The playable world is a deterministic 3.44 km square with streamed terrain,
-physical sky/lighting, rivers and a lake, shallow fords, dirt roads, dense
-vegetation, imported sites and landmarks, wildlife, and four mutant species.
-The run starts inside a furnished hangar and can continue on foot or in an
-armored vehicle.
+physical sky/lighting, rivers and a lake, shallow fords, dirt and old asphalt
+roads, dense vegetation, imported sites and landmarks, wildlife, and four
+mutant species. A new run starts inside a furnished hangar and can continue on
+foot or in an armored vehicle; progress is saved and restored.
 
 ## Current features
 
 - Smooth procedural terrain, mountains, quarry, bald hill, swamp, river, lake,
   coast, and horizon scenery.
 - World-space dirt/gravel roads with tire ruts, graded approaches, and
-  water-crossing fords.
+  water-crossing fords; old asphalt highways that break up into cracked,
+  potholed slabs inside the Zone.
 - Streamed 128 m chunks with nearby detail and coarse distant/horizon LODs.
-- Third-person stalker movement: walk, run, crawl, jump, fall, and collide with
-  streamed pillars.
+- Third-person stalker movement: walk, run, crawl, jump, fall, climb onto
+  rocks and buildings, and collide with streamed pillars.
+- Tactical camera from over the shoulder to the whole map, point-and-click
+  orders with pathfinding and Shift-click waypoints, hover descriptions, a fog
+  of war, and the Harmont map.
 - Driveable armored vehicle with suspension, four sampled wheel contacts,
   steering, braking, a faster graded-road top speed, wheel animation, slides,
   and a forward spotlight.
 - A cordoned hangar yard with a checkpoint, workshop props, parked vehicles,
   and fourteen animated, individually lit artifact displays.
 - Distant sites, landmarks, rail embankments, substations, and a derailed train.
+- New Harmont with townsfolk and traffic, the Institute with its carrier and
+  helicopters, and the Perimeter: cordon walls, guards, a UN patrol and
+  scanning guns.
+- Day/night cycle and weather with wind, ground fog and clouds.
 - Procedurally rigged wildlife with grounded gait animation, flight, calls, and
   positional sound.
 - Neutral, curious, and aggressive mutants with patrol, inspect, chase, attack,
   recovery, and respawn behavior.
 - Synthesized ambience, footsteps, impacts, doors, vehicle engine, and creature
   cues with global mute.
-- Splash loading gate, pause menu, controls HUD, Zone counters, and smoothed
-  FPS display.
+- Splash loading gate, pause menu, controls HUD, Zone counters, smoothed FPS
+  and position display, and saved progress (F5, every minute and on quitting).
 
 This is an active prototype rather than a finished campaign.
 
@@ -42,24 +50,33 @@ This is an active prototype rather than a finished campaign.
 | Input | Action |
 |---|---|
 | Any key | Enter the Zone after loading finishes |
-| `W/A/S/D` | Camera-relative walk |
+| Left click | Move there (pathfinding; long trips run); while driving, drive there |
+| `Shift` + left click | Add a waypoint after the orders already given |
+| `W/A/S/D` | Camera-relative walk; cancels a click order |
 | `Shift` | Run |
 | `Space` | Jump; while driving, brake |
 | `Ctrl` | Hold to crawl |
-| `E` | Enter or exit the armored vehicle |
+| Walk into a solid | Climb onto a rock, building or other solid |
+| `E` | Enter or exit the armored vehicle, or the Institute carrier while it stands still |
 | `W/S`, `A/D` (vehicle) | Accelerate/reverse, steer |
-| Right mouse drag | Orbit camera |
-| Mouse wheel | Zoom camera |
+| Right mouse drag | Rotate the camera |
+| Mouse wheel | Zoom from over the shoulder out to the whole map |
+| Arrow keys / middle drag / screen edges | Roam the camera |
+| `F` | Toggle the free camera |
+| `C` | Find the stalker (the camera follows them again) |
+| Mouse pointer | Hover over a place, creature or vehicle for its description |
+| `T` | Hold to time-lapse the day/night cycle |
 | `Esc` | Pause/resume |
 | `M` | Open/close the map |
 | `N` | Mute/unmute audio |
 | `V` | Lift/restore the fog of war (for testing) |
+| `F5` | Save progress |
 | `Q` | Quit |
 
 ## Requirements
 
-- A Git installation with [Git LFS](https://git-lfs.com/): every model and
-  texture under `assets/` is an LFS object.
+- A Git installation with [Git LFS](https://git-lfs.com/): the models and
+  images under `assets/` are LFS objects.
 - The stable Rust toolchain from [rustup](https://rustup.rs/).
 - A GPU and drivers supported by `wgpu` (Vulkan, Metal, or DirectX 12).
 - A working audio output device.
@@ -77,8 +94,8 @@ cd roadside-picnic-overwatch
 git lfs pull                # fetches the assets if the clone left pointer files
 ```
 
-Without Git LFS the clone holds small text pointers in place of the GLB and PNG
-assets, and the game fails to load them (see Troubleshooting).
+Without Git LFS the clone holds small text pointers in place of the GLB, PNG
+and model KTX2 assets, and the game fails to load them (see Troubleshooting).
 
 Install the platform dependencies below, then run `cargo run --release`.
 
@@ -145,16 +162,21 @@ source "$HOME/.cargo/env"
 
 ### Windows
 
-1. Install [Git for Windows](https://git-scm.com/download/win).
+1. Install [Git for Windows](https://git-scm.com/download/win). It ships Git
+   LFS; keep its **Git LFS** component selected.
 2. Install [Rust with rustup](https://rustup.rs/) and keep the default
    `stable-x86_64-pc-windows-msvc` toolchain.
-3. Install Visual Studio 2022 Build Tools with the **Desktop development with
-   C++** workload. The MSVC linker and Windows SDK are required by Rust.
+3. Install [Build Tools for Visual Studio 2026](https://visualstudio.microsoft.com/downloads/)
+   with the **Desktop development with C++** workload. The MSVC linker and
+   Windows SDK are required by Rust. Rust finds the 2026 tools from 1.93 on
+   (`rustup update stable`); the 2022 Build Tools still work.
 4. In PowerShell:
 
    ```powershell
-   git clone https://github.com/bemcho/Roadside-Picnic.git
-   Set-Location Roadside-Picnic
+   git lfs install   # once per user, before cloning
+   git clone https://github.com/bemcho/roadside-picnic-overwatch.git
+   Set-Location roadside-picnic-overwatch
+   git lfs pull      # fetches the assets if the clone left pointer files
    cargo run --release
    ```
 
@@ -163,10 +185,13 @@ checkout lives; `cargo` locates runtime files from the repository root.
 
 ### macOS
 
-Install the command-line developer tools and Rust:
+Install the command-line developer tools, Git LFS (with
+[Homebrew](https://brew.sh/); Apple's Git does not include it) and Rust:
 
 ```bash
 xcode-select --install
+brew install git-lfs
+git lfs install   # once per user, before cloning
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 ```
@@ -174,8 +199,9 @@ source "$HOME/.cargo/env"
 Then clone and run:
 
 ```bash
-git clone https://github.com/bemcho/Roadside-Picnic.git
-cd Roadside-Picnic
+git clone https://github.com/bemcho/roadside-picnic-overwatch.git
+cd roadside-picnic-overwatch
+git lfs pull      # fetches the assets if the clone left pointer files
 cargo run --release
 ```
 
@@ -191,7 +217,18 @@ cargo run --release
 
 # Development build
 cargo run
+
+# Playtest build: release speed within a few percent, much faster to rebuild
+cargo run --profile playtest
+
+# Ignore the saved progress and start afresh
+cargo run --release -- --new
 ```
+
+Progress (the surveyed map, the clock, where the stalker and the vehicles
+stand) is saved to `roadside-picnic/progress.txt` under `$XDG_DATA_HOME`
+(`~/.local/share` when unset) on Linux, `%APPDATA%` on Windows or
+`~/Library/Application Support` on macOS.
 
 Release mode is recommended for the full 3D world. The first build downloads
 Rust crates and compiles Bevy, so it takes considerably longer than later
