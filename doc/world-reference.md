@@ -117,7 +117,23 @@ the stalker stands still.
   (moss) and `terrain_texture_1.webp` (bare ground); those source sheets are not
   checked in, only the extracted maps in `assets/textures/terrain`. The shader blends irregular
   patches over the terrain masks, uses the heights for shallow parallax, and adds
-  snow on high, gentler slopes.
+  snow on high, gentler slopes. Steep ground (the cut banks and fill faces of
+  the haul ramps, pit walls, the Zone's western scarps) is dressed in rock:
+  `tools/prepare_rock_textures.py` takes a 320 px fractured patch of the
+  `rock-17m` scan's 4K base colour (assets workspace,
+  `models/rocks/uhd/rock-17m.glb`), flattens its lighting, makes it tile,
+  grades its mean to the cut scans' grey-brown stone (linear 0.057, 0.048, 0.036)
+  and writes `textures/terrain/rock_{albedo,normal,surface}.ktx2` (BC7; source
+  PNGs in the workspace's `textures/rock/`). The shader blends it in by the
+  smooth vertex normal's slope, from 46 to 55 degrees (the banks lean past 55
+  degrees to their rims; a facet's own slope flips triangle by triangle on rough
+  hillsides, a checkerboard of rock), sampled triplanar and stochastic at 3.5 m
+  a repeat. On steep ground the projection follows the triangle's own tilt
+  (from screen derivatives) rather than the vertex normal, averaged over 4 m,
+  which leans far less than a bank's 2 m faces, so the ground's maps no longer
+  streak down the banks; lighting keeps the smooth vertex normal. Below 46
+  degrees the shader is as before. A survey of the 2 m mesh outside the cut
+  scans finds 0.29% of its facets above 45 degrees, 0.06% above 60.
 - **Water** (`src/world/{hydrology,water}.rs`): the Harmont map has no river.
   The Zone's water is the marsh (`hydrology::SWAMP`): shallow pools between
   drier hummocks; the lake and the sea lie beyond the map's edges. Use
@@ -522,8 +538,8 @@ the stalker stands still.
       cut stands as a terrain wall over those 4.5 m, meeting the scan's uncut stone at
       the corridor's edge. In the game that edge is a vertical seam on the deep
       west banks: the scan stone stands to 9 m from the centerline and is cut flush
-      there, above a dark, steep terrain wall with stretched texture (not a tile
-      edge, nor the stand-in's). The seam is kept:
+      there, above the steep terrain wall, which the terrain shader dresses in
+      rock (see *Terrain*; it was dirt streaked down the bank). The seam is kept:
       fading the cut out past 9 m would hide stone whose pillars still block
       (only those inside the corridor are dropped) and open the scan's hollow
       shell behind its face. On the floor the cut's edge on the Sphere's wall

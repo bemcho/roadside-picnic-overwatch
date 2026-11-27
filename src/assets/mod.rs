@@ -37,6 +37,10 @@ pub const TERRAIN_ASPHALT_ALBEDO: &str = "textures/terrain/asphalt_albedo.ktx2";
 pub const TERRAIN_ASPHALT_NORMAL: &str = "textures/terrain/asphalt_normal.ktx2";
 pub const TERRAIN_ASPHALT_SURFACE: &str = "textures/terrain/asphalt_surface.ktx2";
 pub const TERRAIN_ASPHALT_CRACK: &str = "textures/terrain/asphalt_crack.ktx2";
+/// The rock steep ground is dressed in (`tools/prepare_rock_textures.py`).
+pub const TERRAIN_ROCK_ALBEDO: &str = "textures/terrain/rock_albedo.ktx2";
+pub const TERRAIN_ROCK_NORMAL: &str = "textures/terrain/rock_normal.ktx2";
+pub const TERRAIN_ROCK_SURFACE: &str = "textures/terrain/rock_surface.ktx2";
 /// The hangar floor's steel plates (`tools/prepare_hangar_floor.py`).
 pub const HANGAR_FLOOR_ALBEDO: &str = "textures/hangar/floor_albedo.png";
 pub const HANGAR_FLOOR_NORMAL: &str = "textures/hangar/floor_normal.png";
@@ -269,6 +273,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         TERRAIN_GRASS_ALBEDO,
         TERRAIN_EARTH_ALBEDO,
         TERRAIN_ASPHALT_ALBEDO,
+        TERRAIN_ROCK_ALBEDO,
         HANGAR_FLOOR_ALBEDO,
     ];
     let data_maps = [
@@ -279,6 +284,8 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         TERRAIN_ASPHALT_NORMAL,
         TERRAIN_ASPHALT_SURFACE,
         TERRAIN_ASPHALT_CRACK,
+        TERRAIN_ROCK_NORMAL,
+        TERRAIN_ROCK_SURFACE,
         HANGAR_FLOOR_NORMAL,
         HANGAR_FLOOR_SURFACE,
     ];

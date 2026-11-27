@@ -27,6 +27,9 @@ import bevy_pbr::render::forward_io::{VertexOutput, FragmentOutput};
 @group(constants::MATERIAL_BIND_GROUP) @binding(111) var asphalt_normal: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(112) var asphalt_surface: texture_2d<f32>;
 @group(constants::MATERIAL_BIND_GROUP) @binding(113) var asphalt_crack: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(114) var rock_albedo: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(115) var rock_normal: texture_2d<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(116) var rock_surface: texture_2d<f32>;
 
 const TAU: f32 = 6.2831855;
 
@@ -51,6 +54,16 @@ const CRACK_DEPTH: f32 = 0.03;
 // The relief march's steps, and the ground's pixel size (m per pixel) under which it runs.
 const RELIEF_STEPS: i32 = 12;
 const RELIEF_NEAR: f32 = 0.02;
+
+// Steep ground (cut banks, fill faces, pit walls) is dressed in rock
+// (tools/prepare_rock_textures.py). Metres one repeat of the rock maps covers.
+const ROCK_TILE: f32 = 3.5;
+// The slope, as 1 - y of the smooth vertex normal, at which the rock starts to
+// show (46 degrees) and where it covers the ground (55 degrees). The cut banks
+// lean past 55 degrees to their rims. A facet's own slope would be sharper but
+// flips triangle by triangle on rough hillsides, a checkerboard of rock.
+const ROCK_FROM: f32 = 0.3;
+const ROCK_FULL: f32 = 0.42;
 
 fn patch_hash(cell: vec2<f32>) -> f32 {
     let p = fract(vec3<f32>(cell.xyx) * vec3<f32>(0.1031, 0.1030, 0.0973));
@@ -230,6 +243,47 @@ fn old_asphalt(
     return asphalt;
 }
 
+// The rock on one projection plane, weighted: colour, packed surface and the
+// tangent normal's slope along the plane's (u, v). The maps' y runs up the
+// texture, against v.
+struct Rock {
+    albedo: vec3<f32>,
+    surface: vec3<f32>,
+    tilt: vec3<f32>,
+}
+
+fn rock_plane(uv: vec2<f32>, dx: vec2<f32>, dy: vec2<f32>, weight: f32) -> Rock {
+    var rock: Rock;
+    if weight <= 0.0 {
+        return rock;
+    }
+    let albedo = stochastic(rock_albedo, uv, dx, dy, map_mean(rock_albedo)).rgb;
+    let surface = stochastic(rock_surface, uv, dx, dy, map_mean(rock_surface)).rgb;
+    let n = stochastic(rock_normal, uv, dx, dy, map_mean(rock_normal)).xyz * 2.0 - 1.0;
+    rock.albedo = max(albedo, vec3<f32>(0.0)) * weight;
+    rock.surface = surface * weight;
+    rock.tilt = vec3<f32>(n.x, -n.y, 0.0) / max(n.z, 0.3) * weight;
+    return rock;
+}
+
+// The rock projected on the planes the surface faces (`weights`), with its
+// tilt turned back onto the world axes each plane spans. `dx` and `dy` are the
+// world position's screen derivatives, so it may run in a branch.
+fn rock_layer(p: vec3<f32>, dx: vec3<f32>, dy: vec3<f32>, weights: vec3<f32>) -> Rock {
+    // Planes with a sliver of weight are skipped; the rest share all of it.
+    let kept = select(vec3<f32>(0.0), weights, weights >= vec3<f32>(0.02));
+    let share = kept / dot(kept, vec3<f32>(1.0));
+    let x = rock_plane(p.zy / ROCK_TILE, dx.zy / ROCK_TILE, dy.zy / ROCK_TILE, share.x);
+    let y = rock_plane(p.xz / ROCK_TILE, dx.xz / ROCK_TILE, dy.xz / ROCK_TILE, share.y);
+    let z = rock_plane(p.xy / ROCK_TILE, dx.xy / ROCK_TILE, dy.xy / ROCK_TILE, share.z);
+    var rock: Rock;
+    rock.albedo = x.albedo + y.albedo + z.albedo;
+    rock.surface = x.surface + y.surface + z.surface;
+    rock.tilt = vec3<f32>(0.0, x.tilt.y, x.tilt.x) + vec3<f32>(y.tilt.x, 0.0, y.tilt.y)
+        + vec3<f32>(z.tilt.xy, 0.0);
+    return rock;
+}
+
 // Project onto all three axes so quarry walls do not stretch the ground textures.
 fn sample_ground(
     tex: texture_2d<f32>, p: vec3<f32>, weights: vec3<f32>, axes: mat2x2<f32>,
@@ -264,9 +318,30 @@ fn ground_normal(
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
     var pbr_input = pbr_input_from_standard_material(in, is_front);
     let normal = normalize(in.world_normal);
-    let axis_weights = pow(abs(normal), vec3<f32>(4.0));
-    let weights = axis_weights / dot(axis_weights, vec3<f32>(1.0));
     let p = in.world_position.xyz;
+    // The slope of the triangle itself: the vertex normals are averaged over
+    // 4 m and lean far less than a cut bank's 2 m faces, so projected by them
+    // the ground's top-down maps streak down the bank. Where the ground is
+    // steep, the projection takes the facet's tilt, turned to the vertex
+    // normal's smooth heading so that the side planes blend without seams.
+    // The lighting keeps the smooth vertex normal: lit by the facets, the
+    // ground would show its triangles.
+    let world_dx = dpdx(p);
+    let world_dy = dpdy(p);
+    let facet_normal = normalize(cross(world_dy, world_dx));
+    let facet = select(-facet_normal, facet_normal, dot(facet_normal, normal) >= 0.0);
+    let steep = smoothstep(ROCK_FROM, ROCK_FULL, 1.0 - normal.y);
+    let heading = normalize(
+        select(facet.xz, normal.xz, dot(normal.xz, normal.xz) > 1.0e-6) + vec2<f32>(1.0e-6, 0.0),
+    );
+    let tilted = vec3<f32>(heading * length(facet.xz), facet.y).xzy;
+    let surface_normal = normalize(mix(normal, tilted, steep));
+    let axis_weights = pow(abs(surface_normal), vec3<f32>(4.0));
+    let weights = axis_weights / dot(axis_weights, vec3<f32>(1.0));
+    var rock: Rock;
+    if steep > 0.0 {
+        rock = rock_layer(p, world_dx, world_dy, weights);
+    }
     // Independent offsets break repeat rows; a second noise scale frays patch edges.
     let region = p.xz / 4.0;
     let warp = vec3<f32>(
@@ -287,7 +362,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let height = mix(grass_height, earth_height, exposed);
     let facing = dot(normal, pbr_input.V);
     let tangent_view = pbr_input.V - normal * facing;
-    let pixel_size = max(length(dpdx(p)), length(dpdy(p)));
+    let pixel_size = max(length(world_dx), length(world_dy));
     let relief = (1.0 - smoothstep(0.025, 0.12, pixel_size)) * 0.07;
     let slide = tangent_view * (height - 0.5) * relief / max(facing, 0.32);
     grass_uv += slide / 2.3;
@@ -299,7 +374,7 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let stone = earth * vec3<f32>(1.32, 1.32, 1.48);
     let wetness = clamp(in.color.g, 0.0, 1.0);
     let ash = clamp(in.color.b, 0.0, 1.0);
-    var albedo = mix(moss, stone, exposed);
+    var albedo = mix(mix(moss, stone, exposed), rock.albedo, steep);
     let luminance = dot(albedo, vec3<f32>(0.2126, 0.7152, 0.0722));
     albedo = mix(albedo, vec3<f32>(luminance) * vec3<f32>(0.72, 0.74, 0.70), ash * 0.9);
     let road_uv = clamp((p.xz - road_bounds.xy) * road_bounds.zw, vec2<f32>(0.0), vec2<f32>(1.0));
@@ -310,9 +385,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // Weathered asphalt, grained by the earth map.
     let tar = vec3<f32>(0.052, 0.053, 0.057) + dot(earth, vec3<f32>(0.2126, 0.7152, 0.0722)) * 0.2;
     albedo = mix(albedo, tar, road.b);
-    // The ground's derivatives are taken here, outside any branch; the asphalt samples with them.
-    let ground_dx = dpdx(p.xz);
-    let ground_dy = dpdy(p.xz);
+    // The ground's derivatives were taken outside any branch; the asphalt samples with them.
+    let ground_dx = world_dx.xz;
+    let ground_dy = world_dy.xz;
     var asphalt: OldAsphalt;
     if road.a > 0.0 {
         let along = -tangent_view.xz / max(facing, 0.32);
@@ -329,9 +404,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     // Packed maps: red AO, green roughness, blue height.
     let surface = mix(
-        sample_ground(grass_surface, grass_uv, weights, grass_axes),
-        sample_ground(earth_surface, earth_uv, weights, earth_axes),
-        exposed,
+        mix(
+            sample_ground(grass_surface, grass_uv, weights, grass_axes),
+            sample_ground(earth_surface, earth_uv, weights, earth_axes),
+            exposed,
+        ),
+        rock.surface,
+        steep,
     );
     let roughness = mix(mix(0.34, 0.98, surface.g), asphalt.roughness, road.a);
     pbr_input.material.perceptual_roughness = roughness * mix(1.0, 0.65, wetness);
@@ -343,6 +422,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         ground_normal(earth_normal, earth_uv, weights, normal, earth_axes),
         exposed,
     ));
+    let rock_tilt = rock.tilt - normal * dot(rock.tilt, normal);
+    pbr_input.N = normalize(mix(pbr_input.N, normalize(normal + rock_tilt * 0.8), steep));
     // Asphalt lies flatter than the ground's texture.
     pbr_input.N = normalize(mix(pbr_input.N, normal, road.b * 0.7));
     // The old asphalt's own grain and cracks tilt the surface normal.

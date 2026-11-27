@@ -43,6 +43,12 @@ pub(super) struct GroundLayers {
     asphalt_surface: Handle<Image>,
     #[texture(113)]
     asphalt_crack: Handle<Image>,
+    #[texture(114)]
+    rock_albedo: Handle<Image>,
+    #[texture(115)]
+    rock_normal: Handle<Image>,
+    #[texture(116)]
+    rock_surface: Handle<Image>,
 }
 
 impl MaterialExtension for GroundLayers {
@@ -83,6 +89,9 @@ pub(super) fn load_terrain_material(
             asphalt_normal: load(assets::TERRAIN_ASPHALT_NORMAL, false),
             asphalt_surface: load(assets::TERRAIN_ASPHALT_SURFACE, false),
             asphalt_crack: load(assets::TERRAIN_ASPHALT_CRACK, false),
+            rock_albedo: load(assets::TERRAIN_ROCK_ALBEDO, true),
+            rock_normal: load(assets::TERRAIN_ROCK_NORMAL, false),
+            rock_surface: load(assets::TERRAIN_ROCK_SURFACE, false),
         },
     }
 }
