@@ -5,8 +5,6 @@
 //! the ground inside the ramps' corridor (`shaders/ramp_cut.wesl`), in the main
 //! pass and in the shadow maps alike. Each scan has its own image of its corridor.
 
-use std::collections::HashMap;
-
 use bevy::asset::RenderAssetUsages;
 use bevy::ecs::system::SystemParam;
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
@@ -26,27 +24,34 @@ pub(super) type RampCutMaterial = ExtendedMaterial<StandardMaterial, RampCut>;
 
 /// Height meaning "not cut": above any fragment.
 const UNCUT: f32 = 1.0e6;
-/// Meters per texel of the cut image. The texels lie on the world's 0.5 m
-/// lattice, so the near ground mesh's 2 m grid lines run along their edges and
-/// its diagonals (x + z a multiple of 2 m) from corner to corner: the mesh is
-/// flat over each half of a texel and lies nowhere in it below its lowest corner.
+/// Meters between the cut image's lattice points. They lie on the world's
+/// 0.5 m lattice, so each 2 m cell of the near ground mesh holds whole lattice
+/// cells, and its diagonal (x + z a multiple of 2 m) runs across them corner to
+/// corner: split along that same diagonal, as the shader splits every lattice
+/// cell, the heights at the corners interpolate to the mesh itself.
 const TEXEL: f32 = 0.5;
 const _: () = assert!(
     SPACING % TEXEL == 0.0,
-    "the mesh's grid lines lie on texel edges"
+    "the mesh's grid lines lie on the lattice"
 );
 /// How far under the drawn ground the stone is cut, so that stone lying on the
 /// ground, which would show through it as dark slivers, goes too.
 const BURY: f32 = 0.1;
+/// How far past the corridor's edge a lattice point keeps its cut height: a
+/// lattice cell (0.71 m across) any part of which lies inside the corridor has
+/// every corner within it, so the shader never interpolates from `UNCUT` there.
+const EDGE_REACH: f32 = 2.0 * TEXEL;
 
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
 pub(super) struct RampCut {
-    /// Where the image lies in the world: its corner (x, z) and one over its
-    /// extent (x, z), in meters.
+    /// Where the image lies in the world: its corner (x, z), in meters, and
+    /// its lattice points per meter (x, z).
     #[uniform(100)]
     bounds: Vec4,
-    /// The height above which the stone is cut in the corridor, `UNCUT`
-    /// elsewhere. Read texel by texel (`textureLoad`), so it needs no filtering.
+    /// At each lattice point: the height above which the stone is cut (red)
+    /// and how far the point lies past the corridor's edge, negative inside
+    /// (green). Read point by point (`textureLoad`) and interpolated in the
+    /// shader, so it needs no filtering.
     #[texture(101, sample_type = "float", filterable = false)]
     heights: Handle<Image>,
 }
@@ -107,56 +112,48 @@ pub(super) fn prepare_ramp_cut(
     commands.insert_resource(RampCuts(cuts));
 }
 
-/// The height above which `scan`'s stone is cut wherever a ramp's shoulder
-/// reaches, `UNCUT` elsewhere, over the scan's footprint and a shoulder around
-/// it, and where it lies. A texel is cut from the lowest of the ground drawn at
-/// its corners (the render mesh, which is not `height_at` and falls steeply on
-/// the banks, by tens of metres in the crater) less `BURY`, which keeps the cut
-/// under the near mesh everywhere in the texel (see `TEXEL`).
+/// The cut over `scan`'s footprint and a shoulder around it, and where it
+/// lies: at each lattice point the ground drawn there (the 2 m render mesh,
+/// which is not `height_at` and falls steeply on the banks, by tens of metres
+/// in the crater) less `BURY`, and how far the point lies past the corridor.
+/// Interpolated as the mesh is (see `TEXEL`), the cut lies exactly `BURY` under
+/// the drawn ground, and its edge on the stone is the corridor's own, smooth
+/// rather than stepped texel by texel.
 fn build_ramp_cut(terrain: &Terrain, scan: CutScan) -> (Image, Vec4) {
     let (low, high) = sites::cut_footprint(scan);
     let corner = ((low - Vec2::splat(RAMP_SHOULDER)) / TEXEL).floor() * TEXEL;
-    let size = ((high + Vec2::splat(RAMP_SHOULDER) - corner) / TEXEL)
+    let points = ((high + Vec2::splat(RAMP_SHOULDER) - corner) / TEXEL)
         .ceil()
-        .as_uvec2();
-    let extent = size.as_vec2() * TEXEL;
-    // The drawn ground at the texels' corners, found once each.
-    let mut drawn = HashMap::new();
-    let mut ground = |lattice: UVec2| {
-        *drawn
-            .entry(lattice)
-            .or_insert_with(|| terrain.mesh_height_at(corner + lattice.as_vec2() * TEXEL))
-    };
-    let texels = (0..size.y)
-        .flat_map(|row| (0..size.x).map(move |column| UVec2::new(column, row)))
-        .flat_map(|texel| {
-            let at = corner + (texel.as_vec2() + 0.5) * TEXEL;
-            let height = if scan.in_cut_corridor(at) {
-                let lowest = [UVec2::ZERO, UVec2::X, UVec2::Y, UVec2::ONE]
-                    .map(|offset| ground(texel + offset))
-                    .into_iter()
-                    .fold(f32::INFINITY, f32::min);
-                lowest - BURY
+        .as_uvec2()
+        + UVec2::ONE;
+    let texels = (0..points.y)
+        .flat_map(|row| (0..points.x).map(move |column| UVec2::new(column, row)))
+        .flat_map(|point| {
+            let at = corner + point.as_vec2() * TEXEL;
+            let past = scan.past_cut_corridor(at);
+            let height = if past < EDGE_REACH {
+                terrain.mesh_height_at(at) - BURY
             } else {
                 UNCUT
             };
-            height.to_le_bytes()
+            [height.to_le_bytes(), past.to_le_bytes()]
         })
+        .flatten()
         .collect();
     let image = Image::new(
         Extent3d {
-            width: size.x,
-            height: size.y,
+            width: points.x,
+            height: points.y,
             depth_or_array_layers: 1,
         },
         TextureDimension::D2,
         texels,
-        TextureFormat::R32Float,
+        TextureFormat::Rg32Float,
         RenderAssetUsages::RENDER_WORLD,
     );
     (
         image,
-        Vec4::new(corner.x, corner.y, 1.0 / extent.x, 1.0 / extent.y),
+        Vec4::new(corner.x, corner.y, 1.0 / TEXEL, 1.0 / TEXEL),
     )
 }
 
@@ -218,18 +215,33 @@ mod tests {
     use super::super::roads::RAMP_HALF_WIDTH;
     use super::*;
 
-    /// The cut image's height under `at`, read as the shader reads it: nothing
-    /// is cut outside the image.
+    /// The cut's height over `at`, read as the shader reads it: interpolated
+    /// over the lattice cell's half that holds `at`, and nothing is cut past
+    /// the corridor's edge or outside the image.
     fn cut_height(image: &Image, bounds: Vec4, at: Vec2) -> f32 {
-        let uv = (at - bounds.xy()) * bounds.zw();
-        if uv.cmplt(Vec2::ZERO).any() || uv.cmpge(Vec2::ONE).any() {
+        let grid = (at - bounds.xy()) * bounds.zw();
+        let last = (image.size() - UVec2::ONE).as_vec2();
+        if grid.cmplt(Vec2::ZERO).any() || grid.cmpge(last).any() {
             return UNCUT;
         }
-        let size = image.size();
-        let texel = (uv * size.as_vec2()).as_uvec2();
-        let start = (texel.y * size.x + texel.x) as usize * 4;
         let data = image.data.as_ref().expect("the image keeps its texels");
-        f32::from_le_bytes(data[start..start + 4].try_into().expect("four bytes"))
+        let load = |point: UVec2| {
+            let start = (point.y * image.width() + point.x) as usize * 8;
+            let value =
+                |at: usize| f32::from_le_bytes(data[at..at + 4].try_into().expect("four bytes"));
+            Vec2::new(value(start), value(start + 4))
+        };
+        let cell = grid.floor().as_uvec2();
+        let t = grid - grid.floor();
+        let (b, c) = (load(cell + UVec2::X), load(cell + UVec2::Y));
+        let cut = if t.x + t.y <= 1.0 {
+            let a = load(cell);
+            a + (b - a) * t.x + (c - a) * t.y
+        } else {
+            let d = load(cell + UVec2::ONE);
+            d + (c - d) * (1.0 - t.x) + (b - d) * (1.0 - t.y)
+        };
+        if cut.y < 0.0 { cut.x } else { UNCUT }
     }
 
     fn inside(at: Vec2, (low, high): (Vec2, Vec2)) -> bool {
@@ -302,34 +314,68 @@ mod tests {
         assert_the_cut_follows_the_road(CutScan::Core, &road);
     }
 
-    // Stone left above the drawn ground, even by centimeters, shows through it
-    // as dark slivers; the grid is off the texels' lattice on purpose.
-    fn assert_the_cut_lies_below_the_ground_that_is_drawn(scan: CutScan) {
+    /// Every point of `scan`'s footprint on a 0.37 m grid, off the lattice on
+    /// purpose, with its cut height.
+    fn cut_over_the_footprint(scan: CutScan) -> Vec<(Vec2, f32)> {
         let terrain = Terrain::new();
         let (image, bounds) = build_ramp_cut(&terrain, scan);
         let (low, high) = sites::cut_footprint(scan);
-        let mut worst = (f32::MIN, Vec2::ZERO);
-        let mut cut = 0;
-        for column in 0..((high.x - low.x) / 0.37) as u32 {
-            for row in 0..((high.y - low.y) / 0.37) as u32 {
-                let at = low + UVec2::new(column, row).as_vec2() * 0.37;
-                let height = cut_height(&image, bounds, at);
-                if height < UNCUT {
-                    cut += 1;
-                    let above = height - terrain.mesh_height_at(at);
-                    if above > worst.0 {
-                        worst = (above, at);
-                    }
-                }
-            }
-        }
-        assert!(cut > 10_000, "only {cut} points lie in the cut");
+        let steps = ((high - low) / 0.37).as_uvec2();
+        (0..steps.x)
+            .flat_map(|column| (0..steps.y).map(move |row| UVec2::new(column, row)))
+            .map(|step| {
+                let at = low + step.as_vec2() * 0.37;
+                (at, cut_height(&image, bounds, at))
+            })
+            .collect()
+    }
+
+    // Stone left above the drawn ground, even by centimeters, shows through it
+    // as dark slivers, and a cut that steps under it shows its teeth on the
+    // stone: the cut follows the drawn ground `BURY` under it everywhere.
+    fn assert_the_cut_lies_below_the_ground_that_is_drawn(scan: CutScan) {
+        let terrain = Terrain::new();
+        let cut: Vec<_> = cut_over_the_footprint(scan)
+            .into_iter()
+            .filter(|&(_, height)| height < UNCUT)
+            .collect();
         assert!(
-            worst.0 <= 0.0,
-            "the cut is {} m above the drawn ground at {}",
-            worst.0,
-            worst.1
+            cut.len() > 10_000,
+            "only {} points lie in the cut",
+            cut.len()
         );
+        for (at, height) in cut {
+            let under = terrain.mesh_height_at(at) - height;
+            assert!(
+                (under - BURY).abs() < 0.005,
+                "the cut at {at} lies {under} m under the drawn ground"
+            );
+        }
+    }
+
+    /// The cut's edge is the corridor's edge, the one the collision is cleared
+    /// to, and runs smoothly with it (within 5 cm) instead of in texel steps.
+    fn assert_the_cut_ends_at_the_corridors_edge(scan: CutScan) {
+        for (at, height) in cut_over_the_footprint(scan) {
+            if scan.past_cut_corridor(at).abs() < 0.05 {
+                continue;
+            }
+            assert_eq!(
+                height < UNCUT,
+                scan.in_cut_corridor(at),
+                "the cut's edge strays from the corridor's at {at}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_quarry_cut_ends_at_the_corridors_edge() {
+        assert_the_cut_ends_at_the_corridors_edge(CutScan::Quarry);
+    }
+
+    #[test]
+    fn the_core_cut_ends_at_the_corridors_edge() {
+        assert_the_cut_ends_at_the_corridors_edge(CutScan::Core);
     }
 
     #[test]

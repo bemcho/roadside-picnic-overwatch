@@ -421,33 +421,43 @@ the stalker stands still.
     (`RampCuts`, one `RampCut` per `CutScan`; the shader is shared and unchanged;
     `RampCutScan(scan)` marks a full scan, and `cut_scan_stone` swaps the material on each
     stream-in; it is not cached, which would pin the scan's textures in VRAM) and
-    discards the fragments above a height image of the corridor, in the main
+    discards the fragments above a cut surface over the corridor, in the main
     pass and the shadow maps' depth pass (its `AlphaMode::Mask` makes the
     shadow pass run the shader; the shader's deferred-prepass variant is
     written but never exercised, the camera is forward), so the road is
     neither covered nor shadowed by the stone removed over it. Each image
     (`build_ramp_cut`, built once at entering the Zone over the scan's footprint
-    box and a 9 m shoulder; R32Float texels of 0.5 m: the quarry's 221x253, 218 KiB,
-    96 ms, the core's 272x252, 267 KiB, 144 ms, in the playtest build) holds,
-    wherever a texel's centre is within 9 m of a centerline, the lowest of the
-    ground drawn at the texel's corners (the 2 m render mesh,
-    `Terrain::mesh_height_at`, not `height_at`, which differs by up to 0.11 m on
-    the bed and by metres, tens of metres in the crater, on the banks) less `BURY`
-    (0.1 m), and `1.0e6` elsewhere. The texels lie on the world's 0.5 m lattice, so
-    the mesh's 2 m grid lines run along their edges and its diagonals corner to
-    corner: the mesh is flat on each half texel and the lowest corner is its
-    lowest point (an unaligned image left the core's cut 0.098 m above the mesh on a
-    crater bank). Stone left above the drawn ground, even by centimeters, shows
+    box and a 9 m shoulder) is an Rg32Float lattice of points 0.5 m apart (the
+    quarry's 222x254, 441 KiB, 108 ms, the core's 273x253, 540 KiB, 155 ms, in
+    the playtest build). Red holds the ground drawn at the point (the 2 m render
+    mesh, `Terrain::mesh_height_at`, not `height_at`, which differs by up to
+    0.11 m on the bed and by metres, tens of metres in the crater, on the banks)
+    less `BURY` (0.1 m), or `1.0e6` more than 1 m past the corridor. Green holds
+    how far the point lies past the corridor's edge, 9 m from a centerline
+    (`CutScan::past_cut_corridor`, negative inside). The shader interpolates
+    both linearly over each half of a lattice cell, split along its
+    anti-diagonal as the mesh's triangles are, and cuts a fragment when green
+    is negative and the fragment lies above red. The lattice lies on the
+    world's 0.5 m grid, so the mesh's 2 m grid lines run along cell edges and its
+    diagonals through cell corners: the mesh is linear on each half cell and the
+    cut lies exactly `BURY` under the drawn ground (an unaligned image left
+    the core's cut 0.098 m above the mesh on a crater bank). The corridor's edge,
+    where green crosses 0, runs straight within each half cell, so the cut's
+    outline on the stone follows the ground smoothly; nearest-read texels of
+    each cell's lowest corner had stepped it in 0.5 m teeth, on the banks by
+    metres a tooth. Stone left above the drawn ground, even by centimeters, shows
     through it as dark slivers; `the_{quarry,core}_cut_lies_below_the_ground_that_is_drawn`
-    keep it below (on a 0.13 m grid the cut lies exactly 0.1 m under the mesh at
-    worst, in both scans), and `the_quarry_cut_follows_its_ramp_and_the_crater_roads_first_leg`
+    keep it below (on a 0.37 m grid, through a copy of the shader's
+    interpolation, the cut lies 0.1 m under the mesh to 5 mm in both scans),
+    `the_{quarry,core}_cut_ends_at_the_corridors_edge` that a point is cut
+    exactly when it lies in the corridor whose pillars are dropped (to 5 cm of
+    the edge), and `the_quarry_cut_follows_its_ramp_and_the_crater_roads_first_leg`
     and `the_core_cut_follows_the_crater_ramp` check the road in each scan is cut.
-    Limits: texels are read nearest, so the cut's edge on the
-    stone is stepped in 0.5 m teeth; the main and depth-only (shadow)
-    pipelines are exercised, the deferred prepass variant is written but never
-    run, and a normal or motion-vector prepass is not supported (the camera
-    runs none); the image follows the 2 m near mesh, so the far 8 m ground tiles
-    may leave slivers at a distance.
+    Limits: the main and depth-only (shadow) pipelines are exercised, the
+    deferred prepass variant is written but never run, and a normal or
+    motion-vector prepass is not supported (the camera runs none); the lattice
+    follows the 2 m near mesh, so the far 8 m ground tiles may leave slivers at
+    a distance.
   - *Driving and orders:* the stalker running, a car at 7-10 m/s and the
     carrier at 4.5 m/s (its turn rate of 0.6 rad/s makes a 9.5 m arc a 5.7 m/s
     limit) drive or walk from the junction to the floor and back by the keys,
@@ -510,11 +520,14 @@ the stalker stands still.
       along the spiral, and its pillars there are dropped. The terrain draws the
       banks: the ramp's mask falls from 1 at the bed's 4.5 m to 0 at 9 m, so a 49 m
       cut stands as a terrain wall over those 4.5 m, meeting the scan's uncut stone at
-      the corridor's edge. In the game that edge is the hard vertical seam on the deep
+      the corridor's edge. In the game that edge is a vertical seam on the deep
       west banks: the scan stone stands to 9 m from the centerline and is cut flush
       there, above a dark, steep terrain wall with stretched texture (not a tile
-      edge, nor the stand-in's). On the floor the cut's edge on the Sphere's wall shows
-      as a stair-stepped outline beside the road's end. Click orders reach the crater's
+      edge, nor the stand-in's). The seam is kept:
+      fading the cut out past 9 m would hide stone whose pillars still block
+      (only those inside the corridor are dropped) and open the scan's hollow
+      shell behind its face. On the floor the cut's edge on the Sphere's wall
+      follows the ground in a smooth curve beside the road's end. Click orders reach the crater's
       floor through both scans' cleared collision (`click_orders_reach_the_crater_floor`;
       the slope-blind router crosses from lap to lap down the walls rather than follow
       the 799 m of road; see *Driving and orders*).

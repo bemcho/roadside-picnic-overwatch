@@ -487,7 +487,8 @@ ramps' corridor, in the main pass and the shadow
 pass (the extension's `AlphaMode::Mask` is what makes the shadow maps run the
 shader), so the road is lit rather than shadowed by stone that is not drawn.
 The shader's deferred-prepass variant is written but never exercised: the camera
-is forward. Each cut scan has its own height image and bounds (`RampCuts`, one
+is forward. Each cut scan has its own cut lattice (heights and the distance
+past the corridor's edge, interpolated on the mesh's triangles) and bounds (`RampCuts`, one
 `RampCut` extension per scan; the shader is the same), built once from `Terrain`
 at entering the Zone. `cut_scan_stone`, an observer on the scan's
 `WorldInstanceReady`, swaps the material for its scan's (`RampCutScan`) on every

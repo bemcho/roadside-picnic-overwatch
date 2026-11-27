@@ -79,6 +79,11 @@ impl CutScan {
         self.on_ramp_bed(at, RAMP_SHOULDER - RAMP_HALF_WIDTH)
     }
 
+    /// How far `at` lies outside the cut corridor, negative inside it.
+    pub(super) fn past_cut_corridor(self, at: Vec2) -> f32 {
+        self.distance_to_ramp(at) - RAMP_SHOULDER
+    }
+
     /// Whether a circle of `radius` at `at` overlaps a ramp's bed in the scan.
     pub(super) fn on_ramp_bed(self, at: Vec2, radius: f32) -> bool {
         self.distance_to_ramp(at) < RAMP_HALF_WIDTH + radius
