@@ -524,7 +524,10 @@ the stalker stands still.
     no dirt drive of its own: `tracks()` leaves out the drive of `GOLDEN_SPHERE` as it
     does the quarry's. The Sphere itself is a painted golden glow on the crater's
     lowest wall (a 44 degree incline, no geometry of its own, about 0.6 m across), at
-    model (-0.0172, -0.0138) of the core, world (-1229.3, 86.1).
+    model (-0.0172, -0.0138) of the core, world (-1229.3, 86.1). The real Sphere
+    hovers over a pool on the floor 14.7 m from that glow (see **Golden Sphere**);
+    the glow is still painted in the scan, and "the Sphere" in the road's checks
+    below means this glow (`sites::SPHERE_SMUDGE`).
     - *Track:* the quarry ramp's last point (-1063.6, 101.7), at -48.6 m on the Quarry
       rim's floor, `GOLDEN_SPHERE` (-1152, 84), the core's `entrance()` (-1161.8, 84)
       and the baked points under the core's pose, the first on the front edge
@@ -624,6 +627,123 @@ the stalker stands still.
       laps. On the main thread the crater costs at most
       0.7 ms a frame more than the Quarry rim (7.7 against 7.0 ms); the core's cut
       scan reaches the GPU behind the splash, with no hitch in the game.
+- **Golden Sphere** (`src/world/golden_sphere.rs`,
+  `golden_sphere/{ferrofluid,mirror,reflection,uhd}.rs`,
+  `assets/shaders/{ferrofluid,golden_sphere}.wesl`, `sites.rs`, `assets/gpu_scans/tier.rs`):
+  the artifact itself, a 1 m mirror-gold ball that hovers and turns over a 3 m pool
+  of black ferrofluid on the floor of its crater. How much of the world it mirrors
+  follows the GPU's tier (see **RAM and GPU**).
+  - *Sphere:* the medium preview model (`ARTIFACT_PREVIEWS[1]`) scaled to 1 m
+    (`SPHERE_DIAMETER`) with its paint made a polished mirror (metallic 1, roughness
+    0.075, reflectance 1). Its centre hovers 2.25 m over the pool and bobs 0.15 m
+    either way (2.1 to 2.4 m, so its underside is 1.6 to 1.9 m up) over a 7 s period,
+    lowest at the start. It turns 0.3 rad/s (a turn in 21 s) about an axis that leans
+    4 degrees, the lean circling once in 23 s. One clock, `HoverClock`, drives
+    Sphere and pool; it counts game seconds only while `InGamePhase::Running`, so
+    a pause holds both still and resuming carries on from where they stopped
+    (virtual time runs on through the pause).
+  - *Field:* the pool's spikes follow the Sphere's pull, a magnet's cube law
+    scaled to 1 with the Sphere lowest and 1/3 with it highest (`Hover::field`).
+  - *Pool:* at `sites::golden_sphere_spot()`, a model-space constant of the core
+    scan (0.074467, 0.067451), 14.7 m from the painted glow: the flattest floor
+    within 20 m of it with the pool's rim 3 m clear of the road's bed (the floor
+    rises at most 0.26 m across the pool, a 5 degree slope). The test
+    `the_golden_sphere_hovers_over_the_flattest_floor_clear_of_the_road` searches
+    that area on a 0.5 m grid and holds the constant within 1 cm of the flattest
+    spread. There is no search tool: the constant was found once and the test pins
+    it. The liquid's level is the highest `Terrain::mesh_height_at` over a 17 x 17
+    grid of samples across the 1.5 m radius (`SPHERE_POOL_RADIUS`) plus 5 mm, read
+    when the Zone is entered, so the floor never shows through it; the disc's outer
+    0.4 m bends down to the floor along a smoothstep. The pool has a `Collider`
+    (`POOL_SOLID`, a pillar of the same radius from 0.1 m under the liquid to 3.4 m
+    over it) and is `Unclimbable`: the stalker walks around it and cannot pass
+    under the Sphere. Black metal: linear 0.05, 0.05, 0.055, metallic 1, roughness
+    0.1. The disc's grid is 2 cm on modest GPUs, 1 cm on strong and 5 mm on
+    exceptional ones. It has no depth prepass (nothing reads one from it).
+  - *Ferrofluid* (`ferrofluid.wesl`, vertex stage; the fragment stage is standard
+    PBR): the flat disc is raised in the shader by a crown of spikes on a hexagonal
+    lattice 0.45 m apart, concave cones with rounded tips whose feet touch, turning
+    with the Sphere. The tallest spike is 1.0 m with the Sphere highest and 1.4 m with
+    it lowest, 0.2 m clear of the Sphere; the others fall off with a Gaussian of 0.35
+    m sigma about the middle. Spikes stand only where the field times that Gaussian
+    passes 0.15 and in full over 0.3 (as in a real ferrofluid), so the crown reaches
+    0.44 m out with the Sphere highest and 0.68 m with it lowest. Three rings of 12
+    small spikes (feet 9 cm in radius) creep in from 1.2 m to 0.55 m from the middle,
+    9 s a ring, staggered by a third; each spike rises from the liquid over the first
+    15% of its way and sinks into the crown over the last 30%. Each pulses between 20
+    and 40 cm at its own phase and rate, 20 to 39 whole pulses in the 60 s the pulse
+    clock takes before it wraps, so the wrap never shows. The shadow pass runs the
+    same vertex shader (`prepass_vertex_shader`), so every spike casts its shadow; in
+    the main view spikes fade to smooth liquid as their spacing on screen falls from 8
+    px to 3 px, judged from the pool's middle. `pull_ferrofluid` writes only the
+    field, the rings and the probe's centre into the pool's material each frame.
+  - *Modest GPUs* (`mirror.rs`, `golden_sphere.wesl`): no live map. The Sphere's
+    fragment shader traces its reflection ray against up to three stand-ins within
+    15 m of it (`REACH`, measured from a body's centre less the half diagonal of its
+    footprint): the stalker as a capsule 0.3 m in radius and 1.8 m tall (0.5 m while
+    crawling or prone), left out while driving, and the car and the Institute carrier
+    as boxes of their hulls (`Seat::half_hull`), turned with them. Each is lit by the
+    Sun (direction and illuminance read from the `Sun` each frame) plus the sky at
+    20% of the Sun's, in the model's measured paint (the mean linear albedo of its
+    base-colour texture: stalker 0.0448, 0.0526, 0.0526; car 0.0598, 0.0359, 0.0266;
+    carrier 0.0636, 0.0494, 0.0409), tinted by the gold. The pool does not mirror the
+    Sphere here.
+  - *Strong GPUs* (`reflection.rs`): a live reflection probe. Six cameras at the
+    Sphere's centre (90 degrees, near 0.05 m, far 300 m) render the scene into the
+    six faces of a cube, 256 x 256 `Rgba16Float` images, one face a frame in turn,
+    and only while the stalker or a vehicle is within 15 m of the Sphere (otherwise
+    the cameras sleep and the faces keep what they last showed). The Sphere samples
+    the face its reflection ray points at, and the liquid traces the Sphere
+    analytically (a ray-sphere test against its centre and 0.5 m radius, the
+    centre updated each frame) and bounces the ray into the faces, tinted gold, so
+    the gold shows in the black metal; elsewhere it samples the faces along its own
+    reflection. The cameras are cleared transparent, so where they drew nothing
+    (sky) the environment map's sky stays. They run with the player's exposure
+    (EV 13), HDR, no tonemapping or deband and no MSAA, no atmosphere or fog, and
+    `ClusterConfig::Single` (one cluster for the whole view).
+  - *Exceptional GPUs:* the faces are 1024 x 1024 and all six render every frame (still
+    only with someone within 15 m), and the Sphere's UHD scan replaces the medium
+    model. The scan (`models/artifacts/uhd/artifact-golden-sphere.glb`, from the
+    workspace's `models/artifacts/uhd/`, 1.97 M triangles, one 8192 x 8192 BC7 KTX2
+    gold texture, 70 MB on disk, 138 MB on the GPU measured) is streamed through
+    `GpuScans` (`stream_uhd_sphere`): wanted once the nearest `StreamAnchor` is
+    within 80 m (`UHD_RANGE`, 40 m, plus `UPLOAD_LEAD`, 40 m), and swapped in (mesh
+    and gold, rescaled to 1 m from its 0.98 m, centred diameter) within 40 m once
+    `scene()` is resident. The medium model comes back when the anchors pass 40 m
+    or the scan is evicted. It is listed in `UhdFiles` between the plants and the sites, so every tier reads
+    its 70 MB into RAM.
+  - *Render layers:* only the Sphere's mesh is on `SPHERE_LAYER` (1). The player's
+    camera and the Sun see layers 0 and 1 (the Sphere casts a shadow); the probe
+    cameras see layer 0 only, so the probe never sees the Sphere it renders for.
+    The pool is on layer 0 and shows in the probe. Anything that looks for the
+    player's view must filter `PlayerCamera`, not `Camera3d`: the probe adds six
+    more cameras. `pose_wildlife` and `stream_wall_view` did take every `Camera3d`.
+  - *Measured* on the 6 GB RTX 2060 (playtest build in Xephyr, beside the Sphere):
+    modest 34 FPS, strong 27-28 FPS, exceptional (forced, `--gpu-tier exceptional`)
+    10 FPS. Traced cause: Bevy 0.20's GPU light clustering costs 30-44 ms of CPU per
+    camera view per frame, and every active probe face is a view. Switching to CPU
+    clustering is the next branch's first item (findings in
+    `~/Projects/agentic/roadside-picnic-overwatch/reviews/2026-11-27-gpu-usage-findings.md`).
+  - *Checks:* `the_spikes_stand_tallest_when_the_sphere_sinks_lowest`,
+    `the_field_falls_as_the_sphere_rises`, `the_sphere_turns_at_a_steady_rate`,
+    `the_sphere_holds_still_while_paused` (`golden_sphere.rs`);
+    `the_pool_mesh_is_a_disc_dense_enough_for_its_spikes`,
+    `the_pools_rim_bends_down_to_the_floor`,
+    `the_central_spikes_stand_1_4_m_under_the_lowest_sphere_and_1_m_under_the_highest`,
+    `the_small_spikes_creep_inward_ring_after_ring`,
+    `the_small_spikes_pulse_on_a_clock_that_wraps_without_a_jump` (`ferrofluid.rs`);
+    `only_what_is_within_reach_shows_in_the_sphere`,
+    `a_driving_stalker_shows_only_as_the_car`, `a_crawling_stalker_is_a_low_capsule`
+    (`mirror.rs`); `the_probe_renders_one_face_a_frame_on_strong_cards`,
+    `the_probe_renders_every_face_on_exceptional_cards`,
+    `the_probe_rests_when_nobody_is_near_or_on_modest_cards`,
+    `re_entering_the_zone_keeps_six_probe_cameras` (`reflection.rs`);
+    `the_uhd_sphere_shows_only_on_exceptional_cards_near_and_resident`,
+    `an_evicted_uhd_sphere_falls_back_to_medium` (`uhd.rs`).
+  - *Open:* the golden smudge painted into the core scan's 8K texture (model
+    (-0.0172, -0.0138)) still shows 14.7 m from the real Sphere; removing it
+    needs the scan's texture edited and recompressed
+    (`~/Projects/agentic/roadside-picnic-overwatch/reviews/2026-11-27-golden-crater-ramp-followups.md`).
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town
   scan (`assets/models/harmont/`) line a street grid around a paved downtown
   plaza on one level town pad; each shows its full scan near the view and a
@@ -1089,10 +1209,11 @@ the stalker stands still.
   the colour, linear BC7 for the data maps and BC4 for the one-channel wall depth
   (`ctt_arguments("depth")`), full mip chains; their PNG sources stay in the
   assets workspace.
-- **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`):
+- **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`,
+  `gpu_scans/{vram,tier}.rs`, `src/launch.rs`):
   behind the splash the `ram://` asset source reads every streamed UHD scan
-  (the 40 in `world::uhd_files`: the three trees, the plants, then the sites
-  nearest the hangar first) into RAM, four files at a time, while 4 GiB of
+  (the 41 in `world::uhd_files`: the three trees, the plants, the Golden
+  Sphere's scan, then the sites nearest the hangar first) into RAM, four files at a time, while 4 GiB of
   RAM stay free (`RAM_HEADROOM`: the game grows up to 3.2 GiB after the fill). A file that does not fit stays on disk and
   loads from `assets/` through the same source; the splash waits for the fill.
   Every streamed UHD scan loads through `assets::uhd(path)` (`ram://`
@@ -1150,6 +1271,27 @@ the stalker stands still.
   estimate (14 of the 24 site scans measured, the rest taken at ~107 MiB,
   plus 2.4 GiB for the rest of the game and the 0.5 GiB margin), not run on
   a larger card.
+  *GPU tier* (`GpuTier`, `gpu_scans/tier.rs`): effects that scale with the GPU
+  read one level, `Modest`, `Strong` or `Exceptional`, decided once at `Startup`
+  (`settle_gpu_tier`, before the Zone spawns them) and fixed for the session.
+  It follows the card's size as the driver reports it (the largest device-local
+  Vulkan heap, in the same reading as the budget), not the live budget, which
+  falls whenever another program holds VRAM and would take a 6 GB card for a
+  4 GB one. Under 4.75 GiB is Modest (4 GB cards), 4.75 GiB and up Strong (a
+  5 GB card as the driver reports it, 6 GB, and so on; drivers report a little
+  under the size sold) and 15 GiB and up Exceptional (16 GB cards). `--vram`
+  caps the size judged (`--vram 4` on a 16 GB card gives Modest). Where the
+  driver reports no heap (the web, macOS), the fallback is judged from `--vram`,
+  or 6 GB without it: Strong. `--gpu-tier modest|strong|exceptional` forces the
+  tier whatever the card, for testing (a missing or unknown value is warned
+  about and ignored). The log says `GPU: effects at the Strong tier` at startup
+  and `GPU: a N GB card, effects at the Strong tier` with the first reading. Only
+  the Golden Sphere reads it so far: its pool's grid, its reflections and its
+  UHD scan (see **Golden Sphere**); that scan is the one streamed scan wanted
+  only on Exceptional GPUs. Tests: `the_tier_follows_the_cards_size_capped_by_vram`,
+  `the_tier_is_decided_once`,
+  `without_a_reading_the_fallback_settles_and_a_forced_tier_wins`
+  (`tier.rs`), `a_gpu_tier_can_be_forced` (`launch.rs`).
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
   empty, every streamed plant has spawned (`world::PlantsGrowing`) and the

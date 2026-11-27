@@ -23,10 +23,10 @@ under `src/` unless they start with `assets/`, `tools/` or `doc/`.
 
 1. Shape and principles
 2. Boot, states and the loading screens
-3. Memory: RAM fill, GPU scan budget, recovery
+3. Memory: RAM fill, GPU scan budget, recovery, GPU tier
 4. Saved progress
 5. The ground: terrain, water, roads and the landscape
-6. Things on the ground: scenery, vegetation, sites, collision
+6. Things on the ground: scenery, vegetation, sites, collision, the Golden Sphere
 7. The stalker, orders and vehicles
 8. Time, weather, light and fog
 9. Living things: wildlife, mutants, people, guns, helicopters
@@ -67,8 +67,9 @@ flowchart TD
         WE["Weather::at clock"]
     end
     subgraph GPU["Custom render pieces"]
-        MAT["Terrain, water, cutaway, ramp-cut, plant materials"]
+        MAT["Terrain, water, cutaway, ramp-cut, plant, ferrofluid, Sphere mirror materials"]
         FOG["Ground fog render node"]
+        PRB["Golden Sphere probe: six cameras into cube faces"]
     end
     APP --> PLUG
     APP --> INFRA
@@ -99,6 +100,7 @@ messages.
 | **Precalculate once** | Bake what assets and seeds determine (collision pillars, reliefs, the pit roads, tangents, KTX2 textures); compute the rest once per run and cache it | User rule (CLAUDE.md); runtime exceptions are commented where they stand, e.g. the wall shear (`cordon.rs:1117-1118`) and the ramp cut image (`ramp_cut.rs:97-99`) |
 | **Stream by distance, cap by frame** | `StreamAnchor` tiles, one chunk or tile per frame, fixed per-frame spawn and despawn budgets | Bevy's per-entity bookkeeping stalled whole tile rows: 180 ms frames, now 23 ms (commit `374be19`) |
 | **VRAM is a budget, not a hope** | Dense scans only through `GpuScans`; stand-ins elsewhere; the live driver budget decides | All scans at once outgrow a 6 GB card; a 4 GB laptop is a target (section 3) |
+| **Tier by the card, once** | `GpuTier` is decided at `Startup` from the card's size and never changes in a session | The live VRAM budget moves with other programs; an effect sized by it would flip tier mid-run (section 3.6) |
 | **Keep model fidelity** | Native textures, error-bounded simplification, far LODs instead of degraded near models | User rule ("do not nerf models") |
 | **Pause is an overlay** | `InGamePhase` sub-state; Running gates simulation, InGame gates streaming | Nothing despawns on pause; the view stays complete (`states.rs:28-31`) |
 | **States, not booleans** | `AppState`, `SplashPhase`, `InGamePhase`, `Shroud`, enums for every mode | CLAUDE.md; run conditions stay declarative |
@@ -117,8 +119,8 @@ messages.
 |---|---|---|
 | 1 | `register_ram_source(&mut app, "assets")` (`main.rs:34-35`) | Asset sources are built by `AssetPlugin`, so the `ram` source must exist before `DefaultPlugins` |
 | 2 | `DefaultPlugins.set(RenderPlugin { memory_hints: MemoryHints::MemoryUsage })` (`main.rs:40-48`) | wgpu's default 256 MiB blocks left ~1.2 GB of a 6 GB card reserved but unused, and a dropped scan freed nothing while its block held anything else; 8-64 MiB blocks keep ~0.4 GB less in use at the same frame rate (comment at `main.rs:36-39`, measured on the RTX 2060) |
-| 3 | `insert_resource(LaunchOptions::from_env())` (`main.rs:50`) | Parsed once the log is up, so a bad `--vram` is reported |
-| 4 | `GpuScansPlugin` (`main.rs:52`) | After the options (its fallback budget reads `--vram`) and after `DefaultPlugins` (it needs the render sub-app) |
+| 3 | `insert_resource(LaunchOptions::from_env())` (`main.rs:50`) | Parsed once the log is up, so a bad `--vram` or `--gpu-tier` is reported |
+| 4 | `GpuScansPlugin` (`main.rs:52`) | After the options (its fallback budget reads `--vram`, its fallback `GpuTier` reads `--gpu-tier` too) and after `DefaultPlugins` (it needs the render sub-app) |
 | 5 | `init_state::<AppState>`, `add_sub_state::<SplashPhase>`, `add_sub_state::<InGamePhase>` (`main.rs:53-55`) | States before any plugin that uses `in_state` |
 | 6 | `PreloadedAssets` + `Startup: preload_game_assets` (`main.rs:56-57`) | The splash's readiness list |
 | 7 | the six project plugins (`main.rs:58-65`) | Audio, World, Player, Zone, Ui, Save |
@@ -188,6 +190,8 @@ Two consequences follow everywhere in the code:
      splash waits for it like any file;
    - `canopy::pin_tree_scans` pins the three tree scans in `GpuScans`
      (`canopy.rs:345-349`);
+   - `settle_gpu_tier` (`gpu_scans/vram.rs:69`) decides the `GpuTier`, so the
+     pool and the probe built on entering the Zone already know it (section 3.6);
    - `read_progress` (`save.rs:133`) and `start_ram_fill` (`ram_source.rs:229`).
 2. `OnEnter(AppState::Loading)` spawns the hangar backdrop, titles and an idle
    stalker (`ui/splash.rs:33-36`) and starts the hangar audio loop
@@ -237,7 +241,7 @@ trees' scan uploads and the plants filling in (`curtain.rs:1-4`); the 12 s cap
 means "never hold the player longer than this" (`:21-22`). `entered()` also
 ends the cautious admission mode (section 3.3): only `lift_curtain` calls it.
 
-## 3. Memory: RAM fill, GPU scan budget, recovery
+## 3. Memory: RAM fill, GPU scan budget, recovery, GPU tier
 
 The game shows ~30 photogrammetry scans of 16-50 MiB of vertices each. Together
 they outgrow a 6 GB GPU, and the target laptop has 4 GB. Three layers keep
@@ -298,7 +302,7 @@ themselves. They *ask* every frame and show what they are given:
 
 | Call | Who | Meaning |
 |---|---|---|
-| `want(path, distance)` (`:342`) | `sites::stream_full_sites`, `plants::stream_full_plants`, `canopy::stream_close_trees` | Says "I would show this scan"; `distance` is how far the nearest asking anchor is from where it would show (`:336-341`); must be repeated every frame |
+| `want(path, distance)` (`:342`) | `sites::stream_full_sites`, `plants::stream_full_plants`, `canopy::stream_close_trees`, `golden_sphere::stream_uhd_sphere` (exceptional GPUs only) | Says "I would show this scan"; `distance` is how far the nearest asking anchor is from where it would show (`:336-341`); must be repeated every frame |
 | `pin(path)` (`:331`) | `canopy::pin_tree_scans` once | Always keep it; the three tree scans |
 | `prefill(path)` (`:354`) | `prefill_scans` | Nobody asked; load it while there is spare room |
 | `scene()` (`:309`) | callers | `Some` only once the scan is resident on the GPU |
@@ -438,7 +442,45 @@ memory at the default 512 MiB cap, and with the old 32 MiB threshold a 4 GB
 T1200 ran out of memory while streaming sites. A scan in its own buffer is never
 copied by a growth and is freed exactly when it unloads.
 
-### 3.6 Constants
+### 3.6 The GPU tier
+
+Effects that scale with the GPU (so far the Golden Sphere's, section 6.9) read
+one `TierLevel`: `Modest`, `Strong` or `Exceptional`. `GpuTier`
+(`gpu_scans/tier.rs:55`) holds the level and a `settled` flag.
+
+| Step | Code | What happens |
+|---|---|---|
+| Assume | `GpuScansPlugin::build` (`streaming.rs:43`) → `GpuTier::fallback` (`tier.rs:62`) | Before any reading: `--gpu-tier` if given, else the level of `--vram` (6 GB without it, `Strong`) |
+| Settle | `settle_gpu_tier` (`vram.rs:69`, `Startup`) → `GpuTier::settle_with` (`tier.rs:76`) | The first call only: a forced tier wins; else the card's size from the driver's reading (`VramReading::card`, the largest device-local heap), capped by `--vram`; else the fallback stays. Logs `GPU: effects at the Strong tier` |
+| Read | `GpuTier::level` | `OnEnter(InGame)` builds what the level sizes; `Update` systems pick their branch by `run_if` |
+| Say | `track_vram_budget` (`vram.rs:62`) | With the first reading: `GPU: a N GB card, effects at the X tier` |
+
+`tier_for` (`tier.rs:41`) maps a size to a level: under `STRONG_GB` 4.75 GiB is
+Modest, from there to under `EXCEPTIONAL_GB` 15 GiB Strong, above Exceptional.
+
+**Why.**
+
+- **The card's size, not the budget.** "The live budget drops whenever another
+  program holds VRAM, which would judge a 6 GB card as a 4 GB one; the card's
+  size does not" (`tier.rs:3-5`). The scan budget follows the live reading
+  because it must; a look that changes with it would flicker between tiers.
+- **Once.** `settle_with` changes nothing after the first call, so the pool's
+  grid and the probe's faces, sized at entry, never meet a different level
+  (`the_tier_is_decided_once`).
+- **Thresholds in reported GiB.** "Drivers report a little under the size
+  sold" (`tier.rs:11-13`): a 5 GB card reports about 4.9 GiB, hence 4.75; a
+  16 GB card, 15. The user chose the sizes (a 5 GB card is the first Strong
+  one, a 16 GB card the first Exceptional one).
+- **`--vram` caps the tier too.** Someone who limits the game to leave room for
+  other programs gets the effects of that smaller card (`--vram 4` on a 16 GB
+  card is Modest).
+- **`--gpu-tier` is for testing.** It forces the level whatever the card, so
+  the Exceptional path can be run on a 6 GB card (and measured: section 6.9).
+- **Startup, before the Zone.** `settle_gpu_tier` runs before `OnEnter(InGame)`
+  builds anything the level sizes. It takes `RenderDevice` as an `Option`, so an
+  app without one settles on the fallback.
+
+### 3.7 Constants
 
 | Constant | Value | Where |
 |---|---|---|
@@ -454,9 +496,10 @@ copied by a growth and is freed exactly when it unloads.
 | `FREE_WAIT_SECONDS` | 30 | `gpu_scans.rs:53` |
 | `OOM_SQUEEZE_GB` | 0.5 | `gpu_scans.rs:56` |
 | `READ_EVERY` | 1 s | `vram.rs:12` |
+| `STRONG_GB` / `EXCEPTIONAL_GB` | 4.75 / 15 GiB | `tier.rs:14-15` |
 | `MAX_RECOVERIES` / `TROUBLE_SECONDS` / `ECHO_SECONDS` | 3 / 60 / 2 | `recovery.rs:20-24` |
 
-### 3.7 Invariants
+### 3.8 Invariants
 
 - Load streamed UHD scans only through `GpuScans` and `assets::uhd`. The
   always-shown stalker and checkpoints are the exception and load from
@@ -473,6 +516,8 @@ copied by a growth and is freed exactly when it unloads.
   `PreUpdate`) does not.
 - On the web build there is no RAM source, no estimate and no prefill; `uhd()`
   returns the plain path (`assets/mod.rs:248-251`).
+- The tier comes from the card's size, decided once; no effect reads the live
+  budget to choose its look.
 
 ## 4. Saved progress
 
@@ -911,7 +956,7 @@ flowchart LR
   sites, water, yard, town, then landforms; `structure_on_ray` (`:128`) tests
   site cylinders and the hall box.
 
-## 6. Things on the ground: scenery, vegetation, sites, collision
+## 6. Things on the ground: scenery, vegetation, sites, collision, the Golden Sphere
 
 There is no plugin per module here: every system below is registered in
 `WorldPlugin::build` (`world/mod.rs:111-265`); the `add_systems` calls inside the
@@ -925,12 +970,13 @@ files are all in tests.
 | Site stand-ins (`low/`), town, railway, marsh and rock props, hangar | Whole run | Always drawn until a full scan hides a stand-in | `sites.rs:939`, `town.rs`, `railway.rs`, `marsh.rs`, `rocks.rs`, `base.rs:132` |
 | Tree trunk, rock, site and town colliders; vegetation clusters; plants | Per 128 m tile, 3x3 around each anchor | `StreamAnchor` | `scenery.rs:217-283` |
 | Ground 2 m meshes | Radius 2 tiles | `StreamAnchor` | `landscape.rs:50-88` |
-| Cordon wall drawn chunks | Within 800 m | `Camera3d` | `cordon.rs:882` |
+| Cordon wall drawn chunks | Within 800 m | `PlayerCamera` | `cordon.rs:882` |
 | Cordon wall collision posts | 2 tiles | `StreamAnchor` | `cordon.rs:906` |
 | Full site scans | 150 m reach, kept to +60 m | `StreamAnchor` | `sites.rs:1010` |
 | Full tree scans | 16 m load, 21 m drop | `PlayerCamera` | `canopy.rs:426` |
 | Full plant scans | nearest within 8 m, asked within 40 m | `Player` | `plants.rs:671` |
 | Full artifact scenes | nearest table within 8 m | `Player` | `base/artifacts.rs:328` |
+| The Golden Sphere's UHD scan (exceptional GPUs only) | 40 m shown, asked within 80 m | `StreamAnchor` | `golden_sphere/uhd.rs:65` |
 
 **Why visuals are global and collision is local.** "Solid pillars are installed
 only near the player" (`scenery.rs:1-3`); nothing else touches a collider. The
@@ -1170,7 +1216,7 @@ model space, or the swap jumps.
 - `prepare_cordon` (`cordon.rs:523`) cuts the yard wall, the map edge and the
   two Perimeter runs into ~7.4 m panels filed per tile (`wall_chunks`, `:808`).
 - `stream_wall_view` (`:882`) builds **one** drawn chunk per frame within
-  `VIEW_TILES` 7 of a camera, nearest first; `spawn_wall_chunk` (`:965`) shears
+  `VIEW_TILES` 7 of the player's camera, nearest first; `spawn_wall_chunk` (`:965`) shears
   the baked box, razor wire and sandbags onto the ground (`WallModel::batch`,
   `:1119`). "The shear depends on each panel's ground, so it stays at runtime"
   (`:1117-1118`): the documented exception to "precalculate once", since baked
@@ -1205,7 +1251,185 @@ model space, or the swap jumps.
   `ArtifactIdle`. Today `ARTIFACTS` and `ARTIFACT_PREVIEWS` name the same
   `medium/` files, so the swap reloads the same model.
 
-### 6.9 Invariants
+### 6.9 The Golden Sphere
+
+Unlike the rest of this section, the Sphere has its own plugin,
+`GoldenSpherePlugin` (`golden_sphere.rs:115`, added in `WorldPlugin::build`). It
+owns a `GoldenSphere` entity with a mesh child (the medium preview model), a
+`FerrofluidPool` disc under it and, on strong and exceptional GPUs, six probe
+cameras. The numbers are in `doc/world-reference.md`.
+
+```mermaid
+flowchart LR
+    CLK["HoverClock<br/>Running only"] --> HOV["Hover::at(t)<br/>height, spin, tilt, field"]
+    HOV --> POSE["pose_golden_sphere"]
+    HOV --> PULL["pull_ferrofluid<br/>field, rings, probe centre"]
+    PULL --> VS["ferrofluid.wesl vertex<br/>crown + three rings"]
+    TIER["GpuTier"] --> GRID["pool grid<br/>2 / 1 / 0.5 cm"]
+    TIER -->|"Strong, Exceptional"| PROBE["six probe cameras<br/>256 / 1024 px faces"]
+    TIER -->|"Modest"| SI["gather_stand_ins<br/>capsule + boxes"]
+    TIER -->|"Exceptional"| UHD["stream_uhd_sphere<br/>GpuScans"]
+    PROBE -->|"cube faces"| MIR["golden_sphere.wesl<br/>the Sphere's mirror"]
+    PROBE -->|"cube faces + Sphere ray"| FF["ferrofluid.wesl fragment<br/>the pool's mirror"]
+    SI --> MIR
+    UHD -->|"mesh + gold"| MIR
+```
+
+**One clock, one pose.** `Hover::at(seconds)` (`:70`) is a pure function of the
+seconds the Sphere has hovered: its height (`HOVER` 2.25 m less `BOB` 0.15 m
+times a cosine over `BOB_SECONDS` 7, so it starts at its lowest, 2.1 m), its
+turn (`SPIN` 0.3 rad/s), its lean (`WOBBLE_DEGREES` 4, circling in
+`WOBBLE_SECONDS` 23) and the field it puts on the pool. The field is a magnet's
+cube law, scaled to 1 at the lowest point and `WEAKEST_FIELD` 1/3 at the
+highest (`:72-77`). `HoverClock` (`:92`) counts `time.delta_secs()` in
+`pose_golden_sphere`, which runs only while Running: "virtual time runs on
+through the pause" (`:89-90`), so a clock taken from `Time<Virtual>`'s elapsed
+time would jump on resume (`the_sphere_holds_still_while_paused`). The pose and
+the pool's uniforms both come from the same `Hover`, so the spikes and the
+Sphere cannot drift apart.
+
+**Placement.** `golden_sphere_spot()` (`sites.rs:802`) turns the model-space
+constant `SPHERE_POOL` (`:799`) through the core scan's pose. It was found once
+(no tool is kept for it): the flattest floor within 20 m of the painted glow,
+the pool's rim 3 m clear of the road's bed. The test
+`the_golden_sphere_hovers_over_the_flattest_floor_clear_of_the_road` repeats that
+search on a 0.5 m grid and fails if the floor at the constant rises more than
+1 cm more across the pool than at the flattest spot it finds. Nothing is
+searched at run time (precalculate once). `pool_level`
+(`:156`) takes the highest `Terrain::mesh_height_at` over the disc plus `LIFT`
+5 mm, "so the floor never shows through it", and `Ferrofluid::pool_mesh` bends
+the disc's outer `RIM` 0.4 m down to the floor under it
+(`ferrofluid.rs:144`, a smoothstep of `floor(at).min(0.0)`), so the pool meets
+the ground with no lip. `POOL_SOLID` (`:107`) is one `Pillar` from 0.1 m under
+the liquid to the Sphere's top (3.4 m), with `Unclimbable`: the stalker walks
+round the pool and cannot pass under the Sphere. The glow painted in the core
+scan's texture is still there, 14.7 m from the Sphere (an open follow-up).
+
+**The spikes are made in the vertex shader.** The CPU builds a flat disc once and
+sends four `vec4` uniforms (`field`, `shape`, `rings`, `flow`; `ferrofluid.rs:44`)
+that change each frame; `pull_ferrofluid` (`:273`) writes only the ones that
+move and leaves the six bound faces alone (`:282`). In `ferrofluid.wesl`:
+
+- `crown` (`:187`) is a hexagonal lattice (`nearest_spike`, `:149`) turned by the
+  Sphere's spin, each spike a concave cone (`cone`, `:171`) of foot radius half
+  the 0.45 m spacing. Its height is the tallest spike's times a Gaussian of
+  0.35 m sigma about the middle, gated by `smoothstep(CALM 0.15, RISEN 0.3,
+  pull)` where `pull` is the field times that Gaussian: "like real ferrofluid,
+  spikes stand only where the field passes a threshold", so the crown grows as
+  the Sphere sinks (0.44 m out at the highest, 0.68 m at the lowest). The
+  tallest spike is `SHORTEST_TALLEST` 1.0 m to `TALLEST` 1.4 m by the field
+  (`Ferrofluid::under`, `ferrofluid.rs:81`), 0.2 m clear of the lowest Sphere's
+  underside
+  (test `the_central_spikes_stand_1_4_m_under_the_lowest_sphere_and_1_m_under_the_highest`).
+- `small_ring` (`:201`) draws three rings of 12 small spikes, each ring's
+  progress (0 to 1) in `rings.xyz`, staggered by a third. It returns at once
+  for a point farther than `SMALL_FOOT` 0.09 m from the ring's radius, which
+  keeps three rings cheap per vertex. A spike rises over the first 15% of its
+  way in and sinks into the crown over the last 30%, and pulses on `rings.w`, the
+  game seconds modulo `PULSE_WRAP` 60: each spike pulses `PULSES` 20 plus up to
+  19 whole times in those 60 s, so the wrap never jumps.
+- The slope of each cone is returned with its height, so the vertex stage tilts
+  the normal analytically (`:256`) instead of recomputing normals.
+- The shadow pass runs the same vertex function (`prepass_vertex_shader`,
+  `ferrofluid.rs:187`; the `PREPASS_PIPELINE` branches). There `view` is the
+  light's, so the fade by pixel size is skipped and `seen` stays 1: shadows keep
+  every spike. `enable_prepass` is false: nothing reads a depth prepass from the
+  liquid (`ferrofluid.rs:191`).
+- In the main view, `seen` (`:241`) is `smoothstep(3 px, 8 px, spacing in pixels)`
+  from the pool's middle, so far spikes settle into smooth liquid instead of
+  sparkling.
+- The grid is the cost: `pool_mesh(level, ...)` steps 2 cm, 1 cm or 5 mm, so
+  roughly 18 thousand, 71 thousand or 283 thousand vertices, each running the
+  crown and the rings. The test holds the mean edge to 1.2 steps.
+
+**Reflections by tier.** `reflect_surroundings` (`golden_sphere.rs:296`) and
+`gather_stand_ins` (`:322`) feed the two mirrors each frame.
+
+| Tier | The Sphere shows | The pool shows | Per frame |
+|---|---|---|---|
+| Modest | up to three stand-ins ray-traced in its fragment shader: the stalker as a capsule, the car and carrier as boxes, within `REACH` 15 m (`mirror.rs:113`) | plain PBR, no Sphere | a few uniforms |
+| Strong | the probe's cube faces (256 px), one face a frame while someone is within 15 m | the Sphere, traced analytically, and the faces; gold shows in the black metal | one extra view |
+| Exceptional | the probe at 1024 px, all six faces a frame, and the UHD scan within 40 m | as Strong, at 1024 px | six extra views |
+
+The reasons, where the code gives them:
+
+- **Modest has no probe.** `spawn_reflection_probe` (`reflection.rs:70`) returns
+  at once, so the pool has no faces to bind and `probe.w` stays 0, which the
+  fragment shader tests (`ferrofluid.wesl:280`). The stand-ins cost a few
+  uniforms and give the stalker and the car a plausible shape and paint: the
+  paints are the models' mean linear albedo, measured once with PIL
+  (`mirror.rs:20-26`), and the light is the Sun's illuminance and direction plus
+  `SKY` 20% of it (`golden_sphere.wesl:36-37`). A card under 5 GB is the 4 GB laptop
+  the project targets (section 3), where a view a frame is *(inferred)* too
+  much.
+- **The faces are a cube map kept in six images.** `new_target_texture` with
+  `Rgba16Float`: the probe renders HDR light, which the player's camera tonemaps
+  once, later *(inferred)*. Hence `Tonemapping::None`, `DebandDither::Disabled`,
+  `Msaa::Off`, and `Exposure { ev100: 13.0 }`, "the player's camera's exposure, so
+  the faces' light matches" (`:117`). The cameras have no `Atmosphere` or fog, are
+  cleared to `Color::NONE`, and so leave alpha 0 where nothing was drawn: the
+  shaders mix the faces over the lit surface by that alpha, and the environment
+  map's sky stays where the probe saw sky.
+- **`FACES` (`:29`) and both shaders' `probe_sample` agree.** The camera for face
+  *n* looks along `FACES[n].0` with that up; each shader picks the face from the
+  ray's largest axis and the same up, and the twin functions in
+  `golden_sphere.wesl:43` and `ferrofluid.wesl:77` must stay identical. Changing
+  one of the three breaks reflections without any error.
+- **The cameras are cheap to keep and wake on demand.** They exist, inactive
+  (`is_active: false`, `order` -10 to -5, so before the main view), and
+  `steer_reflection_probe` (`:137`) moves them to the Sphere and
+  `faces_to_render` (`:52`) picks the ones to wake: none with nobody near or on
+  Modest, face `frame % 6` on Strong, all six on Exceptional. A sleeping face
+  keeps its last image. `ClusterConfig::Single` is the comment at `:123-126`:
+  clustering a view at the default grid cost tens of milliseconds of CPU a
+  frame, and `None` crashes Bevy 0.20's GPU clustering.
+- **The faces live as long as the run, the cameras as long as the Zone.** The
+  `ReflectionProbe` resource keeps the images; the cameras have
+  `DespawnOnExit(InGame)` and are made again on each entry
+  (`re_entering_the_zone_keeps_six_probe_cameras`).
+- **The pool traces the Sphere itself.** The probe is at the Sphere's centre, so
+  it cannot see the Sphere. `mirrored` (`ferrofluid.wesl:124`) tests the pool's
+  reflection ray against a sphere at `probe.xyz` of radius `probe.w` (the centre
+  is rewritten each frame in `pull_ferrofluid`); on a hit it reflects once more
+  at the Sphere, samples the faces and tints with `GOLD`; on a miss it samples
+  the faces along the ray. The result is mixed over the lit surface with a
+  Schlick fresnel from the metal's base colour.
+
+**Render layers.** The Sphere's mesh child alone is on `SPHERE_LAYER` (1,
+`reflection.rs:21`): "out of its own probe's sight" (`golden_sphere.rs:197`). The
+player's camera (`player/mod.rs:271`) and the Sun (`world/mod.rs:454`, "so it
+casts its shadow") see layers 0 and 1; the probe cameras see 0 only, so the
+probe renders the crater, the pool and the stalker but never the Sphere from
+inside. This is the reason camera lookups must filter `PlayerCamera`
+(`pose_wildlife`, `stream_wall_view` did not; section 12.1).
+
+**The UHD scan (exceptional GPUs).** `uhd.rs` keeps the medium mesh and paint in
+`SphereSkin` and swaps them on the Sphere's child. `stream_uhd_sphere` (`:65`)
+measures the distance to the nearest `StreamAnchor`, calls
+`scans.want(GOLDEN_SPHERE_UHD, distance - UHD_RANGE)` from `UPLOAD_LEAD` short
+of 40 m (and at 0 or less while it is shown, so it counts as on screen), and
+`sphere_detail` (`:30`) picks `Uhd` only for an Exceptional card, within 40 m,
+with the scan resident (`scene()` is `Some`). It reads the mesh and gold from
+the loaded glTF by handle without loading anything (`uhd_parts`, `:124`: "`GpuScans`
+alone loads scans"), and writes the Sphere's material only when the detail
+changes. The scan is centred and 0.98 m across, so the child's scale becomes
+`SOURCE_DIAMETER / UHD_DIAMETER`; the medium model returns when the anchors leave
+40 m or the scan is evicted, and the hold on its GPU copy is dropped with it. The
+file (`GOLDEN_SPHERE_UHD`, 1.97 M triangles, one 8192 px BC7 KTX2 texture, 70 MB,
+138 MB measured on the GPU) is in `UhdFiles`, between the plants and the sites
+(`world/mod.rs:327-330`). That list is built when the plugin is, before the tier
+is known, so every card reads the 70 MB into RAM.
+
+**What it costs.** Measured beside the Sphere on the 6 GB RTX 2060 (playtest
+build, Xephyr): Modest 34 FPS, Strong 27 to 28, Exceptional (forced with
+`--gpu-tier exceptional`) 10. The trace puts the cause on the CPU, not the GPU:
+Bevy 0.20's GPU light clustering takes 30 to 44 ms of CPU per camera view per
+frame, and every probe face that renders is a view (it also gets its own four sun
+cascades). Moving to CPU clustering is the next branch's first item; the
+numbers are in
+`~/Projects/agentic/roadside-picnic-overwatch/reviews/2026-11-27-gpu-usage-findings.md`.
+
+### 6.10 Invariants
 
 - Tile entities and `WorldRoot` stay at the origin: `trample_plants` and
   `stream_full_plants` treat local transforms as world positions.
@@ -1604,7 +1828,9 @@ run in parallel.
   bounds once and writes the inverse bind poses as `translation(-pivot)`.
 - Motion is procedural: `pose_wildlife` swings legs from gait phase and clamps
   each foot to 1.12x the leg length; it skips creatures beyond their draw
-  distance + 27 m.
+  distance + 27 m from the player's camera (`PlayerCamera`; with the Golden
+  Sphere's six probe cameras a plain `Camera3d` `single()` would fail and skip
+  nothing).
 - Routes are prechecked against the terrain and water when the creature spawns,
   not each frame.
 
@@ -1895,6 +2121,7 @@ flowchart TD
         U4["R: guards, townsfolk, booms, crawl hole"]
         U5["R: patrol, traffic, carrier"]
         U6["R: trigger_anomalies, map, HUD stats"]
+        U6b["R: Golden Sphere chain: pose, pull ferrofluid, reflect, stand-ins (modest) or UHD stream (exceptional)"]
         U7["G: paint_shroud_mask, lift_curtain, restore_progress, HUD fps and position, pause, quit"]
         U8["always: measure_scans, mipmap_filtered_textures, grab_cursor"]
     end
@@ -1915,6 +2142,7 @@ flowchart TD
         R1["Extract: fog uniform, fog field, shroud mask, scan handles"]
         R2["Prepare: specialize fog pipelines, publish_scan_residency"]
         R3["Core3d: main pass, sky, transparents, ground fog, post-process"]
+        R3b["Probe cameras, order -10 to -5, before the main view: awake faces only (strong, exceptional)"]
         R4["publish_pipeline_backlog"]
     end
     FIRST --> PRE --> UPD --> POST --> LAST --> RW
@@ -1939,6 +2167,11 @@ flowchart TD
 - **Last: consumers.** Audio needs Bevy's freshly created sinks; scan admission
   needs every `want` made this frame; the save needs the frame's final state and
   `AppExit`.
+- **Golden Sphere chain, in Update.** It reads where the stalker and the car
+  are but is not ordered against the player's chain, so it may see last
+  frame's position: harmless at the 15 m reach of its mirror. Its probe
+  cameras are the only cameras in the Zone besides the player's, and run
+  before the main view (orders -10 to -5).
 - **Render world.** Bevy's extraction copies the fog, shroud and scan state;
   two project systems publish back to the main world through atomics or shared
   resources (the pipeline backlog for the curtain, the scan residency for
@@ -1973,6 +2206,10 @@ playing continue, the engine pauses and creature voices are dropped.
 | Player-facing strings live in `ui/text.rs` | Localization breaks |
 | GLB node names (`Wheel*`, `TrackLink*`) survive re-exports | Wheels or tracks freeze |
 | `compress_glb_textures.py` runs last on every runtime GLB | Uncompressed textures, missing tangents |
+| A system that wants the player's view queries `PlayerCamera`, never `Camera3d` | The Golden Sphere's six probe cameras make `single()` fail, or stream the wall and pose creatures around themselves |
+| Only the Sphere is on `SPHERE_LAYER`; the probe cameras see layer 0 only | The probe renders the Sphere from inside, or the player's camera loses it |
+| `FACES` (`reflection.rs`) and the two `probe_sample` twins (`golden_sphere.wesl`, `ferrofluid.wesl`) change together | Reflections show the wrong side of the world, with no error |
+| Effects scale with `GpuTier` (the card's size, decided once at `Startup`), never with the live VRAM budget | An effect flips tier when another program takes VRAM; a pool or probe sized at entry meets another level |
 
 ### 12.2 Observed inconsistencies
 
@@ -2031,13 +2268,16 @@ so the next change in the area can fix it.
 | **Explored** | The 108 x 108 survey grid of 32 m cells |
 | **Full scan** | A site's, plant's, tree's or artifact's `uhd/` model, streamed near and swapped for its stand-in |
 | **GpuScans** | The resource that admits UHD scans to the GPU within a budget |
+| **GpuTier** | The session's GPU level (`Modest`, `Strong`, `Exceptional`), decided once from the card's size; forced by `--gpu-tier` |
 | **Leg** | A road segment (`roads.rs`), or a carrier route phase (`carrier.rs`); context tells which |
 | **Mobility** | A mover's radius, deepest water and steepest grade for route planning |
 | **Pillar** | An upright collision cylinder in a model's local space |
+| **Probe** | The Golden Sphere's six inactive cameras at its centre (`ProbeFace`), rendering the cube faces its mirrors sample |
 | **Ramp** | `Surface::Ramp`, a pit's haul road at a constant grade |
 | **Relief** | A 64 x 64 height grid sampled from a diorama scan |
 | **Shroud** | The fog of war over unsurveyed ground (V lifts it) |
-| **Stand-in** | A site's `low/` model, drawn everywhere the full scan is not |
+| **Sphere layer** | `SPHERE_LAYER` (1): the render layer only the Golden Sphere is on, seen by the player's camera and the Sun, not by the probe |
+| **Stand-in** | A site's `low/` model, drawn everywhere the full scan is not; also the capsule or box the Golden Sphere's mirror traces for the stalker or a vehicle on modest GPUs |
 | **Tile** | A 128 m square of terrain, the unit of scenery and collider streaming |
 | **The workspace** | `~/Projects/agentic/RoadSide-Picnic`, the asset sources |
 | **The Zone** | Everything on the -X side of the Perimeter (`in_zone`) |

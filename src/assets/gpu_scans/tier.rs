@@ -16,9 +16,9 @@ const EXCEPTIONAL_GB: f32 = 15.0;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum TierLevel {
-    /// Under 6 GB (a 4 GB laptop card).
+    /// Under 5 GB (a 4 GB laptop card).
     Modest,
-    /// 6 GB and above.
+    /// 5 GB and above.
     #[default]
     Strong,
     /// 16 GB and above.
@@ -50,7 +50,7 @@ pub fn tier_for(card_bytes: u64, cap: Option<u64>) -> TierLevel {
 }
 
 /// The session's GPU level: assumed from `--vram` (or the 6 GB fallback) until
-/// the first driver reading or the first effect that needs it settles it.
+/// `settle_gpu_tier` settles it at `Startup`.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GpuTier {
     level: TierLevel,

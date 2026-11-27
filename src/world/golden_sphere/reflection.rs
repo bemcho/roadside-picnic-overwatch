@@ -1,6 +1,6 @@
 //! The Golden Sphere's live reflection on strong and exceptional GPUs: six
 //! cameras at its centre render the scene around it into the faces of a cube,
-//! which its shader (and the ferrofluid's, on exceptional GPUs) samples.
+//! which its shader and the ferrofluid's sample.
 
 use std::f32::consts::FRAC_PI_2;
 

@@ -69,20 +69,25 @@ flowchart LR
     TURRETS -->|"Respawn"| PLAYER
     TURRETS -->|"GunSound"| AUDIO
     WORLD --> BASE["Base\nhangar, props, vehicles, artifacts"]
+    WORLD --> SPHERE["Golden Sphere\npool, ferrofluid, reflection probe"]
 
     TERRAIN --> LANDSCAPE
     TERRAIN --> SCENERY
     TERRAIN --> PLAYER
     TERRAIN --> WILDLIFE
     TERRAIN --> SITES
+    TERRAIN --> SPHERE
 
     PLAYER --> COLLISION["Pillar collision"]
     SCENERY --> COLLISION
     SITES --> COLLISION
     BASE --> COLLISION
+    SPHERE --> COLLISION
 
     SCENERY -->|"want / pin UHD scans"| SCANS
     SITES -->|"want UHD scans"| SCANS
+    SPHERE -->|"want UHD scan (exceptional GPUs)"| SCANS
+    SCANS -->|"GpuTier"| SPHERE
     SCANS -->|"settled"| UI
 
     PLAYER --> UI
@@ -99,12 +104,13 @@ flowchart LR
 | Saved progress | `src/save.rs` | `SavePlugin`: the progress file, F5/autosave/quit saves, restore on entry |
 | States | `src/states.rs` | `AppState::Loading/InGame`, `InGamePhase::Running/Paused` |
 | Asset paths | `src/assets/` | Canonical paths, preload handles, shared GLB loader helpers |
-| RAM and GPU | `src/assets/ram_source.rs`, `assets/gpu_scans.rs`, `gpu_scans/{streaming,residency,vram}.rs` | `ram://` fill behind the splash, `assets::uhd`, `GpuScans` budget, admission, prefill and eviction, render-world residency, live `VK_EXT_memory_budget` reading |
+| RAM and GPU | `src/assets/ram_source.rs`, `assets/gpu_scans.rs`, `gpu_scans/{streaming,residency,vram,tier}.rs`, `src/launch.rs` | `ram://` fill behind the splash, `assets::uhd`, `GpuScans` budget, admission, prefill and eviction, render-world residency, live `VK_EXT_memory_budget` reading, `GpuTier` (modest, strong or exceptional from the card's size, or forced by `--gpu-tier`) |
 | Player | `src/player/` | Stalker, camera, input, gravity, crawling, vehicle interaction |
 | Vehicle | `src/player/vehicle.rs`, `vehicle/contact.rs` | Throttle/steer, traction, four-tire terrain fit, wheels, spotlight |
 | World | `src/world/mod.rs` | World plugin, terrain/material setup, sky, fog, spawn and teardown |
 | Terrain | `src/world/terrain.rs`, `hydrology.rs`, `roads.rs` | Deterministic heights, water, road grading and masks |
 | Quarry ramp | `src/world/quarry_ramp.rs`, `ramp_cut.rs`, `assets/shaders/ramp_cut.wesl` | The haul roads down the Quarry rim's pit and the Golden Sphere's crater: per cut scan (`CutScan`), the pillars dropped from its cut corridor (`CutScan::pillars`), and its cut image and `RampCutMaterial` that hide the scan's stone over the road |
+| Golden Sphere | `src/world/golden_sphere.rs`, `golden_sphere/{ferrofluid,mirror,reflection,uhd}.rs`, `assets/shaders/{ferrofluid,golden_sphere}.wesl` | `GoldenSpherePlugin`: the hovering Sphere and its `HoverClock`, the ferrofluid pool (vertex-shader spikes, `Collider`), the six-camera reflection probe (strong and exceptional GPUs), ray-traced stand-ins (modest GPUs), the streamed UHD scan (exceptional GPUs), `SPHERE_LAYER` |
 | Day/night and weather | `src/world/weather.rs` | `WorldClock`, daily `Weather` (temperature, humidity, fog tendency), sun/moon, exposure |
 | Ground fog | `src/world/ground_fog.rs`, `ground_fog/{field,render}.rs` | Fog field texture, terrain-hugging raymarch pass with the clouds and the shroud's smoke, regional distance fog |
 | Places | `src/world/places.rs` | Named places at a point or along a ray, `Describe`, the `Explored` survey grid |
@@ -128,7 +134,7 @@ flowchart LR
 | UI | `src/ui/` | Splash, entry curtain, HUD, FPS and position, weather line, controls, hover tooltips, stalker locator ring, map overlay (M), pause |
 | Zone loop | `src/zone/` | Current placeholder anomalies, collectible markers, run counters |
 | Asset tooling | `tools/` | Texture/GLB preparation, grounding, rigging, collision generation |
-| Shaders | `assets/shaders/` | Terrain, water, hangar cutaway and floor/wall paint, quarry ramp cut, plant wind and ground fog WESL entry points |
+| Shaders | `assets/shaders/` | Terrain, water, hangar cutaway and floor/wall paint, quarry ramp cut, plant wind, ground fog, the Golden Sphere's mirror and its ferrofluid WESL entry points |
 
 ## State and lifecycle
 
@@ -139,9 +145,9 @@ systems:
 
 1. `src/assets/mod.rs` puts the critical file and scene handles into
    `PreloadedAssets`, and `assets/ram_source.rs` starts reading every file of
-   `UhdFiles` (the trees, the plants, then the sites nearest the hangar) into
-   the `ram://` source, four at a time, while 4 GiB of RAM stay free; a file
-   left out loads from `assets/` through the same source.
+   `UhdFiles` (the trees, the plants, the Golden Sphere's scan, then the sites
+   nearest the hangar) into the `ram://` source, four at a time, while 4 GiB of
+   RAM stay free; a file left out loads from `assets/` through the same source.
 2. `world/landscape.rs` starts an asynchronous CPU task that builds the distant
    terrain, water, scenery layout, and streamed site data.
 3. The world preloads canopies, wildlife primitives, cordon assets, sites, the
@@ -183,7 +189,9 @@ is not preloaded, the splash can report ready before that asset is available.
   fog field resource, hangar, props, yard vehicles, artifact pedestals, cordon,
   wildlife, sites and a fresh `Explored` grid. `prepare_ramp_cut` runs before
   `spawn_sites` (chained), because the cut scans' stand-ins are spawned with
-  their cut images' materials.
+  their cut images' materials. The Golden Sphere's own chain
+  (`spawn_reflection_probe` -> `spawn_golden_sphere` -> `spawn_ferrofluid_pool`)
+  runs here too: the probe's faces must exist before the two materials bind them.
 - `PlayerPlugin` spawns the stalker and its skinned scene, camera, exposure,
   atmosphere, `GroundFog` and distance-fog settings. The camera's depth texture
   is bound for sampling, because the fog pass reads it.
@@ -226,6 +234,8 @@ Update, only while InGamePhase::Running
   Perimeter guns: mark trespassers -> sweep beams / lock on -> spin, fire
     bursts (tracers, Downed, Respawn, GunSound) -> fly tracers
     -> beams, spots, muzzle flashes + head yaw / barrel spin
+  Golden Sphere: pose_golden_sphere -> pull_ferrofluid -> reflect_surroundings
+    -> gather_stand_ins (modest GPUs) -> stream_uhd_sphere (exceptional GPUs)
 
 PostUpdate, before Transform propagation
   wildlife route/mutant AI (Downed creatures skip it), downed creatures fall
@@ -291,7 +301,7 @@ first, and marks tiles that left `Unloading`; `unload_stale_tiles` despawns
 300 of their children per frame, then the tile. `stream_ground_detail`
 switches one tile to its 2 m mesh per frame (back to the distant mesh at
 once). `stream_wall_view` builds one drawn wall chunk per frame (its three
-sheared meshes, up to ~4 ms) within 800 m of a camera, nearest first;
+sheared meshes, up to ~4 ms) within 800 m of the player's camera, nearest first;
 `stream_wall_solids` spawns the wall's collision posts around the anchors, and
 `show_with_wall` hides anything `OnWall` (the Perimeter guns and their effects)
 whose chunk is not drawn. Colliders spawn with the tile; each tile's plant sites are grown by a
@@ -507,6 +517,38 @@ player leaves. The golden sphere's metallic/roughness override is applied to
 both its preview and streamed full scene. The collectible `Artifact` component
 in `src/zone/mod.rs` is a separate gameplay placeholder sphere used by the
 current Zone run loop.
+
+## Golden Sphere
+
+`GoldenSpherePlugin` (`world/golden_sphere.rs`, added by `WorldPlugin`) puts the
+Golden Sphere, a 1 m mirror-gold ball, over a ferrofluid pool on its crater's
+floor. The numbers are in `doc/world-reference.md`.
+
+- **Placement.** `sites::golden_sphere_spot()` is a model-space constant of the
+  core scan (a test pins it to the flattest floor near the painted glow, clear
+  of the road). `pool_level` reads `Terrain::mesh_height_at` once per entry; the
+  Sphere and the pool share that centre.
+- **One clock.** `HoverClock` counts game seconds only while Running.
+  `Hover::at(seconds)` gives the bob, the spin and the field the Sphere puts on
+  the pool; `pose_golden_sphere` poses the Sphere from it and `pull_ferrofluid`
+  hands the pool the field, the spin and the small rings.
+- **The spikes are in the vertex shader.** The pool's mesh is a flat disc
+  (`Ferrofluid::pool_mesh`, finer on stronger GPUs); `ferrofluid.wesl` raises the
+  crown and the creeping rings and tilts the normals. The shader is also the
+  material's `prepass_vertex_shader`, so the shadow pass raises the same spikes.
+- **`GpuTier` decides the rest.** It is settled once at `Startup` from the
+  card's size (`--gpu-tier` forces it) and read through `Option<Res<GpuTier>>`,
+  with `Strong` where it is missing (tests). Modest GPUs get no live map: the
+  Sphere's fragment shader traces stand-ins for the stalker (a capsule) and the
+  vehicles (boxes) that `gather_stand_ins` hands it. Strong and exceptional ones
+  get the probe: six cameras at the Sphere (`reflection.rs`), rendering cube
+  faces that the Sphere and the pool sample, one face a frame on strong GPUs and
+  all six on exceptional ones, only while someone is within 15 m. Exceptional
+  GPUs also stream the Sphere's UHD scan through `GpuScans` (`uhd.rs`) and swap
+  it for the medium model while the stalker is near and the scan is resident.
+- **The Sphere is alone on `SPHERE_LAYER`.** The player's camera and the Sun see
+  it; the probe cameras do not, so the probe never renders the Sphere it is
+  for. See pitfall 28.
 
 ## Player, camera, and vehicle
 
@@ -947,6 +989,29 @@ Important paths:
     transmission...) would bind images it does not track: they would go
     unmeasured, and the residency check would not wait for them.
 
+28. **Look up the player's view by `PlayerCamera`, never `Camera3d`.**
+    The Golden Sphere's probe adds six more `Camera3d`s (`ProbeFace`), inactive
+    except while someone is near the Sphere. A system that took every
+    `Camera3d` would work around the probe's cameras too, or lose its
+    `single()`: `stream_wall_view` would draw the wall around them, and
+    `pose_wildlife` would pose every creature instead of skipping the far
+    ones. Both now filter `PlayerCamera`. The probe's cameras see render layer 0
+    only; the Sphere sits alone on `SPHERE_LAYER` (1), and the player's camera
+    and the Sun see layers 0 and 1. A camera sees the Sphere only if its
+    `RenderLayers` include 1; the default (layer 0) does not. Each active
+    camera is a full view with its own clustering and shadow cascades
+    (Bevy 0.20's GPU light clustering costs 30-44 ms of CPU per view per frame:
+    a strong GPU renders one probe face a frame and an exceptional one six), so
+    add cameras sparingly and wake them only when something can show in them.
+
+29. **Scale effects to the GPU through `GpuTier`, not the live VRAM budget.**
+    `GpuTier` is decided once at `Startup` from the card's size (capped by
+    `--vram`, forced by `--gpu-tier`) and does not change in a session. The
+    live budget falls whenever another program holds VRAM and would flip an
+    effect between tiers. Read the tier through `Option<Res<GpuTier>>` and fall
+    back to `TierLevel::default()`; build anything sized by it (the pool's
+    grid, the probe's faces) at entering the Zone, after `settle_gpu_tier`.
+
 ## How to add a static site model
 
 Use this path for factories, railway scenes, landmarks, and other fixed props
@@ -1074,6 +1139,11 @@ than stretching `sites.rs` into a universal object registry.
    textures inside GLBs get them from `tools/compress_glb_textures.py`.
 7. Validate in release mode; `cargo check` cannot compile a WESL shader at
    runtime or prove a texture channel is correct.
+8. A vertex shader that moves geometry (the ferrofluid's spikes) must also be
+   the material's `prepass_vertex_shader`, or the shadow pass draws the
+   unmoved surface. In the shadow pass `view` is the light's, so a fade by
+   distance (the ferrofluid's, by pixel size) is skipped there and shadows keep
+   every spike.
 
 ## How to add gameplay events
 
@@ -1183,6 +1253,8 @@ Before declaring a visual or gameplay feature complete:
 | Mute does not silence a cue | live sink plus pending `PlaybackSettings`; global volume alone is insufficient |
 | Pause still moves content | missing `run_if(in_state(InGamePhase::Running))` on the gameplay system |
 | Shader change did not apply | only file-backed assets hot reload; procedural material rebuild may need restart |
+| A camera-driven system acts on the wrong view, or its `single()` fails | a `Camera3d` query; filter `PlayerCamera` (the Golden Sphere's probe adds six cameras) |
+| The Golden Sphere shows no reflection of the stalker or the car | the `GPU: effects at the ... tier` log line (`--gpu-tier` forces it), `reflect_surroundings` (someone within 15 m), the probe cameras' `is_active`, `SPHERE_LAYER` on the Sphere and not on the probe, `gather_stand_ins` on modest GPUs |
 
 ## Architecture rules to preserve
 

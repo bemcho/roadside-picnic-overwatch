@@ -60,6 +60,8 @@ stalker's world position (X, Y, Z in meters; Y is up).
   the driver's budget allows); where the driver can't report VRAM, it is the
   card size the fallback budget assumes (6 GB without it). See **RAM and
   GPU** in `doc/world-reference.md`.
+- `cargo run --release -- --gpu-tier <modest|strong|exceptional>` forces the
+  effects tier (normally decided from the card's size). See **RAM and GPU**.
 
 ## World reference
 
@@ -82,6 +84,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Perimeter guns (laser scan, trespass, tracers, downed creatures) | `world/turrets.rs`, `turrets/{scan,fire,beam}.rs`, `wildlife/downed.rs`, `audio/guns.rs` |
 | Sites (Harmont map, 32 scan placements, stand-ins, relief, Institute lights) | `world/{sites,map,institute}.rs` |
 | Quarry ramp (haul road, `Surface::Ramp`, collision off the cut, scan cut, `tools/plan_quarry_ramp.py`); Golden Sphere's crater road (on through the Quarry rim) | `world/{quarry_ramp,ramp_cut}.rs`, `world/{roads,terrain,sites}.rs`, `shaders/ramp_cut.wesl`, generated `world/pillars/{quarry_ramp,golden_crater_ramp}.rs` |
+| Golden Sphere (hover, pool, ferrofluid, reflections and UHD scan per GPU tier) | `world/golden_sphere.rs`, `world/golden_sphere/{ferrofluid,mirror,reflection,uhd}.rs`, `shaders/{ferrofluid,golden_sphere}.wesl` |
 | New Harmont; Railway; Marsh props; Rocks | `world/{town,railway,marsh,rocks}.rs` |
 | Guards; UN patrol; Harmont traffic; Institute carrier; Institute helicopters | `world/{guards,helicopters}.rs`, `player/vehicle/{patrol,traffic,carrier,carrier_track,track_loop}.rs` |
 | Townsfolk (New Harmont pedestrians, scientists at the Institute) | `world/townsfolk.rs` |
@@ -92,7 +95,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Audio | `audio/` |
 | Stalker model (rig, clips) | `player/animation.rs`, `tools/rig_stalker.py` |
 | Precompiled textures (KTX2, baked tangents) | `tools/compress_glb_textures.py` |
-| RAM and GPU (UHD scans from RAM, GPU scan budget, `--vram`) | `assets/{ram_source,gpu_scans}.rs`, `gpu_scans/` |
+| RAM and GPU (UHD scans from RAM, GPU scan budget, `--vram`, `GpuTier` and `--gpu-tier`) | `assets/{ram_source,gpu_scans}.rs`, `gpu_scans/` (`tier.rs`), `launch.rs` |
 | Entering the Zone (curtain) | `ui/curtain.rs` |
 
 Rules that hold everywhere:
