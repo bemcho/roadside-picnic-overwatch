@@ -47,8 +47,13 @@ a cell is blocked where the rendered triangle under its centre is steeper than
 the mover goes, or where the body's radius reaches such a triangle (measured
 exactly from the rims of steep ground, not grown by the half-cell slack pillars
 get, which would close the crater's deepest laps to the carrier). So into a pit
-orders take the road graded down its walls. The slope comes from the 2 m detail
-mesh's vertices, sampled once a search (`Terrain::mesh_patch`, about one land
+orders take the road graded down its walls. Where no such route joins a foot
+click's ends (6 of 200 random 20-250 m trips in the Zone), the stalker alone
+searches once more over any slope (`route`): `move_player` has no slope limit,
+so a click they could always walk must not fail; the car's and the carrier's are
+refused. That costs a trip that needs it 0.18 s against 0.13 s, and an
+unreachable click twice the searches, 0.36 s against 0.18 s (test build). The
+slope comes from the 2 m detail mesh's vertices, sampled once a search (`Terrain::mesh_patch`, about one land
 sample per 16 cells): the movers stand on that mesh, and `height_at` between its
 vertices misses where a triangle spans a bank's foot (4 m higher than `height_at`
 4.3 m off the crater road's centreline). The search keeps to
@@ -68,9 +73,11 @@ the mover stands each time a stop is reached, and when the mover stalls (no
 progress for 0.8 s). After a stall the mover backs away 6 m first (stopping
 sooner if it backs into something, and after 4 s at most): the car reverses at
 full throttle, swinging its nose toward the new leg, since it cannot turn in
-place against a rock. Backing away it passes no waypoint (`MoveOrder::steer`), so
-a new leg that turns off right beside the obstacle keeps its turn rather than
-heading straight back into it. The attempts share 18 m of back-off travel: three full
+place against a rock. A mover reversing away passes no waypoint
+(`MoveOrder::steer`), so a new leg that turns off right beside the obstacle
+keeps its turn rather than heading straight back into it; the stalker, who
+walks on toward the new leg during their back-off, takes a waypoint beside
+them as any other. The attempts share 18 m of back-off travel: three full
 6 m ones, or, as a car's heading turns with the distance it travels (about
 0.19 rad a meter at full lock), proportionally more shorter ones where less room
 is left behind it: 18 with 1 m, at most 60 (each charged at least 0.3 m). The

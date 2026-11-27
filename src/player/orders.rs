@@ -32,7 +32,7 @@ const VEHICLE_BODY: Body = Body {
 };
 /// How click orders route the stalker: through water they wade, on ground no
 /// steeper than 45°. `move_player` lets them walk up anything; a steeper wall
-/// is a scramble, not a route.
+/// is a scramble, taken only when no gentler way joins the trip (see `route`).
 const ON_FOOT: Mobility = Mobility {
     body: STANDING,
     max_depth: WADE_DEPTH,
@@ -103,6 +103,9 @@ pub struct MoveOrder {
     spent: f32,
     /// Seconds left backing away from the obstacle that blocked the mover.
     backoff: f32,
+    /// Whether that back-off reverses the mover, as a car's does; the stalker
+    /// walks on toward the new leg instead.
+    reversing: bool,
     /// Where the mover stalled, to measure how far it has backed away.
     stalled_at: Vec2,
 }
@@ -184,9 +187,10 @@ impl MoveOrder {
             } else {
                 self.arrival * WAYPOINT_SLACK
             };
-            // Backing away from what blocked it, the mover passes no
+            // Reversing away from what blocked it, the mover passes no
             // waypoint: the leg planned there may turn off right beside it.
-            if self.backing_off() || at.distance(next) > reach {
+            let reversing = self.backing_off() && self.reversing;
+            if reversing || at.distance(next) > reach {
                 return Some((next - at).normalize_or_zero());
             }
             self.waypoints.remove(0);
@@ -249,6 +253,7 @@ impl MoveOrder {
                 self.stalled = 0.0;
                 self.stalled_at = at;
                 self.backoff = BACKOFF_SECONDS;
+                self.reversing = turning == Turning::Reversing;
             } else {
                 self.cancel();
             }
@@ -397,7 +402,9 @@ pub(super) fn replan_order(
 }
 
 /// A path for the stalker, or for the vehicle they drive (the car, or the
-/// wider Institute carrier), around everything that blocks it.
+/// wider Institute carrier), around everything that blocks it. Where no route
+/// keeps to ground the stalker is routed on, they get one over any slope, as
+/// `move_player` always let them walk; a vehicle is refused.
 fn route(
     terrain: &Terrain,
     (colliders, carriers): (&Solids, &Query<(), With<Carrier>>),
@@ -417,15 +424,25 @@ fn route(
         Some(car) => colliders.get(car).is_ok_and(|(.., pass)| pass),
         None => in_zone(from),
     };
-    let obstacles = colliders
+    let obstacles: Vec<_> = colliders
         .iter()
         .filter(|&(entity, _, _, weight, boom, _)| {
             Some(entity) != vehicle
                 && mover.blocked_by(weight)
                 && !boom.is_some_and(|boom| boom.opens_for(pass))
         })
-        .map(|(_, collider, pose, ..)| (collider, pose));
-    find_path(terrain, obstacles, from, to, mobility)
+        .map(|(_, collider, pose, ..)| (collider, pose))
+        .collect();
+    let find = |mobility| find_path(terrain, obstacles.iter().copied(), from, to, mobility);
+    match vehicle {
+        None => find(mobility).or_else(|| {
+            find(Mobility {
+                max_grade: f32::INFINITY,
+                ..mobility
+            })
+        }),
+        Some(_) => find(mobility),
+    }
 }
 
 /// Shows a pulsing ring at each stop still ahead, spawning more as orders queue up;
@@ -753,6 +770,37 @@ mod tests {
     }
 
     #[test]
+    // `move_player` has no slope limit, so a click on foot may not fail where
+    // the stalker could have walked: ground steeper than `ON_FOOT` routes is
+    // used when nothing else joins the two. Trips sampled from the Zone, where
+    // no 1.0 grade route does; the car, held to its grip, is refused.
+    fn a_foot_click_falls_back_to_any_slope() {
+        use bevy::ecs::system::SystemState;
+        let terrain = Terrain::new();
+        let mut world = World::new();
+        let car = world.spawn_empty().id();
+        let mut state = SystemState::<(Solids, Query<(), With<Carrier>>)>::new(&mut world);
+        let (solids, carriers) = state.get(&world).expect("valid queries");
+        let trips = [
+            (Vec2::new(-797.0, -550.0), Vec2::new(-837.0, -662.0)),
+            (Vec2::new(-660.0, 434.0), Vec2::new(-547.0, 427.0)),
+        ];
+        for (from, to) in trips {
+            assert!(
+                find_path(&terrain, [], from, to, ON_FOOT).is_none(),
+                "a graded route joins {from} and {to}"
+            );
+            let path = route(&terrain, (&solids, &carriers), None, from, to)
+                .unwrap_or_else(|| panic!("no foot route from {from} to {to}"));
+            assert_eq!(path.last(), Some(&to));
+            assert!(
+                route(&terrain, (&solids, &carriers), Some(car), from, to).is_none(),
+                "the car is routed from {from} to {to}"
+            );
+        }
+    }
+
+    #[test]
     fn clicks_land_on_the_rendered_ground_and_skip_the_sky() {
         let terrain = Terrain::new();
         let ground = Vec2::new(40.0, -40.0);
@@ -816,17 +864,35 @@ mod tests {
     }
 
     #[test]
-    fn a_mover_backing_off_passes_no_waypoint() {
+    fn a_mover_reversing_away_passes_no_waypoint() {
+        let mut order = MoveOrder::default();
+        let (corner, target) = (Vec2::new(4.0, 0.0), Vec2::new(4.0, 20.0));
+        order.give(vec![corner, target], Vec2::ZERO, false, VEHICLE_ARRIVAL);
+        order.track_progress(
+            Vec2::ZERO,
+            0.0,
+            0.2,
+            STALL_SECONDS + 0.1,
+            Turning::Reversing,
+        );
+        assert!(order.backing_off());
+        // Within the corner's reach, yet still headed for it.
+        let at = Vec2::new(1.5, 0.0);
+        assert_eq!(order.steer(at), Some(Vec2::X));
+        order.track_progress(at, 6.0, 0.2, BACKOFF_SECONDS + 0.1, Turning::Reversing);
+        assert!(!order.backing_off());
+        assert_eq!(order.steer(at), Some((target - at).normalize()));
+    }
+
+    #[test]
+    fn a_walking_mover_backing_off_passes_the_waypoint_beside_it() {
         let mut order = MoveOrder::default();
         let (corner, target) = (Vec2::new(2.0, 0.0), Vec2::new(2.0, 10.0));
         order.give(vec![corner, target], Vec2::ZERO, false, STALKER_ARRIVAL);
         order.track_progress(Vec2::ZERO, 0.0, 0.2, STALL_SECONDS + 0.1, Turning::InPlace);
         assert!(order.backing_off());
-        // Within the corner's reach, yet still headed for it.
+        // Within the corner's reach: the stalker takes it and walks on.
         let at = Vec2::new(1.7, 0.0);
-        assert_eq!(order.steer(at), Some(Vec2::X));
-        order.track_progress(at, 6.0, 0.2, BACKOFF_SECONDS + 0.1, Turning::InPlace);
-        assert!(!order.backing_off());
         assert_eq!(order.steer(at), Some((target - at).normalize()));
     }
 
