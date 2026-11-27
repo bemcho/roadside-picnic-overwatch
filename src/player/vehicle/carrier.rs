@@ -33,6 +33,7 @@ use crate::world::{
 use super::super::Player;
 use super::super::camera::OrbitCamera;
 use super::super::orders::{MoveOrder, Turning};
+use super::super::path::Mobility;
 use super::carrier_track::{TRACK_LINKS, TRACK_LOOPS, TRACK_WRAP, TRACK_X};
 use super::patrol::{Patrol, in_the_way};
 use super::track_loop::{TrackLoop, link_pose};
@@ -99,6 +100,10 @@ const DRIVEN_REVERSE: f32 = 3.0;
 const DRIVEN_ACCELERATION: f32 = 3.0;
 const DRIVEN_BRAKING: f32 = 8.0;
 const DRIVEN_TURN: f32 = 0.6;
+/// Its speed through a bend on a click order: at its 0.6 rad/s turn rate it
+/// turns an 8.3 m circle at 5 m/s (the crater road's bends are 9.5-15 m), at
+/// its 10 m/s top speed 16.7 m.
+const BEND_SPEED: f32 = 5.0;
 /// Off road: the deepest water it fords (m), the steepest grade its tracks
 /// climb (45°), and the tallest rock or log they ride over (m). A solid may
 /// reach `BELLY` above its tracks' line under the hull; anything taller
@@ -108,14 +113,17 @@ const MAX_CLIMB: f32 = 1.0;
 const ROCK_STEP: f32 = 1.0;
 const BELLY: f32 = 0.5;
 /// How click orders route it: clear of solids by its hull's half-width (1.8 m)
-/// and a margin for its 7 m length, through the water it fords, and over what
-/// it knocks down.
-pub(in crate::player) const CARRIER_ROUTING: (Body, f32, Crusher) = (
-    Body {
-        radius: 2.3,
-        height: HULL_HEIGHT,
+/// and a margin for its 7 m length, through the water it fords, on ground no
+/// steeper than it climbs, and over what it knocks down.
+pub(in crate::player) const CARRIER_ROUTING: (Mobility, Crusher) = (
+    Mobility {
+        body: Body {
+            radius: 2.3,
+            height: HULL_HEIGHT,
+        },
+        max_depth: FORD,
+        max_grade: MAX_CLIMB,
     },
-    FORD,
     BODY,
 );
 /// How much of its speed water as deep as `FORD`, and a climb as steep as
@@ -923,7 +931,7 @@ pub(crate) fn steer_carrier(
     if keys.any_pressed(DRIVE_KEYS) {
         order.cancel();
     }
-    let autopilot = autopilot(&mut order, &pose, carrier.speed);
+    let autopilot = autopilot(&mut order, &pose, carrier.speed, BEND_SPEED);
     let input = autopilot.unwrap_or_else(|| key_input(&keys));
     let from = carrier.at();
     let footings = footings(from, &terrain, other_colliders(&colliders, entity, BODY));

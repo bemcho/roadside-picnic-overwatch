@@ -1,4 +1,5 @@
-//! Grid A* around solid pillars and deep water for point-and-click orders.
+//! Grid A* around solid pillars, deep water and ground too steep to climb for
+//! point-and-click orders.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -16,6 +17,15 @@ const MARGIN: f32 = 28.0;
 const WIDE_MARGIN: f32 = 3.0 * MARGIN;
 /// Upper bound on searched cells, keeping a click well under a frame.
 const MAX_CELLS: usize = 260_000;
+
+/// What a mover can get through: its footprint, the deepest water it wades or
+/// fords, and the steepest ground it climbs or descends (rise over run).
+#[derive(Clone, Copy)]
+pub(in crate::player) struct Mobility {
+    pub(in crate::player) body: Body,
+    pub(in crate::player) max_depth: f32,
+    pub(in crate::player) max_grade: f32,
+}
 
 /// An upright obstacle footprint in world space, already grown by the body radius.
 struct Obstacle {
@@ -61,7 +71,9 @@ impl Grid {
 }
 
 /// Waypoints from `from` to `to` (excluding the start), or `None` if unreachable.
-/// The search keeps to the trip's box and `MARGIN` around it; should no way
+/// The whole footprint keeps to rendered ground no steeper than
+/// `mobility.max_grade`, so into a pit the route takes the road graded down
+/// its walls. The search keeps to the trip's box and `MARGIN` around it; should no way
 /// lie in there, it searches once more within `WIDE_MARGIN`, for a road that
 /// winds out of the trip's box, as the crater's spiral does.
 pub(super) fn find_path<'a>(
@@ -69,13 +81,12 @@ pub(super) fn find_path<'a>(
     colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
     from: Vec2,
     to: Vec2,
-    body: Body,
-    max_depth: f32,
+    mobility: Mobility,
 ) -> Option<Vec<Vec2>> {
     let colliders: Vec<_> = colliders.into_iter().collect();
     [MARGIN, WIDE_MARGIN].into_iter().find_map(|margin| {
         let colliders = colliders.iter().copied();
-        find_path_within(terrain, colliders, from, to, body, max_depth, margin)
+        find_path_within(terrain, colliders, from, to, mobility, margin)
     })
 }
 
@@ -84,8 +95,7 @@ fn find_path_within<'a>(
     colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
     from: Vec2,
     to: Vec2,
-    body: Body,
-    max_depth: f32,
+    mobility: Mobility,
     margin: f32,
 ) -> Option<Vec<Vec2>> {
     let low = from.min(to) - margin;
@@ -93,14 +103,14 @@ fn find_path_within<'a>(
     let area = (high - low).x * (high - low).y;
     let cell = CELL.max((area / MAX_CELLS as f32).sqrt());
     let size = ((high - low) / cell).ceil().as_uvec2().max(UVec2::ONE);
-    let obstacles = obstacles(terrain, colliders, low, high, body);
+    let obstacles = obstacles(terrain, colliders, low, high, mobility.body);
     let mut grid = Grid {
         origin: low,
         cell,
         size,
         blocked: vec![false; (size.x * size.y) as usize],
     };
-    rasterize(&mut grid, terrain, &obstacles, max_depth);
+    rasterize(&mut grid, terrain, &obstacles, mobility);
 
     // A mover pressed into a solid (or climbing it, after it stalled there)
     // sets off from the nearest free spot, as an order ends at one.
@@ -164,35 +174,58 @@ fn ground_around(terrain: &Terrain, center: Vec2, radius: f32, foot: f32) -> (f3
         .fold((foot, foot), |(low, high), y| (low.min(y), high.max(y)))
 }
 
-fn rasterize(grid: &mut Grid, terrain: &Terrain, obstacles: &[Obstacle], max_depth: f32) {
+/// Blocks the cells in reach of an obstacle, under deep water, or where the
+/// body would stand partly on rendered ground too steep for it.
+fn rasterize(grid: &mut Grid, terrain: &Terrain, obstacles: &[Obstacle], mobility: Mobility) {
+    let ground = terrain.mesh_patch(grid.origin, grid.center(grid.size.as_ivec2()));
+    for i in 0..grid.blocked.len() {
+        let at = grid.center(grid.cell_of(i));
+        grid.blocked[i] = ground.grade_at(at) > mobility.max_grade
+            || terrain.water_depth_at(at.x, at.y) > mobility.max_depth;
+    }
     // Grow by half a cell diagonal so every point of a free cell stays clear.
     let grow = grid.cell * std::f32::consts::FRAC_1_SQRT_2;
     for obstacle in obstacles {
         let reach = obstacle.reach + grow;
-        let low = grid.cell_at(obstacle.center - reach);
-        let high = grid.cell_at(obstacle.center + reach);
-        for y in low.y..=high.y {
-            for x in low.x..=high.x {
-                let cell = IVec2::new(x, y);
-                if let Some(i) = grid.index(cell)
-                    && grid.center(cell).distance(obstacle.center) < reach
-                {
-                    grid.blocked[i] = true;
-                }
-            }
-        }
+        block_near(
+            grid,
+            obstacle.center - reach,
+            obstacle.center + reach,
+            |at| at.distance(obstacle.center) < reach,
+        );
     }
-    for y in 0..grid.size.y as i32 {
-        for x in 0..grid.size.x as i32 {
+    // Steep ground is measured exactly, from its triangles: growing it too
+    // would close a road cut only a little wider than a vehicle (the crater's
+    // deep laps leave 6.1 m of passable ground for the carrier's 4.6 m).
+    let reach = mobility.body.radius;
+    for rim in ground.steep_rims(mobility.max_grade) {
+        let (low, high) = rim.iter().fold((rim[0], rim[0]), |(low, high), &corner| {
+            (low.min(corner), high.max(corner))
+        });
+        block_near(grid, low - reach, high + reach, |at| {
+            (0..3).any(|i| distance_to_segment(at, rim[i], rim[(i + 1) % 3]) < reach)
+        });
+    }
+}
+
+/// Blocks every cell between `low` and `high` whose centre is `near`.
+fn block_near(grid: &mut Grid, low: Vec2, high: Vec2, near: impl Fn(Vec2) -> bool) {
+    let (low, high) = (grid.cell_at(low), grid.cell_at(high));
+    for y in low.y..=high.y {
+        for x in low.x..=high.x {
             let cell = IVec2::new(x, y);
-            let at = grid.center(cell);
             if let Some(i) = grid.index(cell)
-                && terrain.water_depth_at(at.x, at.y) > max_depth
+                && near(grid.center(cell))
             {
                 grid.blocked[i] = true;
             }
         }
     }
+}
+
+fn distance_to_segment(at: Vec2, a: Vec2, b: Vec2) -> f32 {
+    let t = ((at - a).dot(b - a) / (b - a).length_squared()).clamp(0.0, 1.0);
+    at.distance(a.lerp(b, t))
 }
 
 /// The free cell closest to `cell`, searching outward ring by ring.
@@ -349,11 +382,16 @@ mod tests {
         let from = center - Vec2::Y * 5.0;
         let to = center + Vec2::Y * 5.0;
 
-        let open = find_path(&terrain, [], from, to, body, 1.0).expect("open path");
+        let mobility = Mobility {
+            body,
+            max_depth: 1.0,
+            max_grade: 1.0,
+        };
+        let open = find_path(&terrain, [], from, to, mobility).expect("open path");
         assert_eq!(open, vec![to], "an open field needs no detour");
 
         let collider = Collider(WALL);
-        let path = find_path(&terrain, [(&collider, &wall)], from, to, body, 1.0).expect("detour");
+        let path = find_path(&terrain, [(&collider, &wall)], from, to, mobility).expect("detour");
         assert_eq!(path.last(), Some(&to));
         assert!(path.len() >= 2, "the walk bends around the wall: {path:?}");
         let mut previous = from;
@@ -375,8 +413,7 @@ mod tests {
     }
 
     #[test]
-    // The A* router is slope-blind and may take the front wall rather than the
-    // ramp; this only proves the pit floor is reachable.
+    // Down the ramp, not the pit's front wall.
     fn a_click_order_reaches_the_pit_floor() {
         let terrain = Terrain::new();
         let (pose, _) = cut_scan(CutScan::Quarry);
@@ -385,7 +422,12 @@ mod tests {
         let ramp = &quarry_ramp()[1..];
         let (entrance, pit) = (ramp[0], ramp[ramp.len() - 1]);
 
-        let path = find_path(&terrain, [(&collider, &scan)], entrance, pit, STANDING, 1.0)
+        let on_foot = Mobility {
+            body: STANDING,
+            max_depth: 1.0,
+            max_grade: 1.0,
+        };
+        let path = find_path(&terrain, [(&collider, &scan)], entrance, pit, on_foot)
             .expect("a route down the ramp");
         let route = length(&[&[entrance], path.as_slice()].concat());
         let limit = length(ramp) * 1.6;

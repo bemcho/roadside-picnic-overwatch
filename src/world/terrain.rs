@@ -183,6 +183,26 @@ impl Terrain {
         wetlands.depth(h).max(0.0)
     }
 
+    /// The detail mesh's vertices over `low..high`, each sampled once, for
+    /// many queries of the rendered ground's slope in there (a click order's
+    /// search). The playable map lies wholly on the detail tiles.
+    pub(crate) fn mesh_patch(&self, low: Vec2, high: Vec2) -> MeshPatch {
+        let origin = (low / SPACING).floor().as_ivec2();
+        let size = (high / SPACING).floor().as_ivec2() + 2 - origin;
+        let heights = (0..size.y)
+            .flat_map(|z| (0..size.x).map(move |x| origin + IVec2::new(x, z)))
+            .map(|vertex| {
+                let at = vertex.as_vec2() * SPACING;
+                self.vertex_height(at, self.height_at(at.x, at.y))
+            })
+            .collect();
+        MeshPatch {
+            origin,
+            size,
+            heights,
+        }
+    }
+
     pub(crate) fn can_wade(&self, from: Vec2, to: Vec2, limit: f32) -> bool {
         let depth = self.water_depth_at(to.x, to.y);
         depth <= limit || depth < self.water_depth_at(from.x, from.y)
@@ -381,6 +401,76 @@ pub(super) struct WaterVertex {
     pub depth: f32,
     pub marsh: f32,
     pub flow: Vec2,
+}
+
+/// The rendered detail mesh's vertex heights over a box (`Terrain::mesh_patch`).
+pub(crate) struct MeshPatch {
+    origin: IVec2,
+    size: IVec2,
+    heights: Vec<f32>,
+}
+
+impl MeshPatch {
+    /// The slope (rise over run) of the rendered triangle under `at`, which
+    /// lies inside the patch's box.
+    pub(crate) fn grade_at(&self, at: Vec2) -> f32 {
+        let grid = at / SPACING - self.origin.as_vec2();
+        let square = grid.floor().as_ivec2().clamp(IVec2::ZERO, self.size - 2);
+        let uv = grid - square.as_vec2();
+        self.grade(square, uv.x + uv.y > 1.0)
+    }
+
+    /// The rendered triangles steeper than `max_grade` that share an edge
+    /// with a gentler one, by their corners: the rims of the ground too steep
+    /// for a mover, so that every point within some reach of steep ground is
+    /// within that reach of a rim.
+    pub(crate) fn steep_rims(&self, max_grade: f32) -> Vec<[Vec2; 3]> {
+        let squares = self.size - 1;
+        let inside = |square: IVec2| square.cmpge(IVec2::ZERO).all() && square.cmplt(squares).all();
+        let gentle =
+            |square: IVec2, upper| inside(square) && self.grade(square, upper) <= max_grade;
+        let mut rims = Vec::new();
+        for z in 0..squares.y {
+            for x in 0..squares.x {
+                let square = IVec2::new(x, z);
+                let corner =
+                    |dx, dz| (self.origin + square + IVec2::new(dx, dz)).as_vec2() * SPACING;
+                // A lower triangle borders the upper ones of its own, the
+                // previous and the lower square; an upper one the lower ones
+                // of its own, the next and the upper square.
+                if !gentle(square, false)
+                    && (gentle(square, true)
+                        || gentle(square - IVec2::X, true)
+                        || gentle(square - IVec2::Y, true))
+                {
+                    rims.push([corner(0, 0), corner(1, 0), corner(0, 1)]);
+                }
+                if !gentle(square, true)
+                    && (gentle(square, false)
+                        || gentle(square + IVec2::X, false)
+                        || gentle(square + IVec2::Y, false))
+                {
+                    rims.push([corner(1, 1), corner(0, 1), corner(1, 0)]);
+                }
+            }
+        }
+        rims
+    }
+
+    /// The slope of one of a lattice square's two triangles (as in
+    /// `interpolated_height`): the lower one at its corner (0, 0), or the upper.
+    fn grade(&self, square: IVec2, upper: bool) -> f32 {
+        let height = |dx: i32, dz: i32| {
+            let vertex = square + IVec2::new(dx, dz);
+            self.heights[(vertex.y * self.size.x + vertex.x) as usize]
+        };
+        let rise = if upper {
+            Vec2::new(height(1, 1) - height(0, 1), height(1, 1) - height(1, 0))
+        } else {
+            Vec2::new(height(1, 0) - height(0, 0), height(0, 1) - height(0, 0))
+        };
+        rise.length() / SPACING
+    }
 }
 
 // Intermediate land and water vertices share the straight segments of the coarser tile.
@@ -859,6 +949,35 @@ mod tests {
             excess <= 0.0,
             "grade over its limit of {limit} by {excess} at {at}"
         );
+    }
+
+    #[test]
+    fn a_mesh_patch_holds_the_rendered_slope() {
+        // Over the crater's walls and road, across the 128 m tile edge at
+        // z = 128 where the mesh is stitched to the coarser tile.
+        let terrain = Terrain::new();
+        let (low, high) = (Vec2::new(-1290.0, 90.0), Vec2::new(-1230.0, 140.0));
+        let patch = terrain.mesh_patch(low, high);
+        let mut steep = 0;
+        for z in 0..50 {
+            for x in 0..60 {
+                // Inside a triangle, off its edges.
+                let at = Vec2::new(low.x + x as f32 + 0.3, low.y + z as f32 + 0.6);
+                let e = 0.02;
+                let slope = |axis: Vec2| {
+                    (terrain.mesh_height_at(at + axis * e) - terrain.mesh_height_at(at - axis * e))
+                        / (2.0 * e)
+                };
+                let rendered = Vec2::new(slope(Vec2::X), slope(Vec2::Y)).length();
+                let grade = patch.grade_at(at);
+                assert!(
+                    (grade - rendered).abs() < 0.02 * rendered.max(1.0),
+                    "{grade} against the mesh's {rendered} at {at}"
+                );
+                steep += (grade > 1.0) as usize;
+            }
+        }
+        assert!(steep > 100, "the box holds the crater's walls ({steep})");
     }
 
     #[test]

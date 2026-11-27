@@ -55,7 +55,7 @@ const ENTRY_REACH: f32 = 1.65;
 /// How far beside a seat the stalker is put when saved while driving.
 const STEP_OUT: f32 = 2.0;
 pub(super) const FORD_DEPTH: f32 = 0.60;
-const MAX_GRIP_GRADE: f32 = 0.66;
+pub(super) const MAX_GRIP_GRADE: f32 = 0.66;
 const CONTACT_SNAP: f32 = 0.014;
 const FORWARD: Vec3 = Vec3::Z;
 #[allow(clippy::approx_constant, reason = "Measured model coordinates")]
@@ -499,7 +499,7 @@ pub(crate) fn drive_vehicle(
         }
         let autopilot = order
             .as_mut()
-            .and_then(|order| autopilot(order, &at, vehicle.speed));
+            .and_then(|order| autopilot(order, &at, vehicle.speed, CAR_BEND_SPEED));
         let input = autopilot.unwrap_or(if occupied {
             key_input(&keys)
         } else {
@@ -558,13 +558,31 @@ const AUTOPILOT_MIN_SPEED: f32 = 3.0;
 /// Throttle the autopilot backs away from an obstacle with: full, so the car
 /// clears its back-off distance in about two seconds.
 const AUTOPILOT_REVERSE: f32 = 1.0;
-/// Deceleration assumed when planning the stop at the target, in m/s².
+/// Deceleration assumed when planning the stop at the target, or the slowdown
+/// for a bend, in m/s².
 const AUTOPILOT_BRAKING: f32 = 8.0;
+/// Turns adding up to this much (20°) within [`BEND_SPAN`] of the route make a
+/// bend the autopilot slows for.
+const BEND_TURN: f32 = 0.35;
+/// The length of route over which a bend's turns add up, in meters.
+const BEND_SPAN: f32 = 8.0;
+/// How far before a waypoint a vehicle turns onto the next leg: about where
+/// [`MoveOrder::steer`] passes it (5.1 m for a vehicle).
+const BEND_LEAD: f32 = 5.0;
+/// The car's speed through a bend: at 8 m/s it turns an 8.7 m circle (the
+/// crater road's bends are 9.5-15 m), at its 24 m/s top speed 24 m.
+const CAR_BEND_SPEED: f32 = 8.0;
 
 /// Steers toward the next waypoint of a point-and-click order, easing off for
-/// sharp turns and braking in time to stop at the target. After a stall it
-/// first backs away, swinging the nose toward the new leg.
-fn autopilot(order: &mut MoveOrder, at: &Transform, speed: f32) -> Option<DriveInput> {
+/// sharp turns, slowing to `bend_speed` for the route's bends and braking in
+/// time to stop at the target. After a stall it first backs away, swinging
+/// the nose toward the new leg.
+fn autopilot(
+    order: &mut MoveOrder,
+    at: &Transform,
+    speed: f32,
+    bend_speed: f32,
+) -> Option<DriveInput> {
     let position = at.translation.xz();
     let toward = order.steer(position)?;
     let forward = (contact::heading(at.rotation) * FORWARD)
@@ -581,7 +599,8 @@ fn autopilot(order: &mut MoveOrder, at: &Transform, speed: f32) -> Option<DriveI
     }
     let remaining = order.remaining(position);
     let stopping = speed * speed / (2.0 * AUTOPILOT_BRAKING);
-    let brake = remaining < stopping + 1.0;
+    let bend = bend_limit(position, order.waypoints(), bend_speed);
+    let brake = remaining < stopping + 1.0 || speed.abs() > bend;
     let corner = if angle.abs() > 1.2 { 0.45 } else { 1.0 };
     Some(DriveInput {
         throttle: if brake {
@@ -592,6 +611,38 @@ fn autopilot(order: &mut MoveOrder, at: &Transform, speed: f32) -> Option<DriveI
         steering: (angle * 2.2).clamp(-1.0, 1.0),
         brake,
     })
+}
+
+/// The fastest a vehicle at `at` may go along `path` and still slow, at
+/// [`AUTOPILOT_BRAKING`], to `bend_speed` by each bend ahead.
+fn bend_limit(at: Vec2, path: &[Vec2], bend_speed: f32) -> f32 {
+    // How far along the route each waypoint lies, and how sharply it turns.
+    let mut turns = Vec::with_capacity(path.len());
+    let (mut along, mut previous) = (0.0, at);
+    for (i, &corner) in path.iter().enumerate() {
+        along += previous.distance(corner);
+        if let Some(&next) = path.get(i + 1) {
+            let (into, out) = (
+                (corner - previous).normalize_or_zero(),
+                (next - corner).normalize_or_zero(),
+            );
+            turns.push((along, into.perp_dot(out).atan2(into.dot(out)).abs()));
+        }
+        previous = corner;
+    }
+    let mut limit = f32::INFINITY;
+    for (i, &(start, _)) in turns.iter().enumerate() {
+        let turn: f32 = turns[i..]
+            .iter()
+            .take_while(|(along, _)| along - start < BEND_SPAN)
+            .map(|(_, turn)| turn)
+            .sum();
+        if turn > BEND_TURN {
+            let room = (start - BEND_LEAD).max(0.0);
+            limit = limit.min((bend_speed * bend_speed + 2.0 * AUTOPILOT_BRAKING * room).sqrt());
+        }
+    }
+    limit
 }
 
 fn drive_step(

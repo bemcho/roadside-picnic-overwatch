@@ -33,12 +33,25 @@ visible lists after Bevy's own culling, so it costs no draws or shadow passes.
 V lifts the shroud for testing. M opens the Harmont map (`ui/map.rs`):
 `doc/Roadside_map.jpg` (as `textures/ui/roadside_map.png`) with the stalker's
 marker, opaque near-black smoke over unsurveyed cells and a few birds wheeling over it.
-Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars
-and deep water (`player/path.rs`); the vehicle follows them with an autopilot
-in `drive_vehicle`. Each mover is routed by its own size: the stalker, the car
-(1.7 m clear of solids, water to 0.6 m) and the wider Institute carrier
-(`CARRIER_ROUTING`: 2.3 m clear, water to 1.5 m, over what it knocks down), so
-the carrier is never sent through a gap only the car fits. The search keeps to
+Point-and-click orders (`player/orders.rs`) use grid A* over collider pillars,
+deep water and ground too steep (`player/path.rs`); the vehicle follows them with an autopilot
+in `drive_vehicle`. Each mover is routed by its own `Mobility`: the stalker (water
+to 1.05 m, ground to 45°, a 1.0 grade: `move_player` lets them walk up anything,
+so this is the routing's own limit), the car (1.7 m clear of solids, water to
+0.6 m, ground to its tire grip, `MAX_GRIP_GRADE` 0.66) and the wider Institute
+carrier (`CARRIER_ROUTING`: 2.3 m clear, water to 1.5 m, ground to the 1.0 grade
+its tracks climb, `MAX_CLIMB`, over what it knocks down), so the carrier is never
+sent through a gap only the car fits. The grade holds both ways (past grip the car
+slides down, and a route down a wall is no route back), and for the whole body:
+a cell is blocked where the rendered triangle under its centre is steeper than
+the mover goes, or where the body's radius reaches such a triangle (measured
+exactly from the rims of steep ground, not grown by the half-cell slack pillars
+get, which would close the crater's deepest laps to the carrier). So into a pit
+orders take the road graded down its walls. The slope comes from the 2 m detail
+mesh's vertices, sampled once a search (`Terrain::mesh_patch`, about one land
+sample per 16 cells): the movers stand on that mesh, and `height_at` between its
+vertices misses where a triangle spans a bank's foot (4 m higher than `height_at`
+4.3 m off the crater road's centreline). The search keeps to
 the trip's box and 28 m around it (0.5 m cells, coarser past 260k cells); when
 no way lies in there it searches once more 84 m around it, for a road that winds
 out of the box (the crater's spiral). A pillar blocks if `push_out` would stop
@@ -55,12 +68,18 @@ the mover stands each time a stop is reached, and when the mover stalls (no
 progress for 0.8 s). After a stall the mover backs away 6 m first (stopping
 sooner if it backs into something, and after 4 s at most): the car reverses at
 full throttle, swinging its nose toward the new leg, since it cannot turn in
-place against a rock. The attempts share 18 m of back-off travel: three full
+place against a rock. Backing away it passes no waypoint (`MoveOrder::steer`), so
+a new leg that turns off right beside the obstacle keeps its turn rather than
+heading straight back into it. The attempts share 18 m of back-off travel: three full
 6 m ones, or, as a car's heading turns with the distance it travels (about
 0.19 rad a meter at full lock), proportionally more shorter ones where less room
 is left behind it: 18 with 1 m, at most 60 (each charged at least 0.3 m). The
 stalker turns on the spot, so each of their attempts costs the full 6 m. A
-stall with the travel spent drops the order. The stop
+stall with the travel spent drops the order. The autopilot also brakes, at the
+8 m/s² it plans its stop at the target with, to a bend speed before each bend in
+the route (turns adding up to 20° within 8 m of path; `bend_limit`): 8 m/s for
+the car, which turns an 8.7 m circle there and no tighter than 24 m at its top
+speed, and 5 m/s for the carrier (8.3 m at its 0.6 rad/s). The stop
 rings pulse (1.4 s, swelling 25%). A thin line (`player/route.rs`: a gizmo group 2 px wide with a
 small depth bias, in the rings' colour) traces the exact route from the stalker, or
 the car they drive, through every pathfound waypoint still ahead to the last ring:
@@ -68,8 +87,7 @@ points every 2 m (at most 64 steps a leg) laid on the ground, or on the water wh
 the stalker wades. It shrinks as waypoints are reached and goes with the order (WASD,
 arrival, a stall, boarding or leaving the car). The draped line through the waypoints
 is rebuilt only when they change; only the leg to the next one is laid each frame.
-The router is slope-blind: it weighs no grade, so an order crosses a downhill wall
-as readily as a road (see **Quarry ramp**). Routes pass through the yard gate's boom, and a car
+Routes pass through the yard gate's boom, and a car
 with an `InstitutePass` through the Institute gate's; each lifts as it arrives. A yellow ring (`ui/locator.rs`) lies on the ground around
 the stalker, or the car they drive, at every zoom: its vertices follow the
 rendered terrain (or the water when wading), it never shrinks under 34 px wide,
@@ -480,11 +498,11 @@ the stalker stands still.
     without a block, a sinking or a lift off the mesh; a car at full throttle
     (23-25 m/s) stays on the ground over the crest (0.02-0.07 m above the mesh
     from the junction to 23 m past the entrance; it left the road only at the
-    first bend, driven straight on). Orders go down the front wall, not the
-    ramp: a click from the rim at the entrance to the floor is a 96 m route
-    straight down the pit's face, which both the stalker (25 s) and the car
-    (27 s) descend, against about 255 m by the ramp from the same spot (its
-    251 m from the entrance to the floor, plus the 4 m to the entrance).
+    first bend, driven straight on). Orders take the ramp, not the pit's front
+    wall (`a_click_order_reaches_the_pit_floor`). The ramp's north loop runs out of
+    the trip's box and 28 m for a vehicle's width, so the car's and the carrier's
+    orders from the entrance to the floor take the wider search (0.23-0.29 s a
+    click, against 0.06 s for the stalker).
   - *Golden Sphere's crater* (`sites::crater_ramp()`, `sites::cut_scan(CutScan::Core)`, `roads.rs`;
     generated `world/pillars/golden_crater_ramp.rs`): the only road to the Golden
     Sphere, a second `Surface::Ramp` track that runs on from the end of the quarry's
@@ -544,9 +562,8 @@ the stalker stands still.
       (only those inside the corridor are dropped) and open the scan's hollow
       shell behind its face. On the floor the cut's edge on the Sphere's wall
       follows the ground in a smooth curve beside the road's end. Click orders reach the crater's
-      floor through both scans' cleared collision (`click_orders_reach_the_crater_floor`;
-      the slope-blind router crosses from lap to lap down the walls rather than follow
-      the 799 m of road; see *Driving and orders*).
+      floor through both scans' cleared collision along the 799 m of road
+      (`click_orders_reach_the_crater_floor`; see *Driving and orders*).
     - *Checks:* `the_crater_ramp_starts_at_the_quarry_ramps_end`,
       `the_crater_ramp_ends_beside_the_sphere` (ground below -95 m, 5.1 to 15 m from the
       Sphere's centre, not under the bed), `the_crater_ramp_laps_keep_apart` (18 m),
@@ -569,22 +586,31 @@ the stalker stands still.
       The bends are 11-15 m (11.4 m on the lowest laps), tighter than the 16.7 m the
       carrier turns at its 10 m/s top speed: driven flat out, it climbs the lowest
       laps' banks and stalls there once; it holds them below 6.8 m/s (driven at 4.5).
-      Click orders do not follow the road, but reach the floor for the stalker and
-      the carrier from either junction (`click_orders_reach_the_crater_floor` checks
-      all three movers through `route` from both junctions, the road in from the
-      hangar and the rim). The trip's box with 28 m around it leaves out the
-      spiral's outer laps, so these orders take the wider second search (84 m):
-      a click costs 0.26 s from the Golden Sphere's junction and 0.48 s from the
-      Quarry rim's (release build, both scans streamed in). At the Quarry rim's
-      junction the core has not streamed in yet: the stalker runs straight down the
-      Quarry rim's wall (up to a 1.4 grade), stalls climbing the core's stone on the
-      rim at (-1172, 99) and is routed again from there, down the crater's walls
-      (87 s in all; 29 s from the Golden Sphere's junction); the carrier takes 64 s
-      and 26 s. The car does not arrive: the slope-blind route sends it down the
-      walls, flying at up to 24 m/s, to banks steeper than it grips (0.66; a 1.64
-      grade at (-1192, 30) from the Golden Sphere's junction, a pocket at (-1213,
-      24) from the Quarry rim's), and the order is dropped once its back-offs are
-      spent. On the main thread the crater costs at most
+      Click orders keep to ground each mover can climb, so the car's and the
+      carrier's follow the spiral road down (the stalker's cut across where the
+      ground is no steeper than 45°), and all three reach the floor from either
+      junction (`click_orders_reach_the_crater_floor` checks all three movers
+      through `route` from both junctions, the road in from the hangar and the rim:
+      clear of the scans' stone and on ground no steeper than each climbs, where
+      slope-blind routes took the walls, up to a 1.64 grade;
+      `a_car_ordered_down_the_crater_road_arrives` drives the car's order). The
+      trip's box with 28 m around it leaves out the spiral's outer laps, so these
+      orders take the wider second search (84 m): a click costs 0.19-0.23 s from
+      the Golden Sphere's junction and 0.43-0.52 s from the Quarry rim's (playtest
+      build, both scans streamed in). By click (release-speed playtest build): the
+      stalker takes 81 s from the Golden Sphere's junction (a 365 m route) and 129 s
+      from the Quarry rim's (582 m, planned before the core streams in); the car
+      32 s (380 m) and 63 s (770 m), on the ground all the way (at most 0.06 m off
+      the mesh, 3.5 m off the centreline at the first bend), slowing for the bends
+      to its 8 m/s bend speed and 24 m/s between them; the carrier 49 s and 88 s at
+      its 5 m/s bend speed, holding the bends, with one stall on the lowest lap
+      at (-1225, 91) from the Quarry rim's junction, where the route's last
+      hairpin brings the hull's corners (3.9 m out) against the bank past the
+      2.3 m it is routed by; one back-off clears it. The floor's click point is too
+      near the Sphere's wall for the carrier, so its route ends at the nearest
+      cell it fits, 2-4 m away. Before the autopilot slowed for bends the car took
+      the first bend at 21 m/s, ran 6 m wide and flew 30 m down to a wall between
+      laps. On the main thread the crater costs at most
       0.7 ms a frame more than the Quarry rim (7.7 against 7.0 ms); the core's cut
       scan reaches the GPU behind the splash, with no hitch in the game.
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town

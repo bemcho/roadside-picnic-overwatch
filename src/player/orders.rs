@@ -12,8 +12,8 @@ use bevy::window::PrimaryWindow;
 use crate::states::AppState;
 use crate::world::{Body, Boom, Collider, InstitutePass, Terrain, Weight, in_zone};
 
-use super::path::find_path;
-use super::vehicle::{CAR, CARRIER_ROUTING, Carrier, Driving, FORD_DEPTH};
+use super::path::{Mobility, find_path};
+use super::vehicle::{CAR, CARRIER_ROUTING, Carrier, Driving, FORD_DEPTH, MAX_GRIP_GRADE};
 use super::{Player, PlayerCamera, STALKER, STANDING};
 
 /// Orders farther than this make the stalker run instead of walk.
@@ -29,6 +29,21 @@ const WADE_DEPTH: f32 = 1.05;
 const VEHICLE_BODY: Body = Body {
     radius: 1.7,
     height: 2.4,
+};
+/// How click orders route the stalker: through water they wade, on ground no
+/// steeper than 45°. `move_player` lets them walk up anything; a steeper wall
+/// is a scramble, not a route.
+const ON_FOOT: Mobility = Mobility {
+    body: STANDING,
+    max_depth: WADE_DEPTH,
+    max_grade: 1.0,
+};
+/// How click orders route the car: through water it fords, on ground no
+/// steeper than its tires grip (it slides down anything steeper).
+const BY_CAR: Mobility = Mobility {
+    body: VEHICLE_BODY,
+    max_depth: FORD_DEPTH,
+    max_grade: MAX_GRIP_GRADE,
 };
 /// An order that makes this little of its intended progress is blocked.
 const STALL_RATIO: f32 = 0.15;
@@ -169,8 +184,10 @@ impl MoveOrder {
             } else {
                 self.arrival * WAYPOINT_SLACK
             };
-            if at.distance(next) > reach {
-                return Some((next - at).normalize());
+            // Backing away from what blocked it, the mover passes no
+            // waypoint: the leg planned there may turn off right beside it.
+            if self.backing_off() || at.distance(next) > reach {
+                return Some((next - at).normalize_or_zero());
             }
             self.waypoints.remove(0);
             if self.stops.first() == Some(&next) {
@@ -388,10 +405,10 @@ fn route(
     from: Vec2,
     to: Vec2,
 ) -> Option<Vec<Vec2>> {
-    let (body, depth, mover) = match vehicle {
+    let (mobility, mover) = match vehicle {
         Some(carrier) if carriers.contains(carrier) => CARRIER_ROUTING,
-        Some(_) => (VEHICLE_BODY, FORD_DEPTH, CAR),
-        None => (STANDING, WADE_DEPTH, STALKER),
+        Some(_) => (BY_CAR, CAR),
+        None => (ON_FOOT, STALKER),
     };
     // The driven vehicle must not block its own route, nor anything lighter,
     // nor a gate's boom that lifts for it (the yard's always does; the
@@ -408,7 +425,7 @@ fn route(
                 && !boom.is_some_and(|boom| boom.opens_for(pass))
         })
         .map(|(_, collider, pose, ..)| (collider, pose));
-    find_path(terrain, obstacles, from, to, body, depth)
+    find_path(terrain, obstacles, from, to, mobility)
 }
 
 /// Shows a pulsing ring at each stop still ahead, spawning more as orders queue up;
@@ -552,17 +569,42 @@ mod tests {
         None
     }
 
+    /// The steepest grade on the rendered ground under a mover of `body`
+    /// walking `path` from `from`, in 1 m steps along its middle and its
+    /// sides, and where.
+    fn steepest_grade(terrain: &Terrain, body: Body, from: Vec2, path: &[Vec2]) -> (f32, Vec2) {
+        let mut steepest = (0.0, from);
+        let mut previous = from;
+        for &point in path {
+            let steps = previous.distance(point).ceil().max(1.0);
+            let step = previous.distance(point) / steps;
+            let across = (point - previous).normalize_or_zero().perp() * body.radius;
+            for side in [-1.0, 0.0, 1.0] {
+                let at = |i: f32| previous.lerp(point, i / steps) + across * side;
+                for i in 1..=steps as usize {
+                    let (a, b) = (at(i as f32 - 1.0), at(i as f32));
+                    let grade =
+                        (terrain.mesh_height_at(b) - terrain.mesh_height_at(a)).abs() / step;
+                    if grade > steepest.0 {
+                        steepest = (grade, b);
+                    }
+                }
+            }
+            previous = point;
+        }
+        steepest
+    }
+
     #[test]
     // Click orders for the stalker, the car and the carrier, through the
     // game's own `route`, to the crater's floor: with both cut scans streamed
     // in, from both junctions and from the road in from the hangar; and as the
     // game gives them at the Quarry rim's junction, where the crater's scan
-    // has not streamed in yet: the order runs into its stone, and is planned
-    // again from there (the stalker stalled on the rim at (-1172.4, 99.3) in
-    // the playtest). The router is slope-blind, so routes may cut from lap to
-    // lap down the crater's walls; this proves the floor is reached clear of
-    // the scans' stone at the height each leg is walked on, not that every
-    // mover can take those walls (the car cannot: banks past its grip stop it).
+    // has not streamed in yet (should the order run into its stone, it is
+    // planned again from there, as `replan_order` does). Each route keeps
+    // clear of the scans' stone at the height each leg is walked on, and to
+    // ground no steeper than its mover climbs: down the crater's spiral road,
+    // not its walls (up to a 1.64 grade).
     fn click_orders_reach_the_crater_floor() {
         use bevy::ecs::system::SystemState;
         let terrain = Terrain::new();
@@ -586,30 +628,47 @@ mod tests {
         let crater = crater_ramp();
         let floor = crater.last().copied().expect("a road");
         let junction = quarry_ramp()[0];
-        let reaches_the_floor = |mover: &str, from: Vec2, vehicle: Option<Entity>, body: Body| {
+        let keeps_to_its_grade = |mover: &str, from: Vec2, path: &[Vec2], mobility: Mobility| {
+            let (grade, at) = steepest_grade(&terrain, mobility.body, from, path);
+            let limit = mobility.max_grade;
+            assert!(
+                grade <= limit,
+                "the {mover}'s route from {from} takes a {grade} grade at {at}, over its {limit}"
+            );
+        };
+        let reaches_the_floor = |mover: &str, from: Vec2, vehicle, mobility: Mobility| {
             let path = route(&terrain, (&solids, &carriers), vehicle, from, floor)
                 .unwrap_or_else(|| panic!("no route for the {mover} from {from}"));
             assert_eq!(path.last(), Some(&floor), "the {mover} from {from}");
-            let contact = first_contact(&terrain, &stone, body, from, &path);
+            let contact = first_contact(&terrain, &stone, mobility.body, from, &path);
             assert!(
                 contact.is_none(),
                 "the {mover}'s route from {from} runs into stone at {contact:?}"
             );
+            keeps_to_its_grade(mover, from, &path, mobility);
         };
         let movers = [
-            ("stalker", None, STANDING),
-            ("car", Some(car), VEHICLE_BODY),
+            ("stalker", None, ON_FOOT),
+            ("car", Some(car), BY_CAR),
             ("carrier", Some(carrier), CARRIER_ROUTING.0),
         ];
-        for (mover, vehicle, body) in movers {
+        for (mover, vehicle, mobility) in movers {
             for from in [crater[1], junction, Vec2::new(-844.8, 156.0)] {
-                reaches_the_floor(mover, from, vehicle, body);
+                reaches_the_floor(mover, from, vehicle, mobility);
             }
             let planned = route(&terrain, (&early.0, &early.1), vehicle, junction, floor)
                 .unwrap_or_else(|| panic!("no route for the {mover} before the crater streams in"));
-            let stalled = first_contact(&terrain, &stone, body, junction, &planned)
-                .unwrap_or_else(|| panic!("the {mover} runs into the crater's stone unplanned"));
-            reaches_the_floor(mover, stalled, vehicle, body);
+            match first_contact(&terrain, &stone, mobility.body, junction, &planned) {
+                Some(stalled) => reaches_the_floor(mover, stalled, vehicle, mobility),
+                None => {
+                    assert_eq!(
+                        planned.last(),
+                        Some(&floor),
+                        "the {mover} plans to the floor"
+                    );
+                    keeps_to_its_grade(mover, junction, &planned, mobility);
+                }
+            }
         }
         // Up on the stone it climbed, the stalker first steps down off it.
         let rim = Vec2::new(-1172.4, 99.3);
@@ -620,6 +679,76 @@ mod tests {
         assert_eq!(
             first_contact(&terrain, &stone, STANDING, path[0], &path[1..]),
             None
+        );
+        keeps_to_its_grade("stalker", path[0], &path[1..], ON_FOOT);
+    }
+
+    #[test]
+    // A click from the Golden Sphere's junction drives the car down the
+    // crater's spiral road to the floor: the autopilot slows for the bends
+    // (9.5-15 m) rather than run off the road's edge at 20 m/s at the first.
+    fn a_car_ordered_down_the_crater_road_arrives() {
+        use std::time::Duration;
+
+        use bevy::ecs::system::SystemState;
+        use bevy::time::TimeUpdateStrategy;
+
+        use super::super::vehicle::{Vehicle, drive_vehicle};
+
+        let terrain = Terrain::new();
+        let mut app = App::new();
+        app.add_plugins(MinimalPlugins)
+            .insert_resource(TimeUpdateStrategy::ManualDuration(Duration::from_millis(
+                50,
+            )))
+            .insert_resource(Terrain::new())
+            .init_resource::<ButtonInput<KeyCode>>()
+            .add_systems(Update, (replan_order, drive_vehicle).chain());
+        for scan in CutScan::ALL {
+            let (pose, _) = cut_scan(scan);
+            app.world_mut()
+                .spawn((Collider(scan.pillars()), pose, GlobalTransform::from(pose)));
+        }
+        let crater = crater_ramp();
+        let (from, floor) = (crater[1], crater[crater.len() - 1]);
+        let heading = crater[2] - from;
+        let car = app
+            .world_mut()
+            .spawn((
+                Vehicle::default(),
+                Transform::from_xyz(from.x, terrain.mesh_height_at(from), from.y)
+                    .with_rotation(Quat::from_rotation_y(heading.x.atan2(heading.y))),
+            ))
+            .id();
+        let mut state = SystemState::<(Solids, Query<(), With<Carrier>>)>::new(app.world_mut());
+        let (solids, carriers) = state.get(app.world()).expect("valid queries");
+        let path = route(&terrain, (&solids, &carriers), Some(car), from, floor)
+            .expect("a route down the crater road");
+        let player = app
+            .world_mut()
+            .spawn((Player::default(), Transform::default(), Driving(car)))
+            .id();
+        app.world_mut()
+            .get_mut::<MoveOrder>(player)
+            .expect("order")
+            .give(path, from, false, VEHICLE_ARRIVAL);
+        for _ in 0..3600 {
+            app.update();
+            if app
+                .world()
+                .get::<MoveOrder>(player)
+                .expect("order")
+                .waypoints()
+                .is_empty()
+            {
+                break;
+            }
+        }
+        let at = app.world().get::<Transform>(car).expect("car").translation;
+        assert!(
+            at.xz().distance(floor) < VEHICLE_ARRIVAL + 2.0,
+            "the car stopped at {at}, {} m from the floor",
+            at.xz().distance(floor)
         );
     }
 
@@ -684,6 +813,21 @@ mod tests {
             order.target().is_none(),
             "an order still blocked after replanning is dropped"
         );
+    }
+
+    #[test]
+    fn a_mover_backing_off_passes_no_waypoint() {
+        let mut order = MoveOrder::default();
+        let (corner, target) = (Vec2::new(2.0, 0.0), Vec2::new(2.0, 10.0));
+        order.give(vec![corner, target], Vec2::ZERO, false, STALKER_ARRIVAL);
+        order.track_progress(Vec2::ZERO, 0.0, 0.2, STALL_SECONDS + 0.1, Turning::InPlace);
+        assert!(order.backing_off());
+        // Within the corner's reach, yet still headed for it.
+        let at = Vec2::new(1.7, 0.0);
+        assert_eq!(order.steer(at), Some(Vec2::X));
+        order.track_progress(at, 6.0, 0.2, BACKOFF_SECONDS + 0.1, Turning::InPlace);
+        assert!(!order.backing_off());
+        assert_eq!(order.steer(at), Some((target - at).normalize()));
     }
 
     #[test]
