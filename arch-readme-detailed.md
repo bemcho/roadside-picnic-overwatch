@@ -773,7 +773,7 @@ flowchart TD
     LT --> FG["distance fog times the low-ground mask"]
 ```
 
-The fragment (`terrain.wesl:524-670`):
+The fragment (`terrain.wesl:524-673`):
 
 1. **Slope.** A facet normal from screen derivatives (`:536-539`) decides
    `steep` (`:540`); the projection normal blends toward the facet by `steep`
@@ -785,7 +785,7 @@ The fragment (`terrain.wesl:524-670`):
    walls do not stretch (`:494`).
 3. **Grass and earth** (`:553-584`) with patch-noise warp, two rotations, a
    parallax slide and a moss-to-stone mix by exposure.
-4. **Roads** (`:587-611`): the world mask at the fragment's xz; old asphalt is
+4. **Roads** (`:587-614`): the world mask at the fragment's xz; old asphalt is
    a stochastic grain, crack decals and a 12-step relief march. In the Zone
    `old_road_wear` (`terrain.wesl:269`) rises from 0 at 20 m inside the
    Perimeter to 1 at 35 m, and `old_road` (`:414`) paints the retired road
@@ -798,11 +798,11 @@ The fragment (`terrain.wesl:524-670`):
    wear lets the kit in, low spots first. Its gaps show the bare ground;
    today's grain modulates it only under 16 mm per pixel. One parallax step
    instead of a march: it looked the same in the playtest for one fetch.
-5. **Climate** (`:612-618`): wetness darkening, alpine tint from 32 to 100 m,
+5. **Climate** (`:615-621`): wetness darkening, alpine tint from 32 to 100 m,
    snow above `112 + noise x 29 + (1 - n.y) x 72`.
-6. **Surface** (`:621-647`): roughness, AO and normals mixed the same way;
+6. **Surface** (`:624-650`): roughness, AO and normals mixed the same way;
    roads flatten the ground normal.
-7. **Fog** (`:649-668`): Bevy's `apply_fog` mixed in by
+7. **Fog** (`:652-671`): Bevy's `apply_fog` mixed in by
    `low_ground = 1 - smoothstep(fog_top - 0.7 x height, fog_top, p.y)`.
    `fog_top`/`fog_height` come from `follow_terrain_fog` (`ground_fog.rs:138-153`),
    written only on a change of 0.25 or more (`terrain_material.rs:148-152`).

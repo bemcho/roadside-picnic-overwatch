@@ -600,9 +600,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     var asphalt: OldAsphalt;
     if road.a > 0.0 {
         let along = -tangent_view.xz / max(facing, 0.32);
-        // In the Zone the kit takes over, and today's crack decals give way to its own cracks.
+        // In the Zone the kit takes over, and today's crack decals give way to its own cracks:
+        // they hold through the first half of the band, while the kit shows only in its low
+        // spots, and are gone (wear about 0.7) by the time its slabs come in from 0.75.
         let wear = old_road_wear(p.xz);
-        asphalt = old_asphalt(p.xz, ground_dx, ground_dy, along, road.a * (1.0 - wear), pixel_size);
+        let decals = road.a * (1.0 - smoothstep(0.5, 0.9, wear));
+        asphalt = old_asphalt(p.xz, ground_dx, ground_dy, along, decals, pixel_size);
         if wear > 0.0 {
             let ground = mix(gravel, bare, 0.5);
             asphalt = old_road(p.xz, ground_dx, ground_dy, along, pixel_size, wear, ground, asphalt);
