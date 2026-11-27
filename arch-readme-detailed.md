@@ -1359,14 +1359,19 @@ The reasons, where the code gives them:
   uniforms and give the stalker and the car a plausible shape and paint: the
   paints are the models' mean linear albedo, measured once with PIL
   (`mirror.rs:20-26`), and the light is the Sun's illuminance and direction plus
-  `SKY` 20% of it (`golden_sphere.wesl:36-37`). A card under 5 GB is the 4 GB laptop
+  `SKY` 20% of it (`golden_sphere.wesl:36-37`), faded out as the Sun sets
+  (`stand_in_light`): the `Sun` keeps its daytime illuminance at night (only its
+  shadows go), and the night's EV 9 would otherwise light the stand-ins brighter
+  than at noon. A card under 5 GB is the 4 GB laptop
   the project targets (section 3), where a view a frame is *(inferred)* too
   much.
 - **The faces are a cube map kept in six images.** `new_target_texture` with
   `Rgba16Float`: the probe renders HDR light, which the player's camera tonemaps
   once, later *(inferred)*. Hence `Tonemapping::None`, `DebandDither::Disabled`,
-  `Msaa::Off`, and `Exposure { ev100: 13.0 }`, "the player's camera's exposure, so
-  the faces' light matches" (`:117`). The cameras have no `Atmosphere` or fog, are
+  `Msaa::Off`, and the player's camera's `Exposure`, copied each frame by
+  `steer_reflection_probe`: the player's exposure follows the clock and the
+  clouds (EV 9 at night to 13 by day, `weather.rs`), and faces baked at a fixed
+  EV 13 would mirror the night up to 16 times too dark. The cameras have no `Atmosphere` or fog, are
   cleared to `Color::NONE`, and so leave alpha 0 where nothing was drawn: the
   shaders mix the faces over the lit surface by that alpha, and the environment
   map's sky stays where the probe saw sky.
@@ -1378,9 +1383,15 @@ The reasons, where the code gives them:
 - **The cameras are cheap to keep and wake on demand.** They exist, inactive
   (`is_active: false`, `order` -10 to -5, so before the main view), and
   `steer_reflection_probe` (`:137`) moves them to the Sphere and
-  `faces_to_render` (`:52`) picks the ones to wake: none with nobody near or on
-  Modest, face `frame % 6` on Strong, all six on Exceptional. A sleeping face
-  keeps its last image. `ClusterConfig::Single` is the comment at `:123-126`:
+  `faces_to_render` picks the ones to wake by the `Watch`: none on Modest or
+  `Unseen` (the player's camera past `SEEN`, 300 m, the Sphere's
+  `detail_range`); while `Close` (the stalker or a vehicle within 15 m) face
+  `frame % 6` on Strong and all six on Exceptional; while `Resting` one face
+  every `RESTING_EVERY` (10) frames on both. A sleeping face keeps its last
+  image, so the resting refresh keeps the cube at most two seconds old: the
+  time of day (and the T time-lapse) and a stalker who walked off never linger
+  in a Sphere seen from afar, and a car parked beside it costs nothing while
+  the player is elsewhere. `ClusterConfig::Single` is the comment at `:123-126`:
   clustering a view at the default grid cost tens of milliseconds of CPU a
   frame, and `None` crashes Bevy 0.20's GPU clustering.
 - **The faces live as long as the run, the cameras as long as the Zone.** The
@@ -1416,9 +1427,11 @@ changes. The scan is centred and 0.98 m across, so the child's scale becomes
 `SOURCE_DIAMETER / UHD_DIAMETER`; the medium model returns when the anchors leave
 40 m or the scan is evicted, and the hold on its GPU copy is dropped with it. The
 file (`GOLDEN_SPHERE_UHD`, 1.97 M triangles, one 8192 px BC7 KTX2 texture, 70 MB,
-138 MB measured on the GPU) is in `UhdFiles`, between the plants and the sites
-(`world/mod.rs:327-330`). That list is built when the plugin is, before the tier
-is known, so every card reads the 70 MB into RAM.
+138 MB measured on the GPU) is listed only on exceptional GPUs, last in
+`UhdFiles` (`list_uhd_sphere`): the list is built with the plugin, before the
+tier is known, so a `Startup` system ordered after `settle_gpu_tier` and before
+`start_ram_fill` appends it. Last, because `prefill_scans` takes the first file
+that fits: the scans every tier shows come first.
 
 **What it costs.** Measured beside the Sphere on the 6 GB RTX 2060 (playtest
 build, Xephyr): Modest 34 FPS, Strong 27 to 28, Exceptional (forced with

@@ -8,6 +8,7 @@ use bevy::render::render_resource::{AsBindGroup, ShaderType};
 use bevy::shader::ShaderRef;
 
 use crate::assets;
+use crate::world::terrain::smoothstep;
 
 pub(super) type MirrorMaterial = ExtendedMaterial<StandardMaterial, Mirror>;
 
@@ -107,6 +108,15 @@ pub(super) struct Hull {
     pub paint: Vec3,
 }
 
+/// The `sun` uniform for the stand-ins: the way to the Sun (`to_sun`) and the
+/// light it gives them. The Sun keeps its illuminance after dark (only its
+/// shadows go), so the light fades with it from just above to just below the
+/// horizon; the stand-ins' sky term is a share of it and fades too.
+pub(super) fn stand_in_light(to_sun: Vec3, illuminance: f32) -> Vec4 {
+    let daylight = smoothstep(-0.05, 0.1, to_sun.y);
+    to_sun.extend(illuminance * daylight)
+}
+
 /// The bodies near enough to the Sphere at `sphere` to show in it: the stalker
 /// as a capsule unless they are driving (the vehicle shows them), and each
 /// hull as a box. The rest of the three slots stay off.
@@ -153,6 +163,21 @@ pub(super) fn stand_ins(sphere: Vec3, stalker: Option<Stalker>, hulls: &[Hull]) 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_stand_ins_go_dark_once_the_sun_sets() {
+        let lux = 130_000.0;
+        let noon = stand_in_light(Vec3::new(0.0, 1.0, -0.3).normalize(), lux);
+        assert_eq!(noon.w, lux, "full sunlight by day");
+        let night = stand_in_light(Vec3::new(0.3, -0.5, 0.0).normalize(), lux);
+        assert_eq!(night.w, 0.0, "the light keeps its illuminance after dark");
+        let dusk = stand_in_light(Vec3::new(1.0, 0.02, 0.0).normalize(), lux);
+        assert!(
+            dusk.w > 0.0 && dusk.w < lux,
+            "fades through dusk: {}",
+            dusk.w
+        );
+    }
 
     const SPHERE: Vec3 = Vec3::new(0.0, 2.25, 0.0);
 

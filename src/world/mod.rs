@@ -326,7 +326,6 @@ pub(crate) fn uhd_files() -> Vec<&'static str> {
     let mut files = Vec::new();
     let all = canopy::uhd_files()
         .chain(plants::uhd_files())
-        .chain([crate::assets::GOLDEN_SPHERE_UHD])
         .chain(sites::uhd_files());
     for path in all {
         if !files.contains(&path) {
@@ -512,12 +511,13 @@ mod tests {
             ]
         );
         // Showcase artifacts keep their preloaded handles until their 4K scans
-        // arrive; the Golden Sphere's UHD scan streams on exceptional GPUs.
-        let artifacts: Vec<_> = files
-            .iter()
-            .filter(|path| path.starts_with("models/artifacts/"))
-            .collect();
-        assert_eq!(artifacts, [&crate::assets::GOLDEN_SPHERE_UHD]);
+        // arrive; the Golden Sphere's UHD scan is listed only on exceptional
+        // GPUs (`golden_sphere::list_uhd_sphere`).
+        assert!(
+            files
+                .iter()
+                .all(|path| !path.starts_with("models/artifacts/"))
+        );
     }
 
     #[test]

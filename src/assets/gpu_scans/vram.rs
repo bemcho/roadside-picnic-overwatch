@@ -2,7 +2,7 @@
 //! scan budget that follows it.
 
 use bevy::prelude::*;
-use bevy::render::renderer::RenderDevice;
+use bevy::render::renderer::{RenderAdapterInfo, RenderDevice};
 
 use crate::launch::{DEFAULT_VRAM_GB, LaunchOptions};
 
@@ -69,10 +69,17 @@ pub fn track_vram_budget(
 pub fn settle_gpu_tier(
     mut tier: ResMut<GpuTier>,
     device: Option<Res<RenderDevice>>,
+    adapter: Option<Res<RenderAdapterInfo>>,
     launch: Res<LaunchOptions>,
 ) {
     let reading = device.and_then(|device| read_vram(&device));
-    tier.settle_with(reading, launch.vram_gb.map(gib), launch.gpu_tier);
+    let integrated = adapter.is_some_and(|adapter| shares_system_memory(&adapter));
+    tier.settle_with(
+        reading,
+        launch.vram_gb.map(gib),
+        launch.gpu_tier,
+        integrated,
+    );
     info!("GPU: effects at the {:?} tier", tier.level());
 }
 
@@ -160,6 +167,33 @@ pub fn read_vram(device: &RenderDevice) -> Option<VramReading> {
 )))]
 pub fn read_vram(_device: &RenderDevice) -> Option<VramReading> {
     None
+}
+
+/// Whether the GPU is integrated (or a CPU renderer): the device-local heap
+/// `read_vram` reports is then the system's RAM, not a card's.
+#[cfg(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd"
+))]
+fn shares_system_memory(adapter: &RenderAdapterInfo) -> bool {
+    use wgpu::DeviceType;
+    matches!(
+        adapter.device_type,
+        DeviceType::IntegratedGpu | DeviceType::Cpu
+    )
+}
+
+/// Without `read_vram` there is no heap reading to mistake for a card's.
+#[cfg(not(any(
+    windows,
+    target_os = "linux",
+    target_os = "android",
+    target_os = "freebsd"
+)))]
+fn shares_system_memory(_adapter: &RenderAdapterInfo) -> bool {
+    false
 }
 
 #[cfg(test)]

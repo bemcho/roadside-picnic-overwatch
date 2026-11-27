@@ -1254,7 +1254,7 @@ Before declaring a visual or gameplay feature complete:
 | Pause still moves content | missing `run_if(in_state(InGamePhase::Running))` on the gameplay system |
 | Shader change did not apply | only file-backed assets hot reload; procedural material rebuild may need restart |
 | A camera-driven system acts on the wrong view, or its `single()` fails | a `Camera3d` query; filter `PlayerCamera` (the Golden Sphere's probe adds six cameras) |
-| The Golden Sphere shows no reflection of the stalker or the car | the `GPU: effects at the ... tier` log line (`--gpu-tier` forces it), `reflect_surroundings` (someone within 15 m), the probe cameras' `is_active`, `SPHERE_LAYER` on the Sphere and not on the probe, `gather_stand_ins` on modest GPUs |
+| The Golden Sphere shows no reflection of the stalker or the car | the `GPU: effects at the ... tier` log line (`--gpu-tier` forces it), `reflect_surroundings` (the player's camera within 300 m; someone within 15 m for every frame), the probe cameras' `is_active`, `SPHERE_LAYER` on the Sphere and not on the probe, `gather_stand_ins` on modest GPUs |
 
 ## Architecture rules to preserve
 

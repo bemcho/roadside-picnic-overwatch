@@ -22,6 +22,7 @@ use bevy::prelude::*;
 pub use streaming::GpuScansPlugin;
 use streaming::ScanHandles;
 pub use tier::{GpuTier, TierLevel};
+pub use vram::settle_gpu_tier;
 
 /// Seconds a scan stays on the GPU after it last showed, whatever other scans
 /// want (only a budget shrunk below the resident scans drops it sooner).

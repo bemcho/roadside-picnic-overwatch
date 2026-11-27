@@ -72,12 +72,14 @@ impl GpuTier {
 
     /// Settles the level the first time: from the card's size in `reading`
     /// (capped by `cap`), or the fallback without one; `forced` always wins.
+    /// An `integrated` GPU is modest: the heap it reports is the system's RAM.
     /// Later calls change nothing.
     pub fn settle_with(
         &mut self,
         reading: Option<VramReading>,
         cap: Option<u64>,
         forced: Option<TierLevel>,
+        integrated: bool,
     ) {
         if self.settled {
             return;
@@ -85,6 +87,8 @@ impl GpuTier {
         self.settled = true;
         if let Some(level) = forced {
             self.level = level;
+        } else if integrated {
+            self.level = TierLevel::Modest;
         } else if let Some(reading) = reading {
             self.level = tier_for(reading.card, cap);
         }
@@ -121,26 +125,41 @@ mod tests {
     }
 
     #[test]
+    fn an_integrated_gpu_stays_modest_unless_forced() {
+        // Its "device-local" heap is the system's RAM: 15+ GiB on a 32 GB laptop.
+        let mut tier = GpuTier::fallback(6.0, None);
+        tier.settle_with(reading(16.0), None, None, true);
+        assert_eq!(tier.level(), TierLevel::Modest);
+        let mut tier = GpuTier::fallback(6.0, None);
+        tier.settle_with(None, None, None, true);
+        assert_eq!(tier.level(), TierLevel::Modest, "no reading either");
+        let forced = Some(TierLevel::Strong);
+        let mut tier = GpuTier::fallback(6.0, forced);
+        tier.settle_with(reading(16.0), None, forced, true);
+        assert_eq!(tier.level(), TierLevel::Strong, "--gpu-tier wins");
+    }
+
+    #[test]
     fn the_tier_is_decided_once() {
         let mut tier = GpuTier::fallback(6.0, None);
         assert_eq!(tier.level(), TierLevel::Strong);
-        tier.settle_with(reading(4.0), None, None);
+        tier.settle_with(reading(4.0), None, None, false);
         assert_eq!(tier.level(), TierLevel::Modest);
-        tier.settle_with(reading(16.0), None, None);
+        tier.settle_with(reading(16.0), None, None, false);
         assert_eq!(tier.level(), TierLevel::Modest, "settled for the session");
     }
 
     #[test]
     fn without_a_reading_the_fallback_settles_and_a_forced_tier_wins() {
         let mut tier = GpuTier::fallback(6.0, None);
-        tier.settle_with(None, None, None);
+        tier.settle_with(None, None, None, false);
         assert_eq!(tier.level(), TierLevel::Strong);
-        tier.settle_with(reading(4.0), None, None);
+        tier.settle_with(reading(4.0), None, None, false);
         assert_eq!(tier.level(), TierLevel::Strong, "settled on the fallback");
         let forced = Some(TierLevel::Exceptional);
         let mut tier = GpuTier::fallback(4.0, forced);
         assert_eq!(tier.level(), TierLevel::Exceptional);
-        tier.settle_with(reading(4.0), None, forced);
+        tier.settle_with(reading(4.0), None, forced, false);
         assert_eq!(tier.level(), TierLevel::Exceptional);
     }
 }

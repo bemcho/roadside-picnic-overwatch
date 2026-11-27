@@ -8,25 +8,33 @@ mod uhd;
 
 use std::f32::consts::TAU;
 
-use bevy::camera::visibility::RenderLayers;
+use bevy::camera::Exposure;
+use bevy::camera::visibility::{NoAutoAabb, RenderLayers};
 use bevy::diagnostic::FrameCount;
 use bevy::gltf::GltfMaterial;
 use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::prelude::*;
 
 use crate::assets;
-use crate::assets::gpu_scans::{GpuTier, TierLevel};
+use crate::assets::UhdFiles;
+use crate::assets::gpu_scans::{GpuTier, TierLevel, settle_gpu_tier};
+use crate::assets::ram_source::start_ram_fill;
 use crate::player::vehicle::{Carrier, Driving, Seat};
-use crate::player::{Locomotion, Player};
+use crate::player::{Locomotion, Player, PlayerCamera};
 use crate::states::{AppState, InGamePhase};
 
 use super::collision::{Collider, Pillar, Unclimbable};
 use super::sites::{SPHERE_POOL_RADIUS, golden_sphere_spot};
 use super::{Sun, Terrain, WorldRoot, detail_range};
 use ferrofluid::{Ferrofluid, FerrofluidMaterial};
-use mirror::{CAR_PAINT, CARRIER_PAINT, Hull, Mirror, MirrorMaterial, REACH, Stalker, stand_ins};
+use mirror::{
+    CAR_PAINT, CARRIER_PAINT, Hull, Mirror, MirrorMaterial, REACH, Stalker, stand_in_light,
+    stand_ins,
+};
 pub(crate) use reflection::SPHERE_LAYER;
-use reflection::{ProbeFace, ReflectionProbe, spawn_reflection_probe, steer_reflection_probe};
+use reflection::{
+    ProbeFace, ReflectionProbe, spawn_reflection_probe, steer_reflection_probe, watch,
+};
 use uhd::{SphereSkin, on_exceptional_gpu, stream_uhd_sphere};
 
 /// The Sphere's diameter in metres (the user asked for 1 m).
@@ -122,6 +130,12 @@ impl Plugin for GoldenSpherePlugin {
         ))
         .init_resource::<HoverClock>()
         .add_systems(
+            Startup,
+            list_uhd_sphere
+                .after(settle_gpu_tier)
+                .before(start_ram_fill),
+        )
+        .add_systems(
             OnEnter(AppState::InGame),
             (
                 spawn_reflection_probe,
@@ -201,6 +215,15 @@ fn spawn_golden_sphere(
         ));
 }
 
+/// Lists the Sphere's UHD scan last in `UhdFiles` on exceptional GPUs, the
+/// only ones that show it, so the RAM fill reads it and `GpuScans` can
+/// prefill it after the scans every tier shows; other tiers never read it.
+fn list_uhd_sphere(tier: Option<Res<GpuTier>>, mut files: ResMut<UhdFiles>) {
+    if tier.is_some_and(|tier| tier.level() == TierLevel::Exceptional) {
+        files.0.push(assets::GOLDEN_SPHERE_UHD);
+    }
+}
+
 /// The Sphere's gold: its scan's paint as a polished metal mirror.
 fn gild(mut gold: StandardMaterial) -> StandardMaterial {
     gold.metallic = 1.0;
@@ -229,10 +252,15 @@ fn spawn_ferrofluid_pool(
     };
     let level = tier.map_or(TierLevel::default(), |tier| tier.level());
     let floor = |at: Vec2| terrain.mesh_height_at(pool.xz() + at) - pool.y;
+    let mesh = Ferrofluid::pool_mesh(level, floor);
+    let bounds = Ferrofluid::bounds(&mesh).unwrap_or_default();
     commands.spawn((
         Name::new("Ferrofluid pool"),
         FerrofluidPool,
-        Mesh3d(meshes.add(Ferrofluid::pool_mesh(level, floor))),
+        Mesh3d(meshes.add(mesh)),
+        // Up to the spikes the vertex shader raises, kept from Bevy's own.
+        bounds,
+        NoAutoAabb,
         MeshMaterial3d(fluids.add(FerrofluidMaterial {
             base: liquid,
             extension: Ferrofluid::under(Hover::at(0.0)).mirroring(
@@ -291,15 +319,20 @@ fn pull_ferrofluid(
     }
 }
 
-/// Keeps the probe at the Sphere, rendering its faces while the stalker or a
-/// vehicle is near enough to show in it.
+/// Where the player's camera is and its exposure.
+type Viewer = (&'static GlobalTransform, &'static Exposure);
+
+/// Keeps the probe at the Sphere, in the player's exposure, rendering its
+/// faces while the player can see the Sphere: often while the stalker or a
+/// vehicle is near enough to show in it, now and then otherwise.
 fn reflect_surroundings(
     tier: Option<Res<GpuTier>>,
     frame: Res<FrameCount>,
     spheres: Query<&Transform, (With<GoldenSphere>, Without<ProbeFace>)>,
     stalkers: Query<&Transform, (With<Player>, Without<ProbeFace>)>,
     seats: Query<&Transform, (With<Seat>, Without<ProbeFace>)>,
-    mut cameras: Query<(&ProbeFace, &mut Camera, &mut Transform)>,
+    viewers: Query<Viewer, (With<PlayerCamera>, Without<ProbeFace>)>,
+    mut cameras: Query<(&ProbeFace, &mut Camera, &mut Transform, &mut Exposure)>,
 ) {
     let Ok(sphere) = spheres.single() else {
         return;
@@ -309,8 +342,12 @@ fn reflect_surroundings(
         .iter()
         .chain(&seats)
         .any(|at| at.translation.distance(centre) <= REACH);
+    let viewer = viewers.single().ok();
+    let distance = viewer.map(|(at, _)| at.translation().distance(centre));
+    let exposure = viewer.map_or(Exposure::default(), |(_, exposure)| *exposure);
     let level = tier.map_or(TierLevel::default(), |tier| tier.level());
-    steer_reflection_probe(centre, someone_near, level, &frame, &mut cameras);
+    let watch = watch(distance, someone_near);
+    steer_reflection_probe(centre, watch, level, &frame, exposure, &mut cameras);
 }
 
 /// Modest GPUs get no live reflection map: the Sphere mirrors stand-ins.
@@ -349,7 +386,7 @@ fn gather_stand_ins(
         .collect();
     let shown = stand_ins(sphere.translation, stalker, &hulls);
     let sun = suns.single().map_or(Vec4::ZERO, |(light, at)| {
-        at.back().extend(light.illuminance)
+        stand_in_light(*at.back(), light.illuminance)
     });
     for mirror in &mirrors {
         if let Some(mut material) = materials.get_mut(&mirror.0) {
@@ -410,6 +447,28 @@ mod tests {
             .angle_between(Quat::IDENTITY)
             .to_degrees();
         assert!((tilt - 4.0).abs() < 0.01, "axis tilted {tilt} degrees");
+    }
+
+    #[test]
+    fn only_exceptional_gpus_read_and_prefill_the_uhd_sphere_last() {
+        for (level, listed) in [
+            (TierLevel::Modest, false),
+            (TierLevel::Strong, false),
+            (TierLevel::Exceptional, true),
+        ] {
+            let mut app = App::new();
+            app.insert_resource(UhdFiles(vec!["tree", "site"]))
+                .insert_resource(GpuTier::fallback(6.0, Some(level)))
+                .add_systems(Update, list_uhd_sphere);
+            app.update();
+            let files = &app.world().resource::<UhdFiles>().0;
+            let expected = if listed {
+                vec!["tree", "site", assets::GOLDEN_SPHERE_UHD]
+            } else {
+                vec!["tree", "site"]
+            };
+            assert_eq!(files, &expected, "{level:?}");
+        }
     }
 
     #[test]

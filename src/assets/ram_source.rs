@@ -226,7 +226,7 @@ fn fail(failed: &mut Option<&'static str>, (path, err): FileError) {
 }
 
 /// Starts measuring the listed UHD files for the RAM fill on the IO pool.
-fn start_ram_fill(mut commands: Commands, server: Res<AssetServer>, files: Res<UhdFiles>) {
+pub fn start_ram_fill(mut commands: Commands, server: Res<AssetServer>, files: Res<UhdFiles>) {
     commands.insert_resource(RamFill::start(&server, files.0.clone()));
 }
 

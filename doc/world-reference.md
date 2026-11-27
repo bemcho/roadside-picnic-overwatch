@@ -684,25 +684,30 @@ the stalker stands still.
     crawling or prone), left out while driving, and the car and the Institute carrier
     as boxes of their hulls (`Seat::half_hull`), turned with them. Each is lit by the
     Sun (direction and illuminance read from the `Sun` each frame) plus the sky at
-    20% of the Sun's, in the model's measured paint (the mean linear albedo of its
+    20% of the Sun's, both fading out as the Sun sinks from 0.1 to -0.05 of
+    height in its direction (`stand_in_light`: the `Sun` keeps its illuminance
+    after dark, only its shadows go), in the model's measured paint (the mean linear albedo of its
     base-colour texture: stalker 0.0448, 0.0526, 0.0526; car 0.0598, 0.0359, 0.0266;
     carrier 0.0636, 0.0494, 0.0409), tinted by the gold. The pool does not mirror the
     Sphere here.
   - *Strong GPUs* (`reflection.rs`): a live reflection probe. Six cameras at the
     Sphere's centre (90 degrees, near 0.05 m, far 300 m) render the scene into the
-    six faces of a cube, 256 x 256 `Rgba16Float` images, one face a frame in turn,
-    and only while the stalker or a vehicle is within 15 m of the Sphere (otherwise
-    the cameras sleep and the faces keep what they last showed). The Sphere samples
+    six faces of a cube, 256 x 256 `Rgba16Float` images, only while the player's
+    camera is within 300 m of the Sphere (`SEEN`, its `detail_range`): one face a
+    frame in turn while the stalker or a vehicle is within 15 m of it, otherwise
+    one face every 10 frames (`RESTING_EVERY`; the whole cube in two seconds), so
+    the light and a departed stalker never linger in it. Beyond 300 m the cameras
+    sleep, so a car parked by the Sphere costs nothing. The Sphere samples
     the face its reflection ray points at, and the liquid traces the Sphere
     analytically (a ray-sphere test against its centre and 0.5 m radius, the
     centre updated each frame) and bounces the ray into the faces, tinted gold, so
     the gold shows in the black metal; elsewhere it samples the faces along its own
     reflection. The cameras are cleared transparent, so where they drew nothing
-    (sky) the environment map's sky stays. They run with the player's exposure
-    (EV 13), HDR, no tonemapping or deband and no MSAA, no atmosphere or fog, and
+    (sky) the environment map's sky stays. They copy the player's camera's
+    `Exposure` each frame (EV 9 at night to 13 by day, less under cloud), HDR, no tonemapping or deband and no MSAA, no atmosphere or fog, and
     `ClusterConfig::Single` (one cluster for the whole view).
-  - *Exceptional GPUs:* the faces are 1024 x 1024 and all six render every frame (still
-    only with someone within 15 m), and the Sphere's UHD scan replaces the medium
+  - *Exceptional GPUs:* the faces are 1024 x 1024 and all six render every frame
+    with someone within 15 m (one every 10 frames otherwise, as on Strong), and the Sphere's UHD scan replaces the medium
     model. The scan (`models/artifacts/uhd/artifact-golden-sphere.glb`, from the
     workspace's `models/artifacts/uhd/`, 1.97 M triangles, one 8192 x 8192 BC7 KTX2
     gold texture, 70 MB on disk, 138 MB on the GPU measured) is streamed through
@@ -710,8 +715,16 @@ the stalker stands still.
     within 80 m (`UHD_RANGE`, 40 m, plus `UPLOAD_LEAD`, 40 m), and swapped in (mesh
     and gold, rescaled to 1 m from its 0.98 m, centred diameter) within 40 m once
     `scene()` is resident. The medium model comes back when the anchors pass 40 m
-    or the scan is evicted. It is listed in `UhdFiles` between the plants and the sites, so every tier reads
-    its 70 MB into RAM.
+    or the scan is evicted. Only exceptional GPUs list it, last in `UhdFiles`
+    (`list_uhd_sphere`, at `Startup` once the tier is settled and before the RAM
+    fill starts), so the RAM fill and the prefill take it after every scan all
+    tiers show, and other tiers never read its 70 MB.
+  - *Bounds:* the pool's `Aabb` is the disc's raised to the tallest spike (1.4 m,
+    `Ferrofluid::bounds`) with `NoAutoAabb`, since only the vertex shader raises
+    the spikes: with Bevy's own box the main view, the shadow cascades and the
+    probe's side faces (which look level from 2.25 m and never see the disc)
+    would cull the spikes. `NoFrustumCulling` would not do: the fog of war culls
+    by `Aabb`.
   - *Render layers:* only the Sphere's mesh is on `SPHERE_LAYER` (1). The player's
     camera and the Sun see layers 0 and 1 (the Sphere casts a shadow); the probe
     cameras see layer 0 only, so the probe never sees the Sphere it renders for.
@@ -1212,8 +1225,9 @@ the stalker stands still.
 - **RAM and GPU** (`src/assets/ram_source.rs`, `src/assets/gpu_scans.rs`,
   `gpu_scans/{vram,tier}.rs`, `src/launch.rs`):
   behind the splash the `ram://` asset source reads every streamed UHD scan
-  (the 41 in `world::uhd_files`: the three trees, the plants, the Golden
-  Sphere's scan, then the sites nearest the hangar first) into RAM, four files at a time, while 4 GiB of
+  (the 40 in `world::uhd_files`: the three trees, the plants, then the sites
+  nearest the hangar first; on exceptional GPUs the Golden Sphere's scan last)
+  into RAM, four files at a time, while 4 GiB of
   RAM stay free (`RAM_HEADROOM`: the game grows up to 3.2 GiB after the fill). A file that does not fit stays on disk and
   loads from `assets/` through the same source; the splash waits for the fill.
   Every streamed UHD scan loads through `assets::uhd(path)` (`ram://`
@@ -1282,7 +1296,9 @@ the stalker stands still.
   under the size sold) and 15 GiB and up Exceptional (16 GB cards). `--vram`
   caps the size judged (`--vram 4` on a 16 GB card gives Modest). Where the
   driver reports no heap (the web, macOS), the fallback is judged from `--vram`,
-  or 6 GB without it: Strong. `--gpu-tier modest|strong|exceptional` forces the
+  or 6 GB without it: Strong. An integrated GPU (or a CPU renderer, as wgpu's
+  adapter reports it) is Modest whatever it reports, since its "device-local"
+  heap is the system's RAM (15+ GiB on a 32 GB laptop). `--gpu-tier modest|strong|exceptional` forces the
   tier whatever the card, for testing (a missing or unknown value is warned
   about and ignored). The log says `GPU: effects at the Strong tier` at startup
   and `GPU: a N GB card, effects at the Strong tier` with the first reading. Only
@@ -1290,8 +1306,8 @@ the stalker stands still.
   UHD scan (see **Golden Sphere**); that scan is the one streamed scan wanted
   only on Exceptional GPUs. Tests: `the_tier_follows_the_cards_size_capped_by_vram`,
   `the_tier_is_decided_once`,
-  `without_a_reading_the_fallback_settles_and_a_forced_tier_wins`
-  (`tier.rs`), `a_gpu_tier_can_be_forced` (`launch.rs`).
+  `without_a_reading_the_fallback_settles_and_a_forced_tier_wins`,
+  `an_integrated_gpu_stays_modest_unless_forced` (`tier.rs`), `a_gpu_tier_can_be_forced` (`launch.rs`).
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
   empty, every streamed plant has spawned (`world::PlantsGrowing`) and the

@@ -35,6 +35,34 @@ const FACES: [(Vec3, Vec3); 6] = [
     (Vec3::NEG_Z, Vec3::Y),
 ];
 const ALL_FACES: [usize; 6] = [0, 1, 2, 3, 4, 5];
+/// How far the player's camera can be and still see the Sphere, in metres
+/// (its `detail_range`): beyond it the probe sleeps.
+pub(super) const SEEN: f32 = 300.0;
+/// While nobody is near, one face every this many frames: the whole cube
+/// within about two seconds, so the light and the departed stalker never
+/// linger in it.
+const RESTING_EVERY: u32 = 10;
+
+/// Who could see the probe's faces in the Sphere and the pool.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Watch {
+    /// The player's camera is too far to see the Sphere.
+    Unseen,
+    /// Seen, with nobody near enough to show in it.
+    Resting,
+    /// Seen, with the stalker or a vehicle near enough to show in it.
+    Close,
+}
+
+/// The watch for a player's camera `viewer` metres from the Sphere (`None`
+/// without one), and whether someone is near it.
+pub(super) fn watch(viewer: Option<f32>, someone_near: bool) -> Watch {
+    match viewer {
+        Some(distance) if distance <= SEEN && someone_near => Watch::Close,
+        Some(distance) if distance <= SEEN => Watch::Resting,
+        _ => Watch::Unseen,
+    }
+}
 
 /// The six faces the probe renders into.
 #[derive(Resource)]
@@ -46,22 +74,20 @@ pub(super) struct ReflectionProbe {
 #[derive(Component)]
 pub(super) struct ProbeFace(pub usize);
 
-/// The faces to render this `frame`: none on modest GPUs or with nobody near
-/// (the faces keep what they last showed), one a frame in turn on strong
-/// GPUs, all six every frame on exceptional ones.
-pub(super) fn faces_to_render(
-    level: TierLevel,
-    frame: u32,
-    someone_near: bool,
-) -> &'static [usize] {
-    match level {
-        _ if !someone_near => &[],
-        TierLevel::Modest => &[],
-        TierLevel::Strong => {
-            let face = frame as usize % ALL_FACES.len();
-            &ALL_FACES[face..=face]
-        }
-        TierLevel::Exceptional => &ALL_FACES,
+/// The faces to render this `frame`: none on modest GPUs or unseen, one now
+/// and then while resting, one a frame in turn on strong GPUs and all six
+/// every frame on exceptional ones while someone is close.
+pub(super) fn faces_to_render(level: TierLevel, frame: u32, watch: Watch) -> &'static [usize] {
+    let one = |turn: u32| {
+        let face = turn as usize % ALL_FACES.len();
+        &ALL_FACES[face..=face]
+    };
+    match (level, watch) {
+        (TierLevel::Modest, _) | (_, Watch::Unseen) => &[],
+        (_, Watch::Resting) if frame.is_multiple_of(RESTING_EVERY) => one(frame / RESTING_EVERY),
+        (_, Watch::Resting) => &[],
+        (TierLevel::Strong, Watch::Close) => one(frame),
+        (TierLevel::Exceptional, Watch::Close) => &ALL_FACES,
     }
 }
 
@@ -114,8 +140,9 @@ pub(super) fn spawn_reflection_probe(
                 far: PROBE_FAR,
                 ..default()
             }),
-            // The player's camera's exposure, so the faces' light matches.
-            Exposure { ev100: 13.0 },
+            // The player's camera's exposure each frame, so the faces' light
+            // matches the view they are seen in (`steer_reflection_probe`).
+            Exposure::default(),
             Hdr,
             Tonemapping::None,
             DebandDither::Disabled,
@@ -132,25 +159,28 @@ pub(super) fn spawn_reflection_probe(
     }
 }
 
-/// Moves the probe's cameras to the Sphere at `centre` and wakes the faces
-/// this frame renders.
+/// Moves the probe's cameras to the Sphere at `centre`, gives them the
+/// player's `exposure` and wakes the faces this frame renders.
 pub(super) fn steer_reflection_probe(
     centre: Vec3,
-    someone_near: bool,
+    watch: Watch,
     level: TierLevel,
     frame: &FrameCount,
-    cameras: &mut Query<(&ProbeFace, &mut Camera, &mut Transform)>,
+    exposure: Exposure,
+    cameras: &mut Query<(&ProbeFace, &mut Camera, &mut Transform, &mut Exposure)>,
 ) {
-    let awake = faces_to_render(level, frame.0, someone_near);
-    for (face, mut camera, mut transform) in cameras.iter_mut() {
+    let awake = faces_to_render(level, frame.0, watch);
+    for (face, mut camera, mut transform, mut seen_at) in cameras.iter_mut() {
         let (forward, up) = FACES[face.0];
         *transform = Transform::from_translation(centre).looking_to(forward, up);
         camera.is_active = awake.contains(&face.0);
+        *seen_at = exposure;
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use bevy::ecs::system::RunSystemOnce;
     use bevy::state::app::StatesPlugin;
 
     use super::*;
@@ -161,7 +191,7 @@ mod tests {
     fn the_probe_renders_one_face_a_frame_on_strong_cards() {
         let mut seen = Vec::new();
         for frame in 0..6 {
-            let faces = faces_to_render(TierLevel::Strong, frame, true);
+            let faces = faces_to_render(TierLevel::Strong, frame, Watch::Close);
             assert_eq!(faces.len(), 1);
             seen.push(faces[0]);
         }
@@ -172,16 +202,77 @@ mod tests {
     #[test]
     fn the_probe_renders_every_face_on_exceptional_cards() {
         assert_eq!(
-            faces_to_render(TierLevel::Exceptional, 7, true),
+            faces_to_render(TierLevel::Exceptional, 7, Watch::Close),
             [0, 1, 2, 3, 4, 5]
         );
     }
 
     #[test]
-    fn the_probe_rests_when_nobody_is_near_or_on_modest_cards() {
-        assert!(faces_to_render(TierLevel::Strong, 3, false).is_empty());
-        assert!(faces_to_render(TierLevel::Exceptional, 3, false).is_empty());
-        assert!(faces_to_render(TierLevel::Modest, 3, true).is_empty());
+    fn a_resting_probe_refreshes_a_face_now_and_then_so_the_cube_never_goes_stale() {
+        for level in [TierLevel::Strong, TierLevel::Exceptional] {
+            let mut seen = Vec::new();
+            for frame in 0..6 * RESTING_EVERY {
+                seen.extend_from_slice(faces_to_render(level, frame, Watch::Resting));
+            }
+            seen.sort();
+            assert_eq!(seen, [0, 1, 2, 3, 4, 5], "{level:?}: each face once");
+        }
+    }
+
+    #[test]
+    fn the_probe_sleeps_unseen_or_on_modest_cards() {
+        assert!(faces_to_render(TierLevel::Strong, 0, Watch::Unseen).is_empty());
+        assert!(faces_to_render(TierLevel::Exceptional, 0, Watch::Unseen).is_empty());
+        assert!(faces_to_render(TierLevel::Modest, 0, Watch::Close).is_empty());
+    }
+
+    #[test]
+    fn the_probe_wakes_only_while_the_player_can_see_the_sphere() {
+        assert_eq!(watch(Some(SEEN), true), Watch::Close);
+        assert_eq!(watch(Some(SEEN), false), Watch::Resting);
+        assert_eq!(
+            watch(Some(SEEN + 1.0), true),
+            Watch::Unseen,
+            "a car parked by the Sphere while the player looks elsewhere"
+        );
+        assert_eq!(watch(None, true), Watch::Unseen);
+    }
+
+    #[test]
+    fn the_faces_take_the_players_exposure() {
+        let mut world = World::new();
+        world.insert_resource(FrameCount(0));
+        for face in 0..6 {
+            world.spawn((
+                ProbeFace(face),
+                Camera::default(),
+                Transform::default(),
+                Exposure { ev100: 13.0 },
+            ));
+        }
+        let night = Exposure { ev100: 9.0 };
+        world
+            .run_system_once(
+                move |frame: Res<FrameCount>,
+                      mut cameras: Query<(
+                    &ProbeFace,
+                    &mut Camera,
+                    &mut Transform,
+                    &mut Exposure,
+                )>| {
+                    steer_reflection_probe(
+                        Vec3::ZERO,
+                        Watch::Close,
+                        TierLevel::Strong,
+                        &frame,
+                        night,
+                        &mut cameras,
+                    );
+                },
+            )
+            .expect("steer the probe");
+        let mut exposures = world.query::<&Exposure>();
+        assert!(exposures.iter(&world).all(|exposure| exposure.ev100 == 9.0));
     }
 
     #[test]

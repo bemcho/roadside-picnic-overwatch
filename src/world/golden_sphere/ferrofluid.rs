@@ -4,6 +4,7 @@
 //! Sphere; rings of small ones creep in from the rim and sink into it.
 
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::primitives::{Aabb, MeshAabb};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::pbr::{ExtendedMaterial, MaterialExtension};
 use bevy::prelude::*;
@@ -13,6 +14,7 @@ use bevy::shader::ShaderRef;
 use crate::assets;
 use crate::assets::gpu_scans::TierLevel;
 use crate::world::sites::SPHERE_POOL_RADIUS;
+use crate::world::terrain::smoothstep;
 
 use super::{Hover, WEAKEST_FIELD};
 
@@ -119,6 +121,15 @@ impl Ferrofluid {
         }
     }
 
+    /// The pool's bounds for culling, the main view's and the probe's: the
+    /// flat disc's own, raised to its tallest spike, which only the vertex
+    /// shader raises (Bevy would bound the disc alone and cull the spikes).
+    pub fn bounds(mesh: &Mesh) -> Option<Aabb> {
+        let disc = mesh.get_aabb()?;
+        let (low, high) = (Vec3::from(disc.min()), Vec3::from(disc.max()));
+        Some(Aabb::from_min_max(low, high.with_y(high.y.max(TALLEST))))
+    }
+
     /// The pool: a disc of `SPHERE_POOL_RADIUS` about its centre at the
     /// liquid's level, on a grid fine enough for the spikes (half as fine on
     /// modest GPUs, twice on exceptional ones), its rim bent down to the floor:
@@ -169,11 +180,6 @@ impl Ferrofluid {
     }
 }
 
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
 impl MaterialExtension for Ferrofluid {
     fn vertex_shader() -> ShaderRef {
         assets::FERROFLUID_SHADER.into()
@@ -201,6 +207,28 @@ mod tests {
     use super::super::SPHERE_DIAMETER;
 
     use super::*;
+
+    #[test]
+    fn the_pools_bounds_hold_its_tallest_spike() {
+        let mesh = Ferrofluid::pool_mesh(TierLevel::Modest, |at| -0.1 * at.x.abs());
+        let bounds = Ferrofluid::bounds(&mesh).expect("the pool has vertices");
+        let (low, high) = (bounds.min(), bounds.max());
+        let lowest = positions(&mesh)
+            .iter()
+            .map(|point| point.y)
+            .fold(f32::INFINITY, f32::min);
+        assert!(
+            low.y <= lowest + 1e-4,
+            "the rim bends down to {lowest}, bounds from {}",
+            low.y
+        );
+        assert!(
+            high.y >= TALLEST,
+            "spikes reach {TALLEST} m, bounds to {}",
+            high.y
+        );
+        assert!(high.x >= SPHERE_POOL_RADIUS - 1e-3 && low.z <= -SPHERE_POOL_RADIUS + 1e-3);
+    }
 
     fn positions(mesh: &Mesh) -> Vec<Vec3> {
         let Some(VertexAttributeValues::Float32x3(points)) =
