@@ -4,6 +4,7 @@
 mod ferrofluid;
 mod mirror;
 mod reflection;
+mod uhd;
 
 use std::f32::consts::TAU;
 
@@ -26,12 +27,13 @@ use ferrofluid::{Ferrofluid, FerrofluidMaterial};
 use mirror::{CAR_PAINT, CARRIER_PAINT, Hull, Mirror, MirrorMaterial, REACH, Stalker, stand_ins};
 pub(crate) use reflection::SPHERE_LAYER;
 use reflection::{ProbeFace, ReflectionProbe, spawn_reflection_probe, steer_reflection_probe};
+use uhd::{SphereSkin, on_exceptional_gpu, stream_uhd_sphere};
 
 /// The Sphere's diameter in metres (the user asked for 1 m).
 pub(super) const SPHERE_DIAMETER: f32 = 1.0;
 /// The medium model's diameter and the height of its centre above its origin,
 /// which lies at its bottom, in model units.
-const SOURCE_DIAMETER: f32 = 0.9996;
+pub(super) const SOURCE_DIAMETER: f32 = 0.9996;
 const SOURCE_CENTRE: f32 = 0.49685;
 /// The Sphere's centre above the pool: its middle (its underside 1.6 to 1.9 m
 /// up, just over the 1.4 m spike the user asked for), how far it bobs either
@@ -135,6 +137,7 @@ impl Plugin for GoldenSpherePlugin {
                 pull_ferrofluid,
                 reflect_surroundings,
                 gather_stand_ins.run_if(on_modest_gpu),
+                stream_uhd_sphere.run_if(on_exceptional_gpu),
             )
                 .chain()
                 .run_if(in_state(InGamePhase::Running)),
@@ -174,10 +177,8 @@ fn spawn_golden_sphere(
         warn!("the Golden Sphere's material is not loaded; leaving the Sphere out");
         return;
     };
-    let mut gold = standard_material_from_gltf_material(source);
-    gold.metallic = 1.0;
-    gold.perceptual_roughness = 0.075;
-    gold.reflectance = 1.0;
+    let gold = gild(standard_material_from_gltf_material(source));
+    let at = Transform::from_translation(Vec3::NEG_Y * SOURCE_CENTRE);
     commands
         .spawn((
             Name::new("Golden Sphere"),
@@ -187,6 +188,7 @@ fn spawn_golden_sphere(
             WorldRoot,
         ))
         .with_child((
+            SphereSkin::medium(mesh.clone(), &gold, at),
             Mesh3d(mesh),
             MeshMaterial3d(mirrors.add(MirrorMaterial {
                 base: gold,
@@ -194,9 +196,17 @@ fn spawn_golden_sphere(
             })),
             // Out of its own probe's sight.
             RenderLayers::layer(SPHERE_LAYER),
-            Transform::from_translation(Vec3::NEG_Y * SOURCE_CENTRE),
+            at,
             detail_range(300.0, 30.0),
         ));
+}
+
+/// The Sphere's gold: its scan's paint as a polished metal mirror.
+fn gild(mut gold: StandardMaterial) -> StandardMaterial {
+    gold.metallic = 1.0;
+    gold.perceptual_roughness = 0.075;
+    gold.reflectance = 1.0;
+    gold
 }
 
 /// The pool under the Sphere, as fine as the GPU's tier asks.

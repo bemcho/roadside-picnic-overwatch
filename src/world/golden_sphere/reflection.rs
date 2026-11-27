@@ -192,7 +192,7 @@ mod tests {
             .init_state::<AppState>()
             .insert_resource(GpuTier::fallback(6.0, Some(TierLevel::Strong)))
             .add_systems(OnEnter(AppState::InGame), spawn_reflection_probe);
-        let mut faces = |app: &mut App| {
+        let faces = |app: &mut App| {
             app.world_mut()
                 .query::<&ProbeFace>()
                 .iter(app.world())

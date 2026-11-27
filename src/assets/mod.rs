@@ -225,6 +225,8 @@ pub const ARTIFACT_PREVIEWS: [&str; 14] = [
     "models/artifacts/medium/pinsneedles.glb",
     "models/artifacts/medium/soso.glb",
 ];
+/// The Golden Sphere's UHD scan, streamed through `GpuScans` on exceptional GPUs.
+pub const GOLDEN_SPHERE_UHD: &str = "models/artifacts/uhd/artifact-golden-sphere.glb";
 
 /// Root folder for textures and materials.
 #[expect(dead_code)]
