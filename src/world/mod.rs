@@ -5,6 +5,7 @@ mod canopy;
 mod collision;
 mod cordon;
 mod crush;
+mod golden_sphere;
 mod ground_fog;
 mod guards;
 mod helicopters;
@@ -122,6 +123,7 @@ impl Plugin for WorldPlugin {
             ground_fog::GroundFogRenderPlugin,
             shroud::ShroudPlugin,
             turrets::TurretPlugin,
+            golden_sphere::GoldenSpherePlugin,
         ))
         .init_asset::<Landscape>()
         .init_resource::<Terrain>()

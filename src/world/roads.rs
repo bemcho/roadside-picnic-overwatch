@@ -766,15 +766,13 @@ mod tests {
         assert!(!tracks().iter().any(|(_, path)| path[..] == track[..2]));
     }
 
-    /// The Golden Sphere's centre in the core scan's model units, the centroid
-    /// of its painted glow on the crater's lowest inner wall (the scan has no
-    /// geometry for it), and its radius in metres.
-    const SPHERE: Vec3 = Vec3::new(-0.0172, 0.0, -0.0138);
+    /// The radius in metres of the Golden Sphere's painted glow
+    /// (`sites::SPHERE_SMUDGE`).
     const SPHERE_RADIUS: f32 = 0.6;
 
     fn golden_sphere() -> Vec2 {
         let (pose, _) = sites::cut_scan(CutScan::Core);
-        pose.transform_point(SPHERE).xz()
+        pose.transform_point(sites::SPHERE_SMUDGE).xz()
     }
 
     #[test]

@@ -784,6 +784,28 @@ fn baked_path(site: Landmark, baked: &'static [Vec2]) -> impl Iterator<Item = Ve
         .map(move |at| pose.transform_point(Vec3::new(at.x, 0.0, at.y)).xz())
 }
 
+/// The Golden Sphere's painted glow on the crater's lowest wall, in the core
+/// scan's model units: the centroid of the paint (the scan has no geometry for
+/// it). The checks place the road and the Sphere's pool from it.
+#[cfg(test)]
+pub(crate) const SPHERE_SMUDGE: Vec3 = Vec3::new(-0.0172, 0.0, -0.0138);
+
+/// The radius in metres of the ferrofluid pool the Golden Sphere hovers over.
+pub(crate) const SPHERE_POOL_RADIUS: f32 = 0.8;
+
+/// Where the Golden Sphere hovers in the core scan's model units: the flattest
+/// crater floor within 20 m of its painting and 3 m clear of the road's bed,
+/// beside the road's end (the painting's wall is 42 degrees steep).
+const SPHERE_POOL: Vec3 = Vec3::new(0.0695, 0.0, 0.05617);
+
+/// The Golden Sphere's pool centre in world xz.
+pub(crate) fn golden_sphere_spot() -> Vec2 {
+    landmark(GoldenSphere)
+        .pose()
+        .transform_point(SPHERE_POOL)
+        .xz()
+}
+
 /// The quarry's haul road in world xz: its drive from the junction to the
 /// entrance, then the baked path down into the pit.
 pub(crate) fn quarry_ramp() -> Vec<Vec2> {
@@ -1537,5 +1559,75 @@ mod tests {
 
         assert!(full_sites(&mut app).is_empty(), "frees its VRAM");
         assert!(fars.iter().all(|&far| stand_in_shows(&app, far)));
+    }
+
+    /// How far the floor the player sees rises across a pool at `at`: its
+    /// highest less its lowest point.
+    fn floor_spread(terrain: &Terrain, at: Vec2) -> f32 {
+        let (mut low, mut high) = (f32::INFINITY, f32::NEG_INFINITY);
+        for i in -8..=8 {
+            for j in -8..=8 {
+                let offset = Vec2::new(i as f32, j as f32) * (SPHERE_POOL_RADIUS / 8.0);
+                if offset.length() <= SPHERE_POOL_RADIUS {
+                    let height = terrain.mesh_height_at(at + offset);
+                    (low, high) = (low.min(height), high.max(height));
+                }
+            }
+        }
+        high - low
+    }
+
+    /// The distance from `at` to the crater ramp's centerline.
+    fn crater_ramp_gap(at: Vec2) -> f32 {
+        crater_ramp()
+            .array_windows()
+            .map(|&[a, b]| {
+                let leg = b - a;
+                let t = ((at - a).dot(leg) / leg.length_squared()).clamp(0.0, 1.0);
+                at.distance(a + leg * t)
+            })
+            .fold(f32::INFINITY, f32::min)
+    }
+
+    #[test]
+    fn the_golden_sphere_hovers_over_the_flattest_floor_clear_of_the_road() {
+        // The painted Sphere lies on a 42 degree wall; the pool goes to the
+        // flattest floor within 20 m of it, 3 m clear of the road's bed.
+        let terrain = Terrain::new();
+        let painted = landmark(GoldenSphere)
+            .pose()
+            .transform_point(SPHERE_SMUDGE)
+            .xz();
+        let clear =
+            |at: Vec2| crater_ramp_gap(at) >= roads::RAMP_HALF_WIDTH + 3.0 + SPHERE_POOL_RADIUS;
+        let spot = golden_sphere_spot();
+        assert!(
+            spot.distance(painted) <= 20.0,
+            "{} m from the painting",
+            spot.distance(painted)
+        );
+        assert!(
+            clear(spot),
+            "{} m from the road's centerline",
+            crater_ramp_gap(spot)
+        );
+        let spread = floor_spread(&terrain, spot);
+        let five_degrees = 2.0 * SPHERE_POOL_RADIUS * 5f32.to_radians().tan();
+        assert!(
+            spread <= five_degrees,
+            "the floor rises {spread} m across the pool"
+        );
+        let flattest = (-40..=40)
+            .flat_map(|i| (-40..=40).map(move |j| painted + Vec2::new(i as f32, j as f32) * 0.5))
+            .filter(|&at| at.distance(painted) <= 20.0 && clear(at))
+            .map(|at| (floor_spread(&terrain, at), at))
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .expect("floor within reach");
+        assert!(
+            spread <= flattest.0 + 0.01,
+            "the floor at {} rises {} m, flatter than {spread} m",
+            flattest.1,
+            flattest.0
+        );
     }
 }
