@@ -9,8 +9,10 @@ use bevy::prelude::*;
 use crate::player::{Gait, Locomotion, Player, Respawn, vehicle::Driving};
 
 use super::super::cordon::{CRAWL_HOLE, in_zone};
+use super::super::ground_fog::{fog_tendency, in_ground_fog};
 use super::super::places::{Describe, Place};
-use super::super::terrain::Terrain;
+use super::super::terrain::{Terrain, lattice_hash};
+use super::super::weather::{Weather, WorldClock};
 use super::super::wildlife::Downed;
 use super::fire::Lock;
 use super::{Turret, ZONE_HEADING};
@@ -26,6 +28,9 @@ const REACH: (f32, f32) = (60.0, 400.0);
 /// A locked gun lets a target go beyond this range or this far outside the Zone's heading.
 const RANGE: f32 = 450.0;
 const SECTOR: f32 = SWEEP + 0.26;
+/// How likely a gun is to see a body standing in the ground fog, on each pass of its beam
+/// over it: the fog scatters the laser.
+const SEEN_IN_FOG: f32 = 0.6;
 /// How close to the beam's ground track a body is caught, past its own radius.
 const CATCH: f32 = 1.0;
 /// A body is caught where the beam passes this little below its feet.
@@ -218,17 +223,18 @@ type Stalkers<'w, 's> = Query<
 
 /// Sweeps each gun's beam, locks onto what it touches and turns locked guns after their target.
 pub(super) fn aim_turrets(
-    time: Res<Time>,
+    (time, clock, weather): (Res<Time>, Res<WorldClock>, Res<Weather>),
     terrain: Res<Terrain>,
     mut turrets: Query<&mut Turret>,
     creatures: Creatures,
     stalkers: Stalkers,
-    mut targets: Local<Vec<Target>>,
+    (mut targets, mut touching): (Local<Vec<Target>>, Local<Vec<Target>>),
 ) {
     let dt = time.delta_secs();
     if dt <= 0.0 {
         return;
     }
+    let tendency = fog_tendency(&weather, clock.hour());
     targets.clear();
     targets.extend(
         creatures
@@ -262,16 +268,46 @@ pub(super) fn aim_turrets(
         }
         turret.sweep(&terrain, dt);
         let muzzle = turret.muzzle_at();
-        if let Some(&target) = targets
-            .iter()
-            .find(|target| touches(muzzle, turret.end, turret.swept, target))
-        {
+        touching.clear();
+        touching.extend(
+            targets
+                .iter()
+                .filter(|target| touches(muzzle, turret.end, turret.swept, target)),
+        );
+        turret.forget_missed(&touching);
+        if let Some(&target) = touching.iter().find(|target| turret.sees(target, tendency)) {
             turret.lock = Some(Lock::new(target));
         }
     }
 }
 
 impl Turret {
+    /// Whether the gun sees `target`, which its beam touches: always in clear air; in the
+    /// ground fog on one roll per pass of the beam over it, a miss kept in `unseen` until
+    /// the beam leaves the body, so a slow pass does not roll again every frame.
+    pub(super) fn sees(&mut self, target: &Target, tendency: f32) -> bool {
+        if self.unseen.contains(&target.entity) {
+            return false;
+        }
+        if !in_ground_fog(tendency, target.feet.y) {
+            return true;
+        }
+        self.glances = self.glances.wrapping_add(1);
+        let body = target.entity.to_bits() as u32;
+        let roll = lattice_hash(self.glances as i32, body as i32, self.base.z.to_bits());
+        let seen = roll < SEEN_IN_FOG;
+        if !seen {
+            self.unseen.push(target.entity);
+        }
+        seen
+    }
+
+    /// Forgets the bodies missed in the fog that the beam no longer touches.
+    pub(super) fn forget_missed(&mut self, touching: &[Target]) {
+        self.unseen
+            .retain(|entity| touching.iter().any(|target| target.entity == *entity));
+    }
+
     /// Turns the scan on and drops the beam onto the ground where it now reaches.
     pub(super) fn sweep(&mut self, terrain: &Terrain, dt: f32) {
         self.scan.turn += SWEEP_RATE * dt;
@@ -329,6 +365,40 @@ mod tests {
             facing: Quat::IDENTITY,
             stalker: true,
         }
+    }
+
+    #[test]
+    fn in_fog_a_gun_sees_six_passes_in_ten_and_rolls_once_a_pass() {
+        use super::super::{Effects, Gun};
+
+        let placeholder = Entity::PLACEHOLDER;
+        let effects = Effects {
+            beam: placeholder,
+            spot: placeholder,
+            flash: placeholder,
+        };
+        let mut gun = Turret::new(Gun::Gatling, MUZZLE, 0.0, effects);
+        let body = stalker(PERIMETER_X - 99.0, 0.0, STANDING);
+        assert!(gun.sees(&body, 0.0), "clear air");
+        let passes = 4000;
+        let mut seen = 0;
+        for _ in 0..passes {
+            if gun.sees(&body, 1.0) {
+                seen += 1;
+                continue;
+            }
+            assert!(
+                !gun.sees(&body, 1.0),
+                "rolled again while the beam stays on it"
+            );
+            // The beam moves off the body.
+            gun.forget_missed(&[]);
+        }
+        let share = seen as f32 / passes as f32;
+        assert!(
+            (0.57..0.63).contains(&share),
+            "seen on {share} of the passes"
+        );
     }
 
     #[test]

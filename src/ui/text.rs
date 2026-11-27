@@ -323,7 +323,7 @@ pub const CRAWL_HOLE: Entry = Entry {
 };
 pub const TURRET: Entry = Entry {
     title: "Perimeter gun",
-    description: "An automatic UN gun on top of the Perimeter wall. Its red laser sweeps the Zone, and whatever it touches without leave to be there, beast or stalker, it shoots. Near the wall the beam passes overhead; further out, lie flat under it.",
+    description: "An automatic UN gun on top of the Perimeter wall. Its green laser sweeps the Zone, and whatever it touches without leave to be there, beast or stalker, it shoots. Near the wall the beam passes overhead; further out, lie flat under it.",
 };
 
 /// Indexed like the world's creature kinds.

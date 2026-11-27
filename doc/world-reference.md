@@ -852,7 +852,7 @@ the stalker stands still.
   +X (`tools/split_moving_parts.py`); both are slimmed with
   `tools/slim_dense_model.py` (the Institute's from 2M to 295k triangles, maps
   capped at 2048 px) and finished with `tools/compress_glb_textures.py`.
-- **Perimeter guns** (`src/world/turrets.rs`, `turrets/{scan,fire}.rs`): twelve
+- **Perimeter guns** (`src/world/turrets.rs`, `turrets/{scan,fire,beam}.rs`): twelve
   automatic guns stand on top of the Perimeter wall (`cordon::perimeter_top`,
   about 9 m up), alternating a gatling and a naval mount, evenly spread
   (about 78 m apart) from `REACH_PAST` (50 map tiles, 120 m) south of the
@@ -865,16 +865,29 @@ the stalker stands still.
   while the wall under them is not drawn.
   *Scan:* the head sweeps ±60° about the Zone's heading (-X) with a 26 s
   period while the beam's reach nods between 60 and 400 m with a 37 s period,
-  a Lissajous scan from a per-gun phase. The beam is a red additive glow
-  (radius 7 cm, `BEAM_GLOW` 18,000, about 2 after the EV 13 exposure, ~30 at
-  night) from the `Muzzle` down to where it meets the ground, one terrain
-  sample per gun per frame, with a 0.55 m spot there (`SPOT_GLOW` 60,000).
+  a Lissajous scan from a per-gun phase. The beam is a military laser's 532 nm
+  green (`LASER`), blended with 30% of the scene showing through
+  (`LASER_SHOW_THROUGH`): radius 3.5 cm, `BEAM_GLOW` 5,800 (about 0.6 after the
+  EV 13 exposure, as bright to the eye as the old red at 18,000), from the
+  `Muzzle` down to where it meets the ground, one terrain sample per gun per
+  frame, with a 0.28 m spot there (`SPOT_GLOW` 19,000). The beam's material
+  (`turrets/beam.rs`, `shaders/laser_beam.wesl`) keeps it at least 1.5 px wide
+  on screen (`LEAST_PIXELS`), fading it by the share of that width it really
+  covers, and softens its edge, so a far beam reads as a faint smooth line
+  rather than broken dashes.
   *Detection is the beam:* a body is caught within 1 m (plus its radius) of the
   beam's ground track, between the muzzle and the end (swept since the last
   frame, so a fast sweep does not skip it), where the beam passes between its
   feet and its height: the stalker 1.8 m standing, 0.5 m crawling or prone, a
   creature 0.6 × its size. From 10 m up the beam clears a standing stalker
   until the last ~17% of its reach and a crawler until the last ~5%.
+  *Fog:* a body standing in the ground fog (`ground_fog::in_ground_fog`: the
+  fog tendency, the weather's or the night's, at least 0.35, on ground low
+  enough for the fog to settle half, below about 32 m) is seen on only 60% of
+  the beam's passes over it (`SEEN_IN_FOG`): one roll per pass, a miss
+  remembered until the beam leaves the body. A locked target walking into
+  the fog is kept. The rule follows the fog pass's inputs, not its drifting
+  banks and clear patches, which live only on the GPU.
   *Targets:* ground creatures (wildlife and mutants, not birds) in the Zone,
   and the stalker only as a `Trespasser`: crossing from Harmont into the Zone
   on foot within 10 m of the crawl hole marks them; the Institute gate, the

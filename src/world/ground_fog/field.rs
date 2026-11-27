@@ -37,6 +37,12 @@ const HILLS: (f32, f32) = (22.0, 45.0);
 /// Perimeter.
 const PERIMETER_BLEND: f32 = 30.0;
 
+/// How readily fog gathers on open land `surface` m high: the low ground's
+/// affinity, thinning out over the hills.
+pub(super) fn lowland(surface: f32) -> f32 {
+    LOWLAND_AFFINITY * (1.0 - smoothstep(HILLS.0, HILLS.1, surface))
+}
+
 pub(super) fn origin() -> Vec2 {
     Vec2::splat(-EXTENT * 0.5)
 }
@@ -98,8 +104,10 @@ impl FogField {
                 let cell = Vec2::new((index % SIZE) as f32, (index / SIZE) as f32);
                 let at = origin() + cell * SPACING;
                 let water = self.wet[index].max(damp[index] * 1.6).min(1.0);
-                let lowland = LOWLAND_AFFINITY * (1.0 - smoothstep(HILLS.0, HILLS.1, surface));
-                let affinity = water.max(quarry_basin(at)).max(0.8 * wood(at)).max(lowland);
+                let affinity = water
+                    .max(quarry_basin(at))
+                    .max(0.8 * wood(at))
+                    .max(lowland(surface));
                 let harmont = smoothstep(
                     PERIMETER_X - PERIMETER_BLEND,
                     PERIMETER_X + PERIMETER_BLEND,

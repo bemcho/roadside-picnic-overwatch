@@ -2,7 +2,7 @@
 //! alternating a rotary gatling and a naval mount, spread evenly from 50 map
 //! tiles south of the hangar to 50 past the Institute.
 //!
-//! Each sweeps the Zone with a red laser (`scan.rs`). Whatever the beam
+//! Each sweeps the Zone with a green laser (`scan.rs`). Whatever the beam
 //! touches that has no business there, a ground creature or a stalker who came
 //! in through the crawl hole, the gun locks onto: it turns after it, spins up
 //! and fires tracer bursts until it brings it down (`fire.rs`). The beam is the
@@ -14,6 +14,7 @@
 //! `Barrels`, which spin about their local +Z, and an empty `Muzzle` at their
 //! tips. The barrels point +Z at rest; the models stand about a unit tall.
 
+mod beam;
 mod fire;
 mod scan;
 
@@ -62,14 +63,19 @@ const PILLARS: &[Pillar] = &[Pillar {
 /// The muzzle from the foot of the yaw axis, facing +Z, in meters, until the model gives its own.
 const MUZZLE: Vec3 = Vec3::new(0.0, 0.62 * SCALE, 0.55 * SCALE);
 /// The beam's radius, and how high the ground spot floats to stay clear of the terrain.
-const BEAM_RADIUS: f32 = 0.07;
-const SPOT_RADIUS: f32 = 0.55;
+const BEAM_RADIUS: f32 = 0.035;
+const SPOT_RADIUS: f32 = 0.28;
 const SPOT_LIFT: f32 = 0.06;
 /// Emissive in physical units, tuned for the daytime exposure (EV 13, about
-/// 1e-4): the beam reads near 2 and its spot near 6 in daylight, both blooming
-/// brighter at night (EV 9). Tracers and the muzzle flash are brighter still.
-const BEAM_GLOW: f32 = 18_000.0;
-const SPOT_GLOW: f32 = 60_000.0;
+/// 1e-4): the beam reads near 0.6 and its spot near 2 in daylight (as bright to the
+/// eye as the red they replaced, green weighing three times red in luminance), both
+/// blooming brighter at night (EV 9). Tracers and the muzzle flash are brighter still.
+const BEAM_GLOW: f32 = 5_800.0;
+const SPOT_GLOW: f32 = 19_000.0;
+/// A military laser's 532 nm green, and how much of the scene behind the beam and
+/// its spot shows through them.
+const LASER: LinearRgba = LinearRgba::rgb(0.08, 1.0, 0.03);
+const LASER_SHOW_THROUGH: f32 = 0.3;
 const TRACER_GLOW: f32 = 60_000.0;
 const FLASH_GLOW: f32 = 150_000.0;
 /// Tracers in flight at once, across all the guns.
@@ -80,6 +86,7 @@ pub(super) struct TurretPlugin;
 impl Plugin for TurretPlugin {
     fn build(&self, app: &mut App) {
         app.add_message::<GunSound>()
+            .add_plugins(MaterialPlugin::<beam::LaserMaterial>::default())
             .add_systems(OnEnter(AppState::InGame), spawn_turrets)
             .add_systems(
                 Update,
@@ -178,6 +185,10 @@ pub(super) struct Turret {
     turn: f32,
     /// Rounds fired, seeding each tracer's spread.
     rounds: u32,
+    /// Bodies the beam passed over in the fog without seeing them, until it leaves them,
+    /// and the rolls made for such bodies so far.
+    unseen: Vec<Entity>,
+    glances: u32,
     /// Whether the muzzle flashes this frame.
     flash: bool,
     effects: Effects,
@@ -198,6 +209,8 @@ impl Turret {
             spin: 0.0,
             turn: 0.0,
             rounds: 0,
+            unseen: Vec::new(),
+            glances: 0,
             flash: false,
             effects,
         }
@@ -235,39 +248,59 @@ struct MuzzleFlash;
 
 /// Shared meshes and glowing materials of the guns' effects.
 struct Looks {
-    beam: (Handle<Mesh>, Handle<StandardMaterial>),
+    beam: (Handle<Mesh>, Handle<beam::LaserMaterial>),
     spot: (Handle<Mesh>, Handle<StandardMaterial>),
     flash: (Handle<Mesh>, Handle<StandardMaterial>),
     tracer: (Handle<Mesh>, Handle<StandardMaterial>),
 }
 
 impl Looks {
-    fn new(meshes: &mut Assets<Mesh>, materials: &mut Assets<StandardMaterial>) -> Self {
-        let mut glow = |color: LinearRgba| {
-            materials.add(StandardMaterial {
-                base_color: Color::BLACK,
-                emissive: color,
-                perceptual_roughness: 1.0,
-                reflectance: 0.0,
-                alpha_mode: AlphaMode::Add,
-                fog_enabled: false,
-                ..default()
-            })
-        };
-        let red = LinearRgba::rgb(1.0, 0.03, 0.02);
+    fn new(
+        meshes: &mut Assets<Mesh>,
+        materials: &mut Assets<StandardMaterial>,
+        lasers: &mut Assets<beam::LaserMaterial>,
+    ) -> Self {
         let fire = LinearRgba::rgb(1.0, 0.55, 0.16);
+        let laser = |glow: f32| beam::LaserMaterial {
+            base: glowing(LASER * glow, AlphaMode::Blend),
+            extension: beam::LaserBeam::new(BEAM_RADIUS),
+        };
         Self {
             beam: (
                 meshes.add(Cylinder::new(BEAM_RADIUS, 1.0)),
-                glow(red * BEAM_GLOW),
+                lasers.add(laser(BEAM_GLOW)),
             ),
-            spot: (meshes.add(Circle::new(SPOT_RADIUS)), glow(red * SPOT_GLOW)),
-            flash: (meshes.add(Sphere::new(0.3)), glow(fire * FLASH_GLOW)),
+            spot: (
+                meshes.add(Circle::new(SPOT_RADIUS)),
+                materials.add(glowing(LASER * SPOT_GLOW, AlphaMode::Blend)),
+            ),
+            flash: (
+                meshes.add(Sphere::new(0.3)),
+                materials.add(glowing(fire * FLASH_GLOW, AlphaMode::Add)),
+            ),
             tracer: (
                 meshes.add(Cuboid::new(0.07, 0.07, 2.6)),
-                glow(fire * TRACER_GLOW),
+                materials.add(glowing(fire * TRACER_GLOW, AlphaMode::Add)),
             ),
         }
+    }
+}
+
+/// An unlit glow: fire adds its light to the scene, the laser covers what is behind it
+/// but for a share showing through.
+fn glowing(color: LinearRgba, alpha_mode: AlphaMode) -> StandardMaterial {
+    let opacity = match alpha_mode {
+        AlphaMode::Blend => 1.0 - LASER_SHOW_THROUGH,
+        _ => 1.0,
+    };
+    StandardMaterial {
+        base_color: Color::linear_rgba(0.0, 0.0, 0.0, opacity),
+        emissive: color,
+        perceptual_roughness: 1.0,
+        reflectance: 0.0,
+        alpha_mode,
+        fog_enabled: false,
+        ..default()
     }
 }
 
@@ -277,8 +310,9 @@ fn spawn_turrets(
     terrain: Res<Terrain>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut lasers: ResMut<Assets<beam::LaserMaterial>>,
 ) {
-    let looks = Looks::new(&mut meshes, &mut materials);
+    let looks = Looks::new(&mut meshes, &mut materials, &mut lasers);
     let near = VisibilityRange {
         end_margin: NEAR..NEAR + FADE,
         use_aabb: true,
@@ -354,12 +388,11 @@ fn spawn_effects(
             OnWall::at(base.xz()),
         ))
         .id();
-    let mut glow = |(mesh, material): &(Handle<Mesh>, Handle<StandardMaterial>)| {
+    let mut glow = |mesh: &Handle<Mesh>| {
         commands
             .spawn((
                 ChildOf(holder),
                 Mesh3d(mesh.clone()),
-                MeshMaterial3d(material.clone()),
                 Transform::default(),
                 Visibility::default(),
                 range.clone(),
@@ -369,11 +402,18 @@ fn spawn_effects(
             .id()
     };
     let effects = Effects {
-        beam: glow(&looks.beam),
-        spot: glow(&looks.spot),
-        flash: glow(&looks.flash),
+        beam: glow(&looks.beam.0),
+        spot: glow(&looks.spot.0),
+        flash: glow(&looks.flash.0),
     };
+    commands
+        .entity(effects.beam)
+        .insert(MeshMaterial3d(looks.beam.1.clone()));
+    commands
+        .entity(effects.spot)
+        .insert(MeshMaterial3d(looks.spot.1.clone()));
     commands.entity(effects.flash).insert((
+        MeshMaterial3d(looks.flash.1.clone()),
         MuzzleFlash,
         Visibility::Hidden,
         PointLight {
@@ -541,12 +581,20 @@ mod tests {
 
         use crate::player::Respawn;
         use crate::world::CreatureKind;
+        use crate::world::weather::{Weather, WorldClock};
         use crate::world::wildlife::Downed;
 
         const STEP: Duration = Duration::from_millis(50);
         let terrain = Terrain::new();
         let mut app = App::new();
+        // A clear noon: no fog to hide the deer.
+        let noon = WorldClock::at(12.0);
         app.insert_resource(Time::<()>::default())
+            .insert_resource(noon)
+            .insert_resource(Weather {
+                fog: 0.0,
+                ..Weather::at(noon)
+            })
             .insert_resource(terrain.clone())
             .add_message::<Respawn>()
             .add_message::<GunSound>()

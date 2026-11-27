@@ -79,7 +79,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Plants (weeds, bushes, three LOD tiers) | `world/plants.rs`, `shaders/plant_wind.wesl` |
 | Vegetation (clusters at landmarks) | `world/trees.rs` |
 | Cordons (yard, Perimeter, gates, crawl hole, belts) | `world/cordon.rs` |
-| Perimeter guns (laser scan, trespass, tracers, downed creatures) | `world/turrets.rs`, `turrets/{scan,fire}.rs`, `wildlife/downed.rs`, `audio/guns.rs` |
+| Perimeter guns (laser scan, trespass, tracers, downed creatures) | `world/turrets.rs`, `turrets/{scan,fire,beam}.rs`, `wildlife/downed.rs`, `audio/guns.rs` |
 | Sites (Harmont map, 32 scan placements, stand-ins, relief, Institute lights) | `world/{sites,map,institute}.rs` |
 | Quarry ramp (haul road, `Surface::Ramp`, collision off the cut, scan cut, `tools/plan_quarry_ramp.py`); Golden Sphere's crater road (on through the Quarry rim) | `world/{quarry_ramp,ramp_cut}.rs`, `world/{roads,terrain,sites}.rs`, `shaders/ramp_cut.wesl`, generated `world/pillars/{quarry_ramp,golden_crater_ramp}.rs` |
 | New Harmont; Railway; Marsh props; Rocks | `world/{town,railway,marsh,rocks}.rs` |

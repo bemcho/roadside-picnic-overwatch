@@ -1666,6 +1666,14 @@ flowchart LR
 - 12 guns stand on the Perimeter wall (`OnWall`, hidden with their chunk).
 - `touches` tests the whole arc the beam swept this frame, so a fast sweep can't
   skip over a target between frames.
+- In the ground fog (`ground_fog::in_ground_fog`, from the fog tendency and the
+  ground's height, mirroring `sample_fog`'s inputs on the CPU) a touched body is
+  seen on 60% of the passes (`Turret::sees`): one `lattice_hash` roll per pass,
+  the misses kept in `Turret::unseen` until `forget_missed` sees the beam leave
+  them, so a slow pass does not reroll every frame.
+- The beam's `LaserMaterial` (`turrets/beam.rs`) widens a sub-pixel beam to
+  1.5 px in its vertex stage and fades it by the same factor in its fragment
+  stage, instead of turning on TAA or SMAA for the whole view.
 
 ### 9.5 Townsfolk and helicopters
 

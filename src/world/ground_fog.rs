@@ -59,6 +59,10 @@ const NIGHT_FOG: f32 = 0.7;
 /// lifts after dawn.
 const NIGHT_FOG_GATHERS: (f32, f32) = (19.0, 21.0);
 const NIGHT_FOG_LIFTS: (f32, f32) = (7.5, 9.5);
+/// The fog tendency from which the ground fog covers most of the low ground, and the
+/// fog field's affinity at which it settles half (`sample_fog`'s `place`).
+const FOG_OUT: f32 = 0.35;
+const SETTLES: f32 = 0.35;
 /// The hangar hall stays clear of fog.
 const HALL_HALF_EXTENTS: Vec2 = Vec2::new(18.5, 20.5);
 /// Diffuse skylight on a clear day, in lux.
@@ -126,7 +130,7 @@ pub(super) fn update_ground_fog(
     for (mut fog, camera, exposure) in &mut cameras {
         let height = (camera.translation.y - ground).max(0.0);
         let fade = 1.0 - smoothstep(OVERVIEW_FADE.0, OVERVIEW_FADE.1, height);
-        let tendency = weather.fog.max(night_fog(clock.hour()));
+        let tendency = fog_tendency(&weather, clock.hour());
         fog.weather = Vec4::new(tendency, fade, 0.0, 0.0);
         fog.clouds = Vec4::new(cloud_cover(weather.cloud), weather.cloud, 0.0, 0.0);
         fog.wind += Vec4::new(drift.x, drift.y, churn, 0.0);
@@ -179,6 +183,20 @@ fn night_fog(hour: f32) -> f32 {
     NIGHT_FOG * gathered.max(lingering)
 }
 
+/// How readily the ground fog gathers now (0-1): the day's weather, or the night's fog.
+pub(crate) fn fog_tendency(weather: &Weather, hour: f32) -> f32 {
+    weather.fog.max(night_fog(hour))
+}
+
+/// Whether a body standing on open land `surface` m high is in the ground fog: the fog
+/// is out (the fog pass covers the low ground from a tendency of about `FOG_OUT`) and
+/// the ground is low enough for it to settle (the fog field's affinity that the pass
+/// fills half, `ground_fog.wesl` `sample_fog`). The pass's drifting banks and clear
+/// patches are left out.
+pub(crate) fn in_ground_fog(tendency: f32, surface: f32) -> bool {
+    tendency >= FOG_OUT && field::lowland(surface) >= SETTLES
+}
+
 /// Cover of the cloud layers for the weather's cloudiness (0-1).
 fn cloud_cover(cloud: f32) -> f32 {
     CLOUD_COVER.0.lerp(CLOUD_COVER.1, cloud.clamp(0.0, 1.0))
@@ -221,6 +239,23 @@ fn smoothstep(edge0: f32, edge1: f32, value: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fog_covers_bodies_on_low_ground_only_while_it_is_out() {
+        let clear_noon = Weather {
+            fog: 0.0,
+            ..Weather::at(WorldClock::at(12.0))
+        };
+        let night = fog_tendency(&clear_noon, 23.0);
+        assert!(night >= NIGHT_FOG, "night fog {night}");
+        assert!(
+            in_ground_fog(night, 5.0),
+            "the night fog covers the lowlands"
+        );
+        assert!(!in_ground_fog(night, 60.0), "the hills stay clear");
+        let noon = fog_tendency(&clear_noon, 12.0);
+        assert!(!in_ground_fog(noon, 5.0), "a clear noon has no fog");
+    }
 
     #[test]
     fn fog_visibility_stays_between_ten_and_sixteen_tiles() {
