@@ -30,7 +30,7 @@ pub enum Gait {
 }
 
 impl Gait {
-    fn is_prone(self) -> bool {
+    pub(crate) fn is_prone(self) -> bool {
         matches!(self, Self::Crawl | Self::Prone)
     }
 

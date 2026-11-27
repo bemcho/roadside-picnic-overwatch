@@ -8,16 +8,19 @@
 // apart on screen they settle into smooth liquid instead of sparkling. The
 // fragment stage is standard PBR: black metal.
 
+// The same vertex stage raises the spikes in the shadow pass, so they cast
+// their shadows; there the full spikes always stand.
 import bevy_pbr::render::{
     mesh_functions,
     mesh_view_bindings::view,
-    forward_io::{Vertex, VertexOutput, FragmentOutput, decompress_vertex},
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
     view_transformations::position_world_to_clip,
 };
+@if(PREPASS_PIPELINE) import bevy_pbr::prepass::io::{Vertex, VertexOutput, decompress_vertex};
+@else import bevy_pbr::render::forward_io::{Vertex, VertexOutput, FragmentOutput, decompress_vertex};
 
-@if(VISIBILITY_RANGE_DITHER)
+@if(VISIBILITY_RANGE_DITHER && !PREPASS_PIPELINE)
 import bevy_pbr::render::pbr_functions::visibility_range_dither;
 
 // x: the field (0..1), y: the lattice's turn in radians, z: the tallest
@@ -146,18 +149,30 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     var out: VertexOutput;
     let vertex = decompress_vertex(vertex_in, vertex_in.instance_index);
     let world_from_local = mesh_functions::get_world_from_local(vertex_in.instance_index);
+    // The share of spikes standing at the viewer's distance; a light's view
+    // says nothing of it, so shadows keep them all.
+    var seen = 1.0;
+@if(!PREPASS_PIPELINE) {
     let middle = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(0.0, 0.0, 0.0, 1.0));
     let apart = field.w / pixel_at(distance(middle.xyz, view.world_position));
-    let raised = spikes(vertex.position.xz, smoothstep(SETTLED_PIXELS, STANDING_PIXELS, apart));
+    seen = smoothstep(SETTLED_PIXELS, STANDING_PIXELS, apart);
+}
+    let raised = spikes(vertex.position.xz, seen);
     let position = vertex.position + vec3<f32>(0.0, raised.x, 0.0);
-    let normal = normalize(vertex.normal + vec3<f32>(-raised.y, 0.0, -raised.z));
 
     out.world_position = mesh_functions::mesh_position_local_to_world(
         world_from_local,
         vec4<f32>(position, 1.0),
     );
     out.position = position_world_to_clip(out.world_position.xyz);
+@if(UNCLIPPED_DEPTH_ORTHO_EMULATION && PREPASS_PIPELINE) {
+    out.unclipped_depth = out.position.z;
+    out.position.z = min(out.position.z, 1.0);
+}
+@if(!PREPASS_PIPELINE || (NORMAL_PREPASS_OR_DEFERRED_PREPASS && VERTEX_NORMALS)) {
+    let normal = normalize(vertex.normal + vec3<f32>(-raised.y, 0.0, -raised.z));
     out.world_normal = mesh_functions::mesh_normal_local_to_world(normal, vertex_in.instance_index);
+}
 @if(VERTEX_UVS_A)
     out.uv = vertex.uv;
 @if(VERTEX_OUTPUT_INSTANCE_INDEX)
@@ -170,6 +185,7 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     return out;
 }
 
+@if(!PREPASS_PIPELINE)
 @fragment
 fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> FragmentOutput {
 @if(VISIBILITY_RANGE_DITHER)

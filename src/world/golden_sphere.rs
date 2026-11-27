@@ -2,6 +2,7 @@
 //! ferrofluid pool on the crater's floor, one clock driving both.
 
 mod ferrofluid;
+mod mirror;
 
 use std::f32::consts::TAU;
 
@@ -11,12 +12,15 @@ use bevy::prelude::*;
 
 use crate::assets;
 use crate::assets::gpu_scans::{GpuTier, TierLevel};
+use crate::player::vehicle::{Carrier, Driving, Seat};
+use crate::player::{Locomotion, Player};
 use crate::states::{AppState, InGamePhase};
 
 use super::collision::{Collider, Pillar, Unclimbable};
 use super::sites::{SPHERE_POOL_RADIUS, golden_sphere_spot};
-use super::{Terrain, WorldRoot, detail_range};
+use super::{Sun, Terrain, WorldRoot, detail_range};
 use ferrofluid::{Ferrofluid, FerrofluidMaterial};
+use mirror::{CAR_PAINT, CARRIER_PAINT, Hull, Mirror, MirrorMaterial, Stalker, stand_ins};
 
 /// The Sphere's diameter in metres (the user asked for 1 m).
 pub(super) const SPHERE_DIAMETER: f32 = 1.0;
@@ -105,18 +109,25 @@ pub(super) struct GoldenSpherePlugin;
 
 impl Plugin for GoldenSpherePlugin {
     fn build(&self, app: &mut App) {
-        app.add_plugins(MaterialPlugin::<FerrofluidMaterial>::default())
-            .init_resource::<HoverClock>()
-            .add_systems(
-                OnEnter(AppState::InGame),
-                (spawn_golden_sphere, spawn_ferrofluid_pool),
+        app.add_plugins((
+            MaterialPlugin::<FerrofluidMaterial>::default(),
+            MaterialPlugin::<MirrorMaterial>::default(),
+        ))
+        .init_resource::<HoverClock>()
+        .add_systems(
+            OnEnter(AppState::InGame),
+            (spawn_golden_sphere, spawn_ferrofluid_pool),
+        )
+        .add_systems(
+            Update,
+            (
+                pose_golden_sphere,
+                pull_ferrofluid,
+                gather_stand_ins.run_if(on_modest_gpu),
             )
-            .add_systems(
-                Update,
-                (pose_golden_sphere, pull_ferrofluid)
-                    .chain()
-                    .run_if(in_state(InGamePhase::Running)),
-            );
+                .chain()
+                .run_if(in_state(InGamePhase::Running)),
+        );
     }
 }
 
@@ -143,7 +154,7 @@ fn spawn_golden_sphere(
     server: Res<AssetServer>,
     terrain: Res<Terrain>,
     paints: Res<Assets<GltfMaterial>>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut mirrors: ResMut<Assets<MirrorMaterial>>,
 ) {
     let pool = pool_centre(&terrain);
     let (mesh, paint) = assets::load_single_primitive(&server, assets::ARTIFACT_PREVIEWS[1]);
@@ -165,7 +176,10 @@ fn spawn_golden_sphere(
         ))
         .with_child((
             Mesh3d(mesh),
-            MeshMaterial3d(materials.add(gold)),
+            MeshMaterial3d(mirrors.add(MirrorMaterial {
+                base: gold,
+                extension: Mirror::default(),
+            })),
             Transform::from_translation(Vec3::NEG_Y * SOURCE_CENTRE),
             detail_range(300.0, 30.0),
         ));
@@ -183,7 +197,7 @@ fn spawn_ferrofluid_pool(
     // Black metal, as the user asked: a mirror dark enough to read black, the
     // sky and the Sun bright in it.
     let liquid = StandardMaterial {
-        base_color: Color::linear_rgb(0.09, 0.09, 0.1),
+        base_color: Color::linear_rgb(0.05, 0.05, 0.055),
         metallic: 1.0,
         perceptual_roughness: 0.1,
         ..default()
@@ -237,6 +251,54 @@ fn pull_ferrofluid(
     for pool in &pools {
         if let Some(mut fluid) = fluids.get_mut(&pool.0) {
             fluid.extension = Ferrofluid::under(hover);
+        }
+    }
+}
+
+/// Modest GPUs get no live reflection map: the Sphere mirrors stand-ins.
+fn on_modest_gpu(tier: Option<Res<GpuTier>>) -> bool {
+    tier.is_some_and(|tier| tier.level() == TierLevel::Modest)
+}
+
+/// Hands the Sphere's mirror the stalker and vehicles near it, and the Sun.
+fn gather_stand_ins(
+    spheres: Query<&Transform, With<GoldenSphere>>,
+    stalkers: Query<(&Transform, &Locomotion, Has<Driving>), With<Player>>,
+    seats: Query<(&Transform, &Seat, Has<Carrier>)>,
+    suns: Query<(&DirectionalLight, &GlobalTransform), With<Sun>>,
+    mirrors: Query<&MeshMaterial3d<MirrorMaterial>>,
+    mut materials: ResMut<Assets<MirrorMaterial>>,
+) {
+    let Ok(sphere) = spheres.single() else {
+        return;
+    };
+    let stalker = stalkers
+        .single()
+        .ok()
+        .map(|(at, locomotion, driving)| Stalker {
+            feet: at.translation,
+            prone: locomotion.gait.is_prone(),
+            driving,
+        });
+    let hulls: Vec<Hull> = seats
+        .iter()
+        .map(|(at, seat, carrier)| Hull {
+            base: at.translation,
+            yaw: at.rotation.to_euler(EulerRot::YXZ).0,
+            half: seat.half_hull(),
+            paint: if carrier { CARRIER_PAINT } else { CAR_PAINT },
+        })
+        .collect();
+    let shown = stand_ins(sphere.translation, stalker, &hulls);
+    let sun = suns.single().map_or(Vec4::ZERO, |(light, at)| {
+        at.back().extend(light.illuminance)
+    });
+    for mirror in &mirrors {
+        if let Some(mut material) = materials.get_mut(&mirror.0) {
+            material.extension = Mirror {
+                stand_ins: shown,
+                sun,
+            };
         }
     }
 }

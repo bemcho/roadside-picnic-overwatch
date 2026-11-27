@@ -138,13 +138,13 @@ impl MaterialExtension for Ferrofluid {
         assets::FERROFLUID_SHADER.into()
     }
 
-    // The spikes move only in the vertex shader of the main pass: no depth
-    // prepass, and the flat disc casts no shadow of its own.
-    fn enable_prepass() -> bool {
-        false
+    // The shadow pass raises the same spikes, so they cast their shadows.
+    fn prepass_vertex_shader() -> ShaderRef {
+        assets::FERROFLUID_SHADER.into()
     }
 
-    fn enable_shadows() -> bool {
+    // No depth prepass: nothing in the game reads one from the liquid.
+    fn enable_prepass() -> bool {
         false
     }
 }

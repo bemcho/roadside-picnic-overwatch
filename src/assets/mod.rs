@@ -28,6 +28,7 @@ pub const GROUND_FOG_SHADER: &str = "shaders/ground_fog.wesl";
 pub const PLANT_WIND_SHADER: &str = "shaders/plant_wind.wesl";
 pub const LASER_BEAM_SHADER: &str = "shaders/laser_beam.wesl";
 pub const FERROFLUID_SHADER: &str = "shaders/ferrofluid.wesl";
+pub const GOLDEN_SPHERE_SHADER: &str = "shaders/golden_sphere.wesl";
 pub const TERRAIN_GRASS_ALBEDO: &str = "textures/terrain/grass_albedo.png";
 pub const TERRAIN_GRASS_NORMAL: &str = "textures/terrain/grass_normal.png";
 pub const TERRAIN_GRASS_SURFACE: &str = "textures/terrain/grass_surface.png";
@@ -353,6 +354,7 @@ pub(crate) fn preload_game_assets(server: Res<AssetServer>, mut assets: ResMut<P
         server.load::<Shader>(PLANT_WIND_SHADER).untyped(),
         server.load::<Shader>(LASER_BEAM_SHADER).untyped(),
         server.load::<Shader>(FERROFLUID_SHADER).untyped(),
+        server.load::<Shader>(GOLDEN_SPHERE_SHADER).untyped(),
     ]);
 }
 

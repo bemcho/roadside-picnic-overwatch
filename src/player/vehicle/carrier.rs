@@ -270,7 +270,7 @@ enum Next {
 }
 
 #[derive(Component)]
-#[require(Unclimbable, Seat = Seat::new(HULL_HALF))]
+#[require(Unclimbable, Seat = Seat::new(HULL_HALF, HULL_HEIGHT))]
 pub(crate) struct Carrier {
     paths: Paths,
     leg: Leg,

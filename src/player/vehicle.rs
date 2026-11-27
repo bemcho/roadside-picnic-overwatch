@@ -118,17 +118,25 @@ pub(crate) struct Driving(pub(crate) Entity);
 #[derive(Component, Clone, Copy)]
 pub(crate) struct Seat {
     half_extents: Vec2,
+    /// The hull's height over its origin.
+    height: f32,
     pub(crate) open: bool,
 }
 
 impl Seat {
-    pub(crate) const CAR: Self = Self::new(HALF_EXTENTS);
+    pub(crate) const CAR: Self = Self::new(HALF_EXTENTS, HULL_HEIGHT);
 
-    pub(crate) const fn new(half_extents: Vec2) -> Self {
+    pub(crate) const fn new(half_extents: Vec2, height: f32) -> Self {
         Self {
             half_extents,
+            height,
             open: true,
         }
+    }
+
+    /// The hull's half size: its footprint's half extents and half its height.
+    pub(crate) fn half_hull(&self) -> Vec3 {
+        Vec3::new(self.half_extents.x, self.height / 2.0, self.half_extents.y)
     }
 
     /// How far `point` is from the footprint posed at `at`.
