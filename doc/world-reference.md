@@ -670,7 +670,7 @@ the stalker stands still.
   - *The Zone's old road:* from `OLD_ROAD_FROM` (20 m) inside the Perimeter
     (x < `PERIMETER_X` - 20) the asphalt degrades over 15 m into the retired
     road kit (`OLD_ROAD_FULL`, 35 m), only on `Surface::Asphalt` legs and only
-    as a texture. The kit (24 scanned slabs, once `old_road.rs`) is baked top
+    as a texture. The kit (18 scanned slabs, once `old_road.rs`) is baked top
     down by `tools/bake_road_kit.py` into one road-aligned strip,
     17.87 m across and 60.28 m along (`OLD_ROAD_WIDTH`, `OLD_ROAD_PERIOD`),
     at its native 61 px/m (1092 x 3684 px, the ends blended so copies tile):
@@ -681,9 +681,11 @@ the stalker stands still.
     - *Frame:* `RoadNetwork::leg_frame` gives the shader an R16Uint image on
       the mask grid naming the nearest asphalt leg (binding 120) and a table
       of each leg's start, direction, length and distance along its route
-      (binding 121). The shader takes that leg or a route neighbour, whichever
-      is nearer, so the strip runs on unbroken along a route; within
-      `OLD_ROAD_BEND` (1.5 m) of a bend's bisector the two legs' frames blend.
+      (binding 121). The shader takes that leg or the route neighbour on whose
+      side of the bend's bisector the point lies, so the strip runs on
+      unbroken along a route; within `OLD_ROAD_BEND` (1.5 m) either side of
+      the bisector, measured across it rather than from the legs (past a
+      bend's vertex both legs are equally far), the two frames blend.
     - *Wear:* in the band a two-octave noise (`OLD_ROAD_PATCH`, 3 m) lets kit
       patches in where it lies under the wear, low spots of the kit (potholes,
       cracks) first, the slabs last; today's crack decals fade out as the kit
@@ -706,8 +708,10 @@ the stalker stands still.
       --sources ~/Projects/agentic/RoadSide-Picnic/textures/old-road
     ```
 
-    It prints the strip's width, period and depth; copy them into
-    `terrain_material.rs` and `terrain.wesl`. Its helpers are tested by
+    It prints the strip's width and period; copy them into
+    `OLD_ROAD_WIDTH` and `OLD_ROAD_PERIOD` in `terrain_material.rs`, which
+    hands them to the shader. The printed depth is the height map's range;
+    the shader's relief depth (`OLD_ROAD_RELIEF`) is set by hand. Its helpers are tested by
     `python3 -m pytest tools/test_bake_road_kit.py -q`.
 - **Marsh props** (`src/world/marsh.rs`): dead trees, stumps, logs, fungus,
   moss, rocks, mounds and debris from the swamp kit (`assets/models/swamp/`)

@@ -285,23 +285,27 @@ fn road_leg(id: u32) -> RoadLeg {
     return RoadLeg(a.xy, a.zw, b.x, b.y);
 }
 
-fn leg_distance(leg: RoadLeg, xz: vec2<f32>) -> f32 {
-    let run = clamp(dot(xz - leg.start, leg.along), 0.0, leg.length);
-    return distance(xz, leg.start + leg.along * run);
-}
-
 // Whether `next` carries on from `leg` along the same route (a new route starts at 0).
 fn continues(leg: RoadLeg, next: RoadLeg) -> bool {
     return next.route > 0.0 && abs(leg.route + leg.length - next.route) < 0.01;
 }
 
-// The legs the kit is laid along at a world point: the nearer of the mask texel's leg and its
-// bend neighbours, the other one, and how much the other weighs (0 away from the bisector).
+// The legs the kit is laid along at a world point: the mask texel's leg or the bend neighbour
+// on whose side of the bend's bisector the point lies (`near`), the other one, and how much the
+// other weighs: 0.5 on the bisector, 0 from OLD_ROAD_BEND either side of it. Distances to the
+// legs would not do: past a bend's vertex both legs measure the same distance to it, so the whole
+// outer wedge of the bend would blend.
 struct LegPair {
     near: RoadLeg,
     other: RoadLeg,
     blend: f32,
     found: bool,
+}
+
+// How far `xz` lies on `next`'s side of the bisector between `leg` and `next`, the leg after it.
+fn past_bend(leg: RoadLeg, next: RoadLeg, xz: vec2<f32>) -> f32 {
+    let corner = leg.start + leg.along * leg.length;
+    return dot(xz - corner, normalize(leg.along + next.along));
 }
 
 fn old_road_legs(xz: vec2<f32>) -> LegPair {
@@ -316,32 +320,33 @@ fn old_road_legs(xz: vec2<f32>) -> LegPair {
         return pair;
     }
     let leg = road_leg(id);
-    var other = leg;
-    var other_distance = 1.0e9;
+    pair.near = leg;
+    pair.other = leg;
+    pair.found = true;
+    // Signed distance from the nearer bisector, negative on the neighbour's side.
+    var side = 1.0e9;
     if id > 1u {
         let before = road_leg(id - 1u);
         if continues(before, leg) {
-            other = before;
-            other_distance = leg_distance(before, xz);
+            side = past_bend(before, leg, xz);
+            pair.other = before;
         }
     }
     if id < textureDimensions(leg_table).y {
         let after = road_leg(id + 1u);
-        let after_distance = leg_distance(after, xz);
-        if continues(leg, after) && after_distance < other_distance {
-            other = after;
-            other_distance = after_distance;
+        if continues(leg, after) {
+            let after_side = -past_bend(leg, after, xz);
+            if after_side < side {
+                side = after_side;
+                pair.other = after;
+            }
         }
     }
-    let own_distance = leg_distance(leg, xz);
-    pair.near = leg;
-    pair.other = other;
-    if other_distance < own_distance {
-        pair.near = other;
+    if side < 0.0 {
+        pair.near = pair.other;
         pair.other = leg;
     }
-    pair.blend = 0.5 * (1.0 - smoothstep(0.0, OLD_ROAD_BEND, abs(other_distance - own_distance)));
-    pair.found = true;
+    pair.blend = 0.5 * (1.0 - smoothstep(0.0, OLD_ROAD_BEND, abs(side)));
     return pair;
 }
 

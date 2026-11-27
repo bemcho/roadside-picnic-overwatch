@@ -30,7 +30,8 @@ centreline; KTX2 with mips through tools/compress_glb_textures.py presets):
                     (along); 0.5 is flat. No OpenGL flip: the shader decodes it in that frame.
   old_road_height   BC4, 1 at the top and 0 deepest (and in the gaps), over the STRIP_DEPTH printed.
 The script prints the native density, the strip size, STRIP_WIDTH, STRIP_PERIOD and STRIP_DEPTH;
-the shader's constants (terrain.wesl) and `old_road_band` (terrain_material.rs) copy them.
+OLD_ROAD_WIDTH and OLD_ROAD_PERIOD (terrain_material.rs) copy the width and period, and reach the
+shader through `old_road_band`; the shader's relief depth is set by hand.
 """
 
 import argparse
