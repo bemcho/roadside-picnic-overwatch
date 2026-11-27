@@ -1,6 +1,8 @@
 //! The Golden Sphere: a 1 m mirror-gold ball hovering and turning over a
 //! ferrofluid pool on the crater's floor, one clock driving both.
 
+mod ferrofluid;
+
 use std::f32::consts::TAU;
 
 use bevy::gltf::GltfMaterial;
@@ -8,21 +10,24 @@ use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::prelude::*;
 
 use crate::assets;
+use crate::assets::gpu_scans::{GpuTier, TierLevel};
 use crate::states::{AppState, InGamePhase};
 
 use super::collision::{Collider, Pillar, Unclimbable};
 use super::sites::{SPHERE_POOL_RADIUS, golden_sphere_spot};
 use super::{Terrain, WorldRoot, detail_range};
+use ferrofluid::{Ferrofluid, FerrofluidMaterial};
 
 /// The Sphere's diameter in metres (the user asked for 1 m).
-const SPHERE_DIAMETER: f32 = 1.0;
+pub(super) const SPHERE_DIAMETER: f32 = 1.0;
 /// The medium model's diameter and the height of its centre above its origin,
 /// which lies at its bottom, in model units.
 const SOURCE_DIAMETER: f32 = 0.9996;
 const SOURCE_CENTRE: f32 = 0.49685;
-/// The Sphere's centre above the pool: its middle (a 1.8 m stalker's head, as
-/// the user asked), how far it bobs either way and the seconds one bob takes.
-const HOVER: f32 = 1.7;
+/// The Sphere's centre above the pool: its middle (its underside 1.6 to 1.9 m
+/// up, just over the 1.4 m spike the user asked for), how far it bobs either
+/// way and the seconds one bob takes.
+const HOVER: f32 = 2.25;
 const BOB: f32 = 0.15;
 const BOB_SECONDS: f32 = 7.0;
 /// Radians a second the Sphere turns, its axis's lean and the seconds its lean
@@ -31,13 +36,15 @@ const SPIN: f32 = 0.3;
 const WOBBLE_DEGREES: f32 = 4.0;
 const WOBBLE_SECONDS: f32 = 23.0;
 /// The field at the top of the bob, against 1 at the bottom.
-const WEAKEST_FIELD: f32 = 1.0 / 3.0;
+pub(super) const WEAKEST_FIELD: f32 = 1.0 / 3.0;
 /// How far above the highest floor under it the liquid lies, in metres.
 const LIFT: f32 = 0.005;
 
 /// The Sphere's pose and the field it puts on the pool at one moment.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Hover {
+    /// Seconds the Sphere has hovered.
+    pub seconds: f32,
     /// The Sphere's centre above the pool, in metres.
     pub height: f32,
     /// Its turn about the vertical, in radians.
@@ -45,7 +52,6 @@ pub(super) struct Hover {
     /// The lean of its axis.
     pub tilt: Quat,
     /// The field on the pool: 1 with the Sphere lowest, a third with it highest.
-    #[expect(dead_code, reason = "the ferrofluid's spikes read it next")]
     pub field: f32,
 }
 
@@ -60,6 +66,7 @@ impl Hover {
             WEAKEST_FIELD + (1.0 - WEAKEST_FIELD) * (pull(height) - weakest) / (1.0 - weakest);
         let lean = Quat::from_rotation_y(seconds * TAU / WOBBLE_SECONDS) * Vec3::X;
         Self {
+            seconds,
             height,
             spin: SPIN * seconds,
             tilt: Quat::from_axis_angle(lean, WOBBLE_DEGREES.to_radians()),
@@ -98,13 +105,25 @@ pub(super) struct GoldenSpherePlugin;
 
 impl Plugin for GoldenSpherePlugin {
     fn build(&self, app: &mut App) {
-        app.init_resource::<HoverClock>()
-            .add_systems(OnEnter(AppState::InGame), spawn_golden_sphere)
+        app.add_plugins(MaterialPlugin::<FerrofluidMaterial>::default())
+            .init_resource::<HoverClock>()
+            .add_systems(
+                OnEnter(AppState::InGame),
+                (spawn_golden_sphere, spawn_ferrofluid_pool),
+            )
             .add_systems(
                 Update,
-                pose_golden_sphere.run_if(in_state(InGamePhase::Running)),
+                (pose_golden_sphere, pull_ferrofluid)
+                    .chain()
+                    .run_if(in_state(InGamePhase::Running)),
             );
     }
+}
+
+/// The pool's centre at the liquid's level.
+fn pool_centre(terrain: &Terrain) -> Vec3 {
+    let spot = golden_sphere_spot();
+    spot.extend(pool_level(terrain, spot)).xzy()
 }
 
 /// The liquid's level over `at`: the highest floor under the pool, so the
@@ -124,11 +143,9 @@ fn spawn_golden_sphere(
     server: Res<AssetServer>,
     terrain: Res<Terrain>,
     paints: Res<Assets<GltfMaterial>>,
-    mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    let spot = golden_sphere_spot();
-    let pool = spot.extend(pool_level(&terrain, spot)).xzy();
+    let pool = pool_centre(&terrain);
     let (mesh, paint) = assets::load_single_primitive(&server, assets::ARTIFACT_PREVIEWS[1]);
     let Some(source) = paints.get(&paint) else {
         warn!("the Golden Sphere's material is not loaded; leaving the Sphere out");
@@ -138,12 +155,11 @@ fn spawn_golden_sphere(
     gold.metallic = 1.0;
     gold.perceptual_roughness = 0.075;
     gold.reflectance = 1.0;
-    let hover = Hover::at(0.0);
     commands
         .spawn((
             Name::new("Golden Sphere"),
             GoldenSphere { pool },
-            sphere_pose(pool, hover),
+            sphere_pose(pool, Hover::at(0.0)),
             Visibility::default(),
             WorldRoot,
         ))
@@ -153,18 +169,36 @@ fn spawn_golden_sphere(
             Transform::from_translation(Vec3::NEG_Y * SOURCE_CENTRE),
             detail_range(300.0, 30.0),
         ));
+}
+
+/// The pool under the Sphere, as fine as the GPU's tier asks.
+fn spawn_ferrofluid_pool(
+    mut commands: Commands,
+    terrain: Res<Terrain>,
+    tier: Option<Res<GpuTier>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut fluids: ResMut<Assets<FerrofluidMaterial>>,
+) {
+    let pool = pool_centre(&terrain);
+    // Black metal, as the user asked: a mirror dark enough to read black, the
+    // sky and the Sun bright in it.
     let liquid = StandardMaterial {
-        base_color: Color::srgb(0.012, 0.012, 0.014),
-        perceptual_roughness: 0.06,
-        reflectance: 0.5,
+        base_color: Color::linear_rgb(0.09, 0.09, 0.1),
+        metallic: 1.0,
+        perceptual_roughness: 0.1,
         ..default()
     };
+    let level = tier.map_or(TierLevel::default(), |tier| tier.level());
+    let floor = |at: Vec2| terrain.mesh_height_at(pool.xz() + at) - pool.y;
     commands.spawn((
         Name::new("Ferrofluid pool"),
         FerrofluidPool,
-        Mesh3d(meshes.add(Circle::new(SPHERE_POOL_RADIUS).mesh().resolution(96))),
-        MeshMaterial3d(materials.add(liquid)),
-        Transform::from_translation(pool).with_rotation(Quat::from_rotation_x(-TAU / 4.0)),
+        Mesh3d(meshes.add(Ferrofluid::pool_mesh(level, floor))),
+        MeshMaterial3d(fluids.add(FerrofluidMaterial {
+            base: liquid,
+            extension: Ferrofluid::under(Hover::at(0.0)),
+        })),
+        Transform::from_translation(pool),
         detail_range(120.0, 20.0),
         Collider(&POOL_SOLID),
         Unclimbable,
@@ -192,6 +226,21 @@ fn pose_golden_sphere(
     }
 }
 
+/// Raises the pool's spikes as the Sphere sinks, turns them with it and moves
+/// the small ones in.
+fn pull_ferrofluid(
+    clock: Res<HoverClock>,
+    pools: Query<&MeshMaterial3d<FerrofluidMaterial>, With<FerrofluidPool>>,
+    mut fluids: ResMut<Assets<FerrofluidMaterial>>,
+) {
+    let hover = Hover::at(clock.0);
+    for pool in &pools {
+        if let Some(mut fluid) = fluids.get_mut(&pool.0) {
+            fluid.extension = Ferrofluid::under(hover);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use bevy::state::app::StatesPlugin;
@@ -213,8 +262,8 @@ mod tests {
             .iter()
             .max_by(|a, b| a.height.total_cmp(&b.height))
             .expect("samples");
-        assert!((low.height - 1.55).abs() < 0.01, "lowest {}", low.height);
-        assert!((high.height - 1.85).abs() < 0.01, "highest {}", high.height);
+        assert!((low.height - 2.1).abs() < 0.01, "lowest {}", low.height);
+        assert!((high.height - 2.4).abs() < 0.01, "highest {}", high.height);
         assert!((low.field - 1.0).abs() < 0.01, "full field at the bottom");
         assert!((high.field - 1.0 / 3.0).abs() < 0.02, "a third at the top");
     }
@@ -267,8 +316,8 @@ mod tests {
         app.update();
         let running = *app.world().get::<Transform>(sphere).expect("sphere");
         assert!(
-            running.translation.y > 1.5,
-            "the Sphere hovers at head height"
+            running.translation.y > 2.0,
+            "the Sphere hovers over the stalker's head"
         );
         app.world_mut()
             .resource_mut::<NextState<InGamePhase>>()

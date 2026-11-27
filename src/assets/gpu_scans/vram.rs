@@ -29,7 +29,7 @@ pub struct VramLog {
 /// one is warned about once, and only while none has come.
 pub fn track_vram_budget(
     mut scans: ResMut<GpuScans>,
-    mut tier: ResMut<GpuTier>,
+    tier: Res<GpuTier>,
     device: Res<RenderDevice>,
     launch: Res<LaunchOptions>,
     time: Res<Time<Real>>,
@@ -51,7 +51,6 @@ pub fn track_vram_budget(
         }
         return;
     };
-    tier.settle_with(Some(reading), launch.vram_gb.map(gib), launch.gpu_tier);
     if !scans.apply_reading(reading, launch.vram_gb.map(gib), now) {
         return;
     }
@@ -62,6 +61,19 @@ pub fn track_vram_budget(
         info!("VRAM: driver budget {b:.1} GB, game using {u:.1} GB; UHD scans may use {s:.1} GB");
         info!("GPU: a {card:.1} GB card, effects at the {level:?} tier");
     }
+}
+
+/// Decides the session's GPU tier at startup, before the Zone spawns the
+/// effects that scale with it: from the card's size, or the fallback where the
+/// driver reports none.
+pub fn settle_gpu_tier(
+    mut tier: ResMut<GpuTier>,
+    device: Option<Res<RenderDevice>>,
+    launch: Res<LaunchOptions>,
+) {
+    let reading = device.and_then(|device| read_vram(&device));
+    tier.settle_with(reading, launch.vram_gb.map(gib), launch.gpu_tier);
+    info!("GPU: effects at the {:?} tier", tier.level());
 }
 
 /// The budget and usage of the largest device-local heap. `heaps` holds each

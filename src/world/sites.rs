@@ -791,12 +791,12 @@ fn baked_path(site: Landmark, baked: &'static [Vec2]) -> impl Iterator<Item = Ve
 pub(crate) const SPHERE_SMUDGE: Vec3 = Vec3::new(-0.0172, 0.0, -0.0138);
 
 /// The radius in metres of the ferrofluid pool the Golden Sphere hovers over.
-pub(crate) const SPHERE_POOL_RADIUS: f32 = 0.8;
+pub(crate) const SPHERE_POOL_RADIUS: f32 = 1.5;
 
 /// Where the Golden Sphere hovers in the core scan's model units: the flattest
 /// crater floor within 20 m of its painting and 3 m clear of the road's bed,
 /// beside the road's end (the painting's wall is 42 degrees steep).
-const SPHERE_POOL: Vec3 = Vec3::new(0.0695, 0.0, 0.05617);
+const SPHERE_POOL: Vec3 = Vec3::new(0.074467, 0.0, 0.067451);
 
 /// The Golden Sphere's pool centre in world xz.
 pub(crate) fn golden_sphere_spot() -> Vec2 {

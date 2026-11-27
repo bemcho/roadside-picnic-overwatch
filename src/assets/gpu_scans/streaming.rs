@@ -21,7 +21,7 @@ use crate::states::AppState;
 
 use super::recovery::handle_render_error;
 use super::residency::{ScanParts, ScanResidency, publish_scan_residency, scan_bytes};
-use super::vram::track_vram_budget;
+use super::vram::{settle_gpu_tier, track_vram_budget};
 use super::{GpuScans, GpuTier, State, gb, scan_budget};
 
 /// Loads the scans `GpuScans` admits, learns when they are on the GPU, and
@@ -47,6 +47,7 @@ impl Plugin for GpuScansPlugin {
                 First,
                 (track_vram_budget, note_resident_scans).run_if(in_state(AppState::InGame)),
             )
+            .add_systems(Startup, settle_gpu_tier)
             .add_systems(Update, measure_scans)
             .add_systems(Last, admit_scans.run_if(in_state(AppState::InGame)));
         #[cfg(not(target_arch = "wasm32"))]
