@@ -299,15 +299,24 @@ struct Leg {
     start: Vec2,
     along: Vec2,
     length: f32,
+    /// How far along its track the leg starts.
+    route: f32,
+    /// 1 + its row in `RoadNetwork::asphalt` for an asphalt leg, else 0.
+    id: u16,
     levels: [f32; 2],
     surface: Surface,
     min: Vec2,
     max: Vec2,
 }
 
+/// Texels per metre of the world-space road mask and the leg index.
+const MASK_TEXELS_PER_METRE: f32 = 1.5;
+
 #[derive(Clone)]
 pub(super) struct RoadNetwork {
     tiles: HashMap<IVec2, Vec<Leg>>,
+    /// The asphalt legs in track order, so a route's legs follow one another.
+    asphalt: Vec<Leg>,
     min: Vec2,
     max: Vec2,
 }
@@ -426,23 +435,36 @@ impl RoadNetwork {
         let mut min = Vec2::splat(f32::INFINITY);
         let mut max = Vec2::splat(f32::NEG_INFINITY);
         let mut tiles: HashMap<_, Vec<_>> = HashMap::default();
+        let mut asphalt = Vec::new();
         for (surface, path) in tracks() {
             let (path, levels) = graded_track(surface, &path, &level);
+            let mut route = 0.0;
             for (&[a, b], &levels) in path.array_windows().zip(levels.array_windows()) {
                 let delta = b - a;
                 let length = delta.length();
                 let reach = Vec2::splat(surface.widths().1);
+                let id = if surface == Surface::Asphalt {
+                    u16::try_from(asphalt.len() + 1).expect("fewer than 65,535 asphalt legs")
+                } else {
+                    0
+                };
                 let leg = Leg {
                     start: a,
                     along: delta / length,
                     length,
+                    route,
+                    id,
                     levels,
                     surface,
                     min: a.min(b) - reach,
                     max: a.max(b) + reach,
                 };
+                route += length;
                 min = min.min(leg.min);
                 max = max.max(leg.max);
+                if id > 0 {
+                    asphalt.push(leg.clone());
+                }
                 let first = tile_at(leg.min);
                 let last = tile_at(leg.max);
                 for z in first.y..=last.y {
@@ -452,7 +474,12 @@ impl RoadNetwork {
                 }
             }
         }
-        Self { tiles, min, max }
+        Self {
+            tiles,
+            asphalt,
+            min,
+            max,
+        }
     }
 
     pub fn sample(&self, at: Vec2) -> Option<RoadSample> {
@@ -486,44 +513,117 @@ impl RoadNetwork {
         })
     }
 
-    pub fn surface_texture(&self) -> (Image, Vec4) {
-        // A world-space mask keeps the same road width across coarse and fine terrain tiles.
-        const TEXELS_PER_METRE: f32 = 1.5;
+    /// The road mask's grid: its world origin and its size in texels. A world-space
+    /// mask keeps the same road width across coarse and fine terrain tiles.
+    fn mask_grid(&self) -> (Vec2, UVec2) {
         let origin = self.min.floor();
-        let size = ((self.max.ceil() - origin) * TEXELS_PER_METRE).as_uvec2();
-        let mut pixels = vec![0; (size.x * size.y * 4) as usize];
+        let size = ((self.max.ceil() - origin) * MASK_TEXELS_PER_METRE).as_uvec2();
+        (origin, size)
+    }
+
+    /// Every mask texel near a leg: the legs of its tile, its centre and its index.
+    fn each_texel(&self, mut visit: impl FnMut(&[Leg], Vec2, usize)) {
+        let (origin, size) = self.mask_grid();
+        let pixel = |at: Vec2| {
+            ((at - origin) * MASK_TEXELS_PER_METRE - 0.5)
+                .ceil()
+                .as_ivec2()
+        };
         for (&tile, legs) in &self.tiles {
             let first = tile.as_vec2() * TILE_SIZE;
-            let pixel = |at: Vec2| ((at - origin) * TEXELS_PER_METRE - 0.5).ceil().as_ivec2();
             let low = pixel(first).max(IVec2::ZERO);
             let high = pixel(first + TILE_SIZE).min(size.as_ivec2());
             for z in low.y..high.y {
                 for x in low.x..high.x {
-                    let at = origin + (Vec2::new(x as f32, z as f32) + 0.5) / TEXELS_PER_METRE;
-                    let i = (z as usize * size.x as usize + x as usize) * 4;
-                    if let Some(road) = Self::sample_legs(legs, at) {
-                        pixels[i..i + 4].copy_from_slice(&road.surface());
-                    }
-                    if town::paved(at) {
-                        pixels[i + 2] = 255;
-                        pixels[i + 3] = 0;
-                    }
+                    let at = origin + (Vec2::new(x as f32, z as f32) + 0.5) / MASK_TEXELS_PER_METRE;
+                    visit(legs, at, z as usize * size.x as usize + x as usize);
                 }
             }
         }
-        let image = Image::new(
-            Extent3d {
-                width: size.x,
-                height: size.y,
-                depth_or_array_layers: 1,
-            },
-            TextureDimension::D2,
-            pixels,
-            TextureFormat::Rgba8Unorm,
-            RenderAssetUsages::RENDER_WORLD,
-        );
-        let uv_scale = Vec2::splat(TEXELS_PER_METRE) / size.as_vec2();
+    }
+
+    pub fn surface_texture(&self) -> (Image, Vec4) {
+        let (origin, size) = self.mask_grid();
+        let mut pixels = vec![0; (size.x * size.y * 4) as usize];
+        self.each_texel(|legs, at, texel| {
+            let i = texel * 4;
+            if let Some(road) = Self::sample_legs(legs, at) {
+                pixels[i..i + 4].copy_from_slice(&road.surface());
+            }
+            if town::paved(at) {
+                pixels[i + 2] = 255;
+                pixels[i + 3] = 0;
+            }
+        });
+        let image = data_image(size, pixels, TextureFormat::Rgba8Unorm);
+        let uv_scale = Vec2::splat(MASK_TEXELS_PER_METRE) / size.as_vec2();
         (image, Vec4::new(origin.x, origin.y, uv_scale.x, uv_scale.y))
+    }
+
+    /// The frame the terrain shader lays the old road kit in: on the mask's grid, the
+    /// nearest asphalt leg whose shoulder reaches each texel (R16Uint, 1 + its row,
+    /// 0 for none), and the table of those legs (Rgba32Float, 2 texels a row: start
+    /// and direction, then length and how far along its route it starts). A route's
+    /// legs have consecutive rows, so the shader can weigh a bend's other leg.
+    pub fn leg_frame(&self) -> (Image, Image) {
+        let (_, size) = self.mask_grid();
+        let mut index = vec![0u8; (size.x * size.y * 2) as usize];
+        self.each_texel(|legs, at, texel| {
+            let nearest = legs
+                .iter()
+                .filter(|leg| leg.id > 0)
+                .map(|leg| (leg.id, leg.distance(at)))
+                .filter(|&(_, distance)| distance < Surface::Asphalt.widths().1)
+                .min_by(|a, b| a.1.total_cmp(&b.1));
+            if let Some((id, _)) = nearest {
+                index[texel * 2..texel * 2 + 2].copy_from_slice(&id.to_le_bytes());
+            }
+        });
+        let rows = self.asphalt.len().max(1) as u32;
+        let mut table = vec![0u8; (rows * 2 * 16) as usize];
+        for (row, leg) in self.asphalt.iter().enumerate() {
+            let values = [
+                leg.start.x,
+                leg.start.y,
+                leg.along.x,
+                leg.along.y,
+                leg.length,
+                leg.route,
+                0.0,
+                0.0,
+            ];
+            for (k, value) in values.iter().enumerate() {
+                let at = row * 32 + k * 4;
+                table[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            }
+        }
+        (
+            data_image(size, index, TextureFormat::R16Uint),
+            data_image(UVec2::new(2, rows), table, TextureFormat::Rgba32Float),
+        )
+    }
+}
+
+/// A GPU-only image of raw texels.
+fn data_image(size: UVec2, pixels: Vec<u8>, format: TextureFormat) -> Image {
+    Image::new(
+        Extent3d {
+            width: size.x,
+            height: size.y,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        pixels,
+        format,
+        RenderAssetUsages::RENDER_WORLD,
+    )
+}
+
+impl Leg {
+    /// How far `at` lies from the leg's centreline segment.
+    fn distance(&self, at: Vec2) -> f32 {
+        let run = (at - self.start).dot(self.along).clamp(0.0, self.length);
+        at.distance(self.start + self.along * run)
     }
 }
 
@@ -967,6 +1067,103 @@ mod tests {
         let i = ((texel.y * image.width() + texel.x) * 4) as usize;
         let bytes = image.data.as_ref().expect("mask pixels");
         [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+    }
+
+    /// The leg index at a world point (0: no asphalt leg) and that leg's table row.
+    fn leg_at(roads: &RoadNetwork, at: Vec2) -> Option<(Vec4, Vec4)> {
+        let (index, table) = roads.leg_frame();
+        let (origin, size) = roads.mask_grid();
+        let texel = ((at - origin) * MASK_TEXELS_PER_METRE).floor().as_uvec2();
+        let i = ((texel.y * size.x + texel.x) * 2) as usize;
+        let bytes = index.data.as_ref().expect("index texels");
+        let id = u16::from_le_bytes([bytes[i], bytes[i + 1]]) as usize;
+        let rows = table.data.as_ref().expect("leg table");
+        let texel = |row: usize, column: usize| {
+            let at = (row * 2 + column) * 16;
+            Vec4::from_array(std::array::from_fn(|k| {
+                f32::from_le_bytes(
+                    rows[at + k * 4..at + k * 4 + 4]
+                        .try_into()
+                        .expect("4 bytes"),
+                )
+            }))
+        };
+        (id > 0).then(|| (texel(id - 1, 0), texel(id - 1, 1)))
+    }
+
+    /// A point's distance from a leg table row's segment.
+    fn segment_distance(row: Vec4, length: f32, at: Vec2) -> f32 {
+        let (start, along) = (row.xy(), row.zw());
+        at.distance(start + along * (at - start).dot(along).clamp(0.0, length))
+    }
+
+    #[test]
+    fn leg_frame_marks_asphalt_and_nothing_else() {
+        let terrain = Terrain::new();
+        let highway = map(667.0, 373.0).midpoint(map(697.0, 362.0));
+        let (row, extent) = leg_at(&terrain.roads, highway).expect("the highway is asphalt");
+        assert!(segment_distance(row, extent.x, highway) < 0.01);
+        let track = map(480.0, 505.0).midpoint(SOUTH_SUBURBS_FORK);
+        assert!(
+            leg_at(&terrain.roads, track).is_none(),
+            "a dirt track has no leg"
+        );
+    }
+
+    #[test]
+    fn leg_route_distance_is_continuous_across_a_bend() {
+        let terrain = Terrain::new();
+        let legs = &terrain.roads.asphalt;
+        let mut bends = 0;
+        for pair in legs.windows(2) {
+            let (a, b) = (&pair[0], &pair[1]);
+            if b.start.distance(a.start + a.along * a.length) < 1e-3 && b.route > 0.0 {
+                assert!((b.route - (a.route + a.length)).abs() < 1e-3);
+                bends += 1;
+            } else {
+                assert_eq!(b.route, 0.0, "a route starts at 0");
+            }
+        }
+        assert!(bends > 10, "only {bends} bends checked");
+    }
+
+    #[test]
+    fn leg_index_names_the_nearer_leg_at_a_fork() {
+        let terrain = Terrain::new();
+        let roads = &terrain.roads;
+        let vertices = ROUTES
+            .iter()
+            .filter(|route| route.surface == Surface::Asphalt)
+            .flat_map(|route| route.points.iter().copied());
+        let mut checked = 0;
+        for vertex in vertices {
+            for offset in [
+                Vec2::new(3.0, 1.0),
+                Vec2::new(-2.0, 4.0),
+                Vec2::new(1.5, -5.5),
+            ] {
+                let at = vertex + offset;
+                let Some((row, extent)) = leg_at(roads, at) else {
+                    continue;
+                };
+                // The index is exact at the texel's centre.
+                let origin = roads.mask_grid().0;
+                let centre = origin
+                    + (((at - origin) * MASK_TEXELS_PER_METRE).floor() + 0.5)
+                        / MASK_TEXELS_PER_METRE;
+                let named = segment_distance(row, extent.x, centre);
+                for leg in &roads.asphalt {
+                    let row = Vec4::new(leg.start.x, leg.start.y, leg.along.x, leg.along.y);
+                    let other = segment_distance(row, leg.length, centre);
+                    assert!(
+                        named <= other + 0.01,
+                        "{at}: named {named} m, another leg {other} m"
+                    );
+                }
+                checked += 1;
+            }
+        }
+        assert!(checked >= 50, "only {checked} texels checked");
     }
 
     #[test]
