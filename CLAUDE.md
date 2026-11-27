@@ -294,6 +294,9 @@ asset from, and follow its `AGENTS.md` for where generated files go.
   step-by-step recipes ("How to add a static site model / hangar prop / artifact /
   creature / terrain feature / shader / gameplay event"). Read the relevant recipe
   before adding such content, and keep it in sync with architectural changes.
+- `arch-readme-detailed.md` — each subsystem's code paths end to end, with
+  mermaid diagrams, constants and the why behind each design (cited to comments,
+  tests and commits). Keep it in sync with the code paths it describes.
 - `doc/world-reference.md` — every system's behaviour, numbers and asset
   pipelines (indexed under World reference above).
 - `README.md` — per-OS system dependencies (ALSA etc.) and troubleshooting.

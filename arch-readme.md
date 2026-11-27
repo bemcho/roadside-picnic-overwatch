@@ -4,6 +4,8 @@ This document is the bird's-eye map of the codebase: what owns what, which
 systems run when, how data reaches the player, and where to make a safe change.
 For contributor rules, read [`CLAUDE.md`](./CLAUDE.md) as well; for each
 system's details and asset recipes, [`doc/world-reference.md`](./doc/world-reference.md).
+For each code path end to end, with diagrams and the reasons behind each design,
+read [`arch-readme-detailed.md`](./arch-readme-detailed.md).
 
 ## Project shape
 
