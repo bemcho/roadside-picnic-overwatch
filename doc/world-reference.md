@@ -127,7 +127,8 @@ the stalker stands still.
   the road mask texture holds gravel (R), tire ruts (G),
   asphalt (B) and the old, broken share of that asphalt (A, `Surface::Asphalt`
   only: New Harmont's streets and plaza keep A = 0), and `terrain.wesl` paints
-  smooth weathered tar from B and the old asphalt (see Old roads) from A.
+  smooth weathered tar from B and the old asphalt (see Old roads) from A;
+  inside the Zone that asphalt gives way to the retired road kit.
   The same network keeps vegetation off the lanes and paints a world-space
   gravel and tire-rut mask independent of terrain LOD. Heights are sampled
   through the `Terrain` resource (`Terrain::height_at`) — never hardcode ground heights
@@ -666,6 +667,48 @@ the stalker stands still.
     levels) a 12-step ray march through the grain (1 cm) and crack (3 cm) depths shifts
     where the maps are read, so stones and cracks show depth; farther out one
     step on the grain height.
+  - *The Zone's old road:* from `OLD_ROAD_FROM` (20 m) inside the Perimeter
+    (x < `PERIMETER_X` - 20) the asphalt degrades over 15 m into the retired
+    road kit (`OLD_ROAD_FULL`, 35 m), only on `Surface::Asphalt` legs and only
+    as a texture. The kit (24 scanned slabs, once `old_road.rs`) is baked top
+    down by `tools/bake_road_kit.py` into one road-aligned strip,
+    17.87 m across and 60.28 m along (`OLD_ROAD_WIDTH`, `OLD_ROAD_PERIOD`),
+    at its native 61 px/m (1092 x 3684 px, the ends blended so copies tile):
+    `assets/textures/terrain/old_road_{albedo,normal,height}.ktx2` (BC7 sRGB,
+    BC5, BC4; bindings 117-119). Gaps between the slabs (albedo alpha 0, a
+    fifth of the strip) are potholes: they show the bare ground, shaded down
+    toward their floor.
+    - *Frame:* `RoadNetwork::leg_frame` gives the shader an R16Uint image on
+      the mask grid naming the nearest asphalt leg (binding 120) and a table
+      of each leg's start, direction, length and distance along its route
+      (binding 121). The shader takes that leg or a route neighbour, whichever
+      is nearer, so the strip runs on unbroken along a route; within
+      `OLD_ROAD_BEND` (1.5 m) of a bend's bisector the two legs' frames blend.
+    - *Wear:* in the band a two-octave noise (`OLD_ROAD_PATCH`, 3 m) lets kit
+      patches in where it lies under the wear, low spots of the kit (potholes,
+      cracks) first, the slabs last; today's crack decals fade out as the kit
+      comes in. The band's ends and the strip's size reach the shader as one
+      uniform (binding 122).
+    - *Close up:* under 16 mm per pixel (`OLD_ROAD_TEXEL`, the kit's own texel)
+      today's photo grain modulates the kit's colour and normal, and under
+      0.05 m per pixel (`OLD_ROAD_NEAR`) one parallax step through the kit's
+      height (`OLD_ROAD_RELIEF`, 0.12 m of the bake's 1.16 m) shifts where it
+      is read. Farther out the strip's mips alone.
+
+    Rebake (headless Blender, about 2.5 min with OptiX; the straightened
+    pieces from the unused-assets zip, their JPEG originals from the
+    workspace; the PNGs go to `--sources`):
+
+    ```bash
+    "$BLENDER" -b --factory-startup --python-exit-code 1 --python tools/bake_road_kit.py -- \
+      ~/Projects/agentic/RoadSide-Picnic/archived/roadside-picnic-unused-assets-2026-11-22.zip \
+      ~/Projects/agentic/RoadSide-Picnic/models/road/uhd assets/textures/terrain \
+      --sources ~/Projects/agentic/RoadSide-Picnic/textures/old-road
+    ```
+
+    It prints the strip's width, period and depth; copy them into
+    `terrain_material.rs` and `terrain.wesl`. Its helpers are tested by
+    `python3 -m pytest tools/test_bake_road_kit.py -q`.
 - **Marsh props** (`src/world/marsh.rs`): dead trees, stumps, logs, fungus,
   moss, rocks, mounds and debris from the swamp kit (`assets/models/swamp/`)
   are scattered over the marsh; trees, stumps, logs and mounds may stand in

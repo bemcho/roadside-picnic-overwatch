@@ -71,7 +71,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Section | Code |
 |---|---|
 | Tactical view (camera, zoom, cutaway, tooltips, fog of war, map, orders, locator ring) | `player/{camera,orders,path,route}.rs`, `base/cutaway.rs`, `world/{shroud,places}.rs`, `ui/{tooltip,map,locator}.rs` |
-| Terrain, roads, ground LODs, terrain textures; Old roads (painted asphalt) | `world/{terrain,roads,terrain_material}.rs`, `shaders/terrain.wesl` |
+| Terrain, roads, ground LODs, terrain textures; Old roads (painted asphalt, the Zone's road kit) | `world/{terrain,roads,terrain_material}.rs`, `shaders/terrain.wesl`, `tools/bake_road_kit.py` |
 | Water | `world/{hydrology,water}.rs` |
 | Day/night and weather; Wind; Sky & lighting | `world/weather.rs`, `world/mod.rs` |
 | Ground fog and clouds | `world/ground_fog.rs`, `ground_fog/`, `shaders/ground_fog.wesl` |

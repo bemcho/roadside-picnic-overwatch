@@ -692,27 +692,41 @@ flowchart LR
     N --> H["Terrain height stack, step 2"]
     N --> M["surface_texture: RGBA8 world mask, 1.5 texels per m"]
     M --> SH["terrain.wesl: gravel, ruts, tar, old asphalt"]
+    N --> F["leg_frame: R16Uint leg index + leg table"]
+    F --> SH
 ```
 
 - **`tracks()`** (`roads.rs:279-295`) gathers `ROUTES` (`:139-217`), a drive to
   each landmark's junction (except the Quarry's and the Golden Sphere's,
   `:285`), the railway bed (`:266`) and the two `Ramp` tracks (`:291-292`).
-- **`graded_track`** (`:370-422`) takes the land's level at each vertex. A ramp
+- **`graded_track`** (`:379-431`) takes the land's level at each vertex. A ramp
   instead falls at one constant grade from its entrance (its second point) to
   its last point, with a 24 m parabola (`CREST_LENGTH`, 1 m steps) rounding the
   break. Left sharp, "it launches a car at full throttle off the entrance"
-  (`:364-369`).
-- **`RoadNetwork::new`** (`:425-456`) makes one `Leg` per segment (start,
+  (`:373-378`).
+- **`RoadNetwork::new`** (`:434-483`) makes one `Leg` per segment (start,
   direction, length, two levels, `Surface`, box padded by the shoulder) and
-  files it in every 128 m tile its box touches. `sample_legs` (`:466-487`)
+  files it in every 128 m tile its box touches. `sample_legs` (`:493-514`)
   picks the leg with the smallest `distance / shoulder`.
 - **`Surface`** (`:73-87`): `Dirt`, `Asphalt` (the old broken roads), `Street`
   (New Harmont), `Ballast` (the rail bed), `Ramp` (a pit's haul road), each
   with its bed half-width and shoulder.
-- **The mask** (`surface_texture`, `:489-527`) is one world-space `Rgba8Unorm`
+- **The mask** (`surface_texture`, `:545-561`) is one world-space `Rgba8Unorm`
   image over the network's bounds; town plaza texels are forced to tar
-  (`:507-510`). "A world-space mask keeps the same road width across coarse and
-  fine terrain tiles" (`:490`).
+  (`:543-546`). "A world-space mask keeps the same road width across coarse and
+  fine terrain tiles" (`:516-517`). `mask_grid` (`:518`) and `each_texel` (`:525`)
+  give the mask and the leg frame one grid (`MASK_TEXELS_PER_METRE`, 1.5).
+- **The leg frame** (`leg_frame`, `:568`) lays the Zone's old road kit along
+  the roads. Every `Asphalt` leg is also listed in `asphalt` (`:319`), with its
+  `route` distance from the start of its track (`:303`) and `id`, 1 + its row
+  (`:305`; 0 is no leg). It returns an `R16Uint` image naming the nearest
+  asphalt leg within its shoulder per mask texel, and an `Rgba32Float` table,
+  2 x N texels: (start, direction) and (length, route). The shader compares the
+  texel's leg with its route neighbours (`continues`: the next leg's route is
+  this one's plus its length) so the strip's along coordinate runs on unbroken
+  across a bend. Tests: `leg_frame_marks_asphalt_and_nothing_else`,
+  `leg_route_distance_is_continuous_across_a_bend`,
+  `leg_index_names_the_nearer_leg_at_a_fork`.
 
 | Surface | R gravel | G ruts | B tar | A old asphalt |
 |---|---|---|---|---|
@@ -728,10 +742,14 @@ different end levels make the nearest leg win abruptly; prefer a turnout.
 ### 5.8 The terrain shader
 
 `TerrainMaterial` is `ExtendedMaterial<StandardMaterial, GroundLayers>`
-(`terrain_material.rs:17-52`). Bindings: grass maps 100/102/103 (101 the shared
+(`terrain_material.rs:27-74`). Bindings: grass maps 100/102/103 (101 the shared
 sampler), earth 104-106, the road mask 107, its bounds 108, the fog settings
-109, asphalt 110-113, rock 114-116. The base material has `fog_enabled: false`
-(`:73-74`): the shader applies distance fog itself.
+109, asphalt 110-113, rock 114-116, the old road kit's albedo, normal and
+height 117-119, the leg index 120 (`u_int`), the leg table 121 (unfilterable
+float) and the old road band 122 (`old_road_band`, `terrain_material.rs:130`:
+where the band starts and ends in x, the strip's period and width). The base
+material has `fog_enabled: false`
+(`:96-97`): the shader applies distance fog itself.
 
 ```mermaid
 flowchart TD
@@ -747,39 +765,51 @@ flowchart TD
     AL --> AR
     AR --> RM["ash, then road mask: gravel, ruts, tar"]
     RM --> OA["old asphalt: grain, cracks, 12-step relief march"]
+    OA -->|"Zone, 20 to 35 m in"| OK["old road kit: leg frame, strip, staged wear"]
+    OK --> WT
     OA --> WT["wetness, alpine tint, snow, variation"]
     WT --> PBR["roughness, AO, normals"]
     PBR --> LT["PBR lighting"]
     LT --> FG["distance fog times the low-ground mask"]
 ```
 
-The fragment (`terrain.wesl:317-455`):
+The fragment (`terrain.wesl:519-665`):
 
-1. **Slope.** A facet normal from screen derivatives (`:329-332`) decides
-   `steep` (`:333`); the projection normal blends toward the facet by `steep`
-   but keeps the smooth heading (`:334-338`). Lighting keeps the smooth normal:
-   "lit by the facets, the ground would show its triangles" (`:327-328`).
-2. **Rock** (`rock_layer`, `:342-344`) only where steep, gated on the smooth
+1. **Slope.** A facet normal from screen derivatives (`:531-534`) decides
+   `steep` (`:535`); the projection normal blends toward the facet by `steep`
+   but keeps the smooth heading (`:536-540`). Lighting keeps the smooth normal:
+   "lit by the facets, the ground would show its triangles" (`:529-530`).
+2. **Rock** (`rock_layer`, `:544-546`) only where steep, gated on the smooth
    slope: "a facet's own slope would be sharper but flips triangle by triangle
-   on rough hillsides, a checkerboard of rock" (`:62-64`). Triplanar so quarry
-   walls do not stretch (`:287`).
-3. **Grass and earth** (`:346-377`) with patch-noise warp, two rotations, a
+   on rough hillsides, a checkerboard of rock" (`:84-86`). Triplanar so quarry
+   walls do not stretch (`:489`).
+3. **Grass and earth** (`:548-579`) with patch-noise warp, two rotations, a
    parallax slide and a moss-to-stone mix by exposure.
-4. **Roads** (`:380-396`): the world mask at the fragment's xz; old asphalt is
-   a stochastic grain, crack decals and a 12-step relief march.
-5. **Climate** (`:397-403`): wetness darkening, alpine tint from 32 to 100 m,
+4. **Roads** (`:582-606`): the world mask at the fragment's xz; old asphalt is
+   a stochastic grain, crack decals and a 12-step relief march. In the Zone
+   `old_road_wear` (`terrain.wesl:269`) rises from 0 at 20 m inside the
+   Perimeter to 1 at 35 m, and `old_road` (`:409`) paints the retired road
+   kit there: `old_road_legs` (`:307`) picks the texel's leg or a route
+   neighbour and blends their frames within `OLD_ROAD_BEND` of a bend,
+   `strip_uv` (`:357`) maps across and along the road into the strip (with
+   explicit gradients, so the modulo seam keeps its mip), `kit_hit` (`:395`)
+   takes one parallax step near the camera, and two-octave noise under the
+   wear lets the kit in, low spots first. Its gaps show the bare ground;
+   today's grain modulates it only under 16 mm per pixel. One parallax step
+   instead of a march: it looked the same in the playtest for one fetch.
+5. **Climate** (`:607-613`): wetness darkening, alpine tint from 32 to 100 m,
    snow above `112 + noise x 29 + (1 - n.y) x 72`.
-6. **Surface** (`:406-432`): roughness, AO and normals mixed the same way;
+6. **Surface** (`:616-642`): roughness, AO and normals mixed the same way;
    roads flatten the ground normal.
-7. **Fog** (`:434-453`): Bevy's `apply_fog` mixed in by
+7. **Fog** (`:644-663`): Bevy's `apply_fog` mixed in by
    `low_ground = 1 - smoothstep(fog_top - 0.7 x height, fog_top, p.y)`.
    `fog_top`/`fog_height` come from `follow_terrain_fog` (`ground_fog.rs:138-153`),
-   written only on a change of 0.25 or more (`terrain_material.rs:108-112`).
+   written only on a change of 0.25 or more (`terrain_material.rs:148-152`).
 
 **Why a masked distance fog.** It rolls the low ground into a cloud shelf while
 the ridges stay crisp; re-enabling the material's own fog bypasses the mask and
 washes the ridges out. `map_mean` reads each map's 1x1 mip, so "no per-map
-constant has to be kept in step with the bake" (`:165-167`).
+constant has to be kept in step with the bake" (`:187-189`).
 
 ### 5.9 The pit roads and the cut scans
 

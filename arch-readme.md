@@ -318,7 +318,10 @@ every placement passes the road, water, yard, and site-clearance filters.
    tar and, where A is set, the old broken asphalt.
 
 Each route has a `Surface`: dirt, `Asphalt` (the old roads, painted by the
-terrain shader from the A mask and four asphalt maps), `Street` (New
+terrain shader from the A mask and four asphalt maps; from 20 m inside the
+Zone they degrade over 15 m into the retired road kit, baked into one
+road-aligned strip by `tools/bake_road_kit.py` and laid along each road
+through `RoadNetwork::leg_frame`), `Street` (New
 Harmont's smooth streets, B only: no A, no cracks) or `Ramp` (a pit's haul
 road, the quarry's or the Golden Sphere's: a narrow dirt bed, graded by `graded_track` at one constant grade from the
 entrance of the track's drive, its second point, to its end (the first leg, the drive,
