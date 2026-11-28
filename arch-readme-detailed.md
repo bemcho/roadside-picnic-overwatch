@@ -1420,10 +1420,15 @@ The reasons, where the code gives them:
 
 **Render layers.** The Sphere's mesh child alone is on `SPHERE_LAYER` (1,
 `reflection.rs:21`): "out of its own probe's sight" (`golden_sphere.rs:197`). The
-player's camera (`player/mod.rs:271`) and the Sun (`world/mod.rs:454`, "so it
-casts its shadow") see layers 0 and 1; the probe cameras see 0 only, so the
-probe renders the crater, the pool and the stalker but never the Sphere from
-inside. This is the reason camera lookups must filter `PlayerCamera`
+player's camera (`player/mod.rs:271`) sees layers 0 and 1; the probe cameras
+see 0 only, so the probe renders the crater, the pool and the stalker but never
+the Sphere from inside. The shown Sphere is a `NotShadowCaster`; a twin of its
+medium model on `SPHERE_SHADOW_LAYER` (2, `reflection.rs:22`), with a plain
+material, casts its shadow, and the Sun sees layers 0 and 2. No camera draws
+layer 2. Bevy culls a directional light's casters by the light's layers, not
+the camera's, and builds cascades for every active camera, so the UHD scan's
+1.97 M triangles filled every camera's cascades, the probe faces' included
+(they sit inside it). This is the reason camera lookups must filter `PlayerCamera`
 (`pose_wildlife`, `stream_wall_view` did not; section 12.1).
 
 **The UHD scan (exceptional GPUs).** `uhd.rs` keeps the medium mesh and paint in
@@ -2304,7 +2309,7 @@ so the next change in the area can fix it.
 | **Ramp** | `Surface::Ramp`, a pit's haul road at a constant grade |
 | **Relief** | A 64 x 64 height grid sampled from a diorama scan |
 | **Shroud** | The fog of war over unsurveyed ground (V lifts it) |
-| **Sphere layer** | `SPHERE_LAYER` (1): the render layer only the Golden Sphere is on, seen by the player's camera and the Sun, not by the probe |
+| **Sphere layer** | `SPHERE_LAYER` (1): the render layer only the Golden Sphere is on, seen by the player's camera, not by the probe; its shadow twin is on `SPHERE_SHADOW_LAYER` (2), seen by the Sun alone |
 | **Stand-in** | A site's `low/` model, drawn everywhere the full scan is not; also the capsule or box the Golden Sphere's mirror traces for the stalker or a vehicle on modest GPUs |
 | **Tile** | A 128 m square of terrain, the unit of scenery and collider streaming |
 | **The workspace** | `~/Projects/agentic/RoadSide-Picnic`, the asset sources |

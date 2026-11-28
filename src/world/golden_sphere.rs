@@ -12,6 +12,7 @@ use bevy::camera::Exposure;
 use bevy::camera::visibility::{NoAutoAabb, RenderLayers};
 use bevy::diagnostic::FrameCount;
 use bevy::gltf::GltfMaterial;
+use bevy::light::NotShadowCaster;
 use bevy::pbr::gltf::standard_material_from_gltf_material;
 use bevy::prelude::*;
 
@@ -31,10 +32,10 @@ use mirror::{
     CAR_PAINT, CARRIER_PAINT, Hull, Mirror, MirrorMaterial, REACH, Stalker, stand_in_light,
     stand_ins,
 };
-pub(crate) use reflection::SPHERE_LAYER;
 use reflection::{
     ProbeFace, ReflectionProbe, spawn_reflection_probe, steer_reflection_probe, watch,
 };
+pub(crate) use reflection::{SPHERE_LAYER, SPHERE_SHADOW_LAYER};
 use uhd::{SphereSkin, on_exceptional_gpu, stream_uhd_sphere};
 
 /// The Sphere's diameter in metres (the user asked for 1 m).
@@ -187,6 +188,7 @@ fn spawn_golden_sphere(
     terrain: Res<Terrain>,
     paints: Res<Assets<GltfMaterial>>,
     mut mirrors: ResMut<Assets<MirrorMaterial>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     probe: Option<Res<ReflectionProbe>>,
 ) {
     let pool = pool_centre(&terrain);
@@ -206,6 +208,14 @@ fn spawn_golden_sphere(
             WorldRoot,
         ))
         .with_child((
+            Name::new("Golden Sphere shadow"),
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(materials.add(StandardMaterial::default())),
+            RenderLayers::layer(SPHERE_SHADOW_LAYER),
+            at,
+            detail_range(300.0, 30.0),
+        ))
+        .with_child((
             SphereSkin::medium(mesh.clone(), &gold, at),
             Mesh3d(mesh),
             MeshMaterial3d(mirrors.add(MirrorMaterial {
@@ -214,6 +224,8 @@ fn spawn_golden_sphere(
             })),
             // Out of its own probe's sight.
             RenderLayers::layer(SPHERE_LAYER),
+            // Its shadow comes from the shadow child above.
+            NotShadowCaster,
             at,
             detail_range(300.0, 30.0),
         ));

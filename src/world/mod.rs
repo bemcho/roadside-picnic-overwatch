@@ -43,7 +43,7 @@ pub use collision::{
 };
 pub(crate) use cordon::in_zone;
 pub(crate) use cordon::{Boom, InstitutePass, PATROL_RADIUS, PATROL_TURNS};
-pub(crate) use golden_sphere::SPHERE_LAYER;
+pub(crate) use golden_sphere::{SPHERE_LAYER, SPHERE_SHADOW_LAYER};
 pub(crate) use ground_fog::{CAMERA_FAR, camera_distance_fog, camera_fog};
 #[cfg(test)]
 pub(crate) use hydrology::SWAMP;
@@ -456,8 +456,8 @@ fn spawn_sky(mut commands: Commands, mut mediums: ResMut<Assets<ScatteringMedium
             let hour = WorldClock::default().hour();
             world.spawn((
                 Sun,
-                // The Golden Sphere's layer too, so it casts its shadow.
-                RenderLayers::from_layers(&[0, SPHERE_LAYER]),
+                // The Golden Sphere's shadow caster's layer too.
+                RenderLayers::from_layers(&[0, SPHERE_SHADOW_LAYER]),
                 DirectionalLight {
                     illuminance: lux::RAW_SUNLIGHT,
                     shadow_maps_enabled: true,

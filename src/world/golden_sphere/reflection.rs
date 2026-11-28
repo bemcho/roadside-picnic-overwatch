@@ -19,6 +19,11 @@ use crate::states::AppState;
 /// The render layer only the Sphere is on: the player's camera sees it, its
 /// own probe does not.
 pub(crate) const SPHERE_LAYER: usize = 1;
+/// The Sphere's shadow caster, its medium model, on a layer no camera draws:
+/// only the sun's shadows see it. The shown Sphere casts none, since the UHD
+/// scan's two million triangles would fill every camera's cascades, the six
+/// probe faces' included (they sit inside it).
+pub(crate) const SPHERE_SHADOW_LAYER: usize = 2;
 /// A face's side in pixels on strong and exceptional GPUs.
 const STRONG_FACE: u32 = 256;
 const EXCEPTIONAL_FACE: u32 = 1024;

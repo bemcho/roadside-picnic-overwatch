@@ -549,9 +549,10 @@ floor. The numbers are in `doc/world-reference.md`.
   all six on exceptional ones, only while someone is within 15 m. Exceptional
   GPUs also stream the Sphere's UHD scan through `GpuScans` (`uhd.rs`) and swap
   it for the medium model while the stalker is near and the scan is resident.
-- **The Sphere is alone on `SPHERE_LAYER`.** The player's camera and the Sun see
-  it; the probe cameras do not, so the probe never renders the Sphere it is
-  for. See pitfall 28.
+- **The Sphere is alone on `SPHERE_LAYER`.** The player's camera sees it; the
+  probe cameras do not, so the probe never renders the Sphere it is for. Its
+  shadow comes from a medium-model twin on `SPHERE_SHADOW_LAYER`, which only
+  the Sun sees, so the UHD scan never fills the cascades. See pitfall 28.
 
 ## Player, camera, and vehicle
 
@@ -1001,8 +1002,9 @@ Important paths:
     `single()`: `stream_wall_view` would draw the wall around them, and
     `pose_wildlife` would pose every creature instead of skipping the far
     ones. Both now filter `PlayerCamera`. The probe's cameras see render layer 0
-    only; the Sphere sits alone on `SPHERE_LAYER` (1), and the player's camera
-    and the Sun see layers 0 and 1. A camera sees the Sphere only if its
+    only; the Sphere sits alone on `SPHERE_LAYER` (1), which the player's
+    camera sees, and casts no shadow: a medium-model twin on
+    `SPHERE_SHADOW_LAYER` (2), seen by the Sun alone, casts it. A camera sees the Sphere only if its
     `RenderLayers` include 1; the default (layer 0) does not. Each active
     camera is a full view with its own light clustering and shadow cascades
     (a strong GPU renders one probe face a frame and an exceptional one six), so

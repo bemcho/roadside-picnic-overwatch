@@ -737,8 +737,13 @@ the stalker stands still.
     would cull the spikes. `NoFrustumCulling` would not do: the fog of war culls
     by `Aabb`.
   - *Render layers:* only the Sphere's mesh is on `SPHERE_LAYER` (1). The player's
-    camera and the Sun see layers 0 and 1 (the Sphere casts a shadow); the probe
-    cameras see layer 0 only, so the probe never sees the Sphere it renders for.
+    camera sees layers 0 and 1; the probe cameras see layer 0 only, so the probe
+    never sees the Sphere it renders for. The Sphere's shadow comes from a twin
+    of its medium model (4,852 triangles) on `SPHERE_SHADOW_LAYER` (2), which no
+    camera draws and only the Sun sees (layers 0 and 2); the shown Sphere is a
+    `NotShadowCaster`. Bevy gives every active camera its own sun cascades, and
+    the UHD scan's 1.97 M triangles in all of them, the probe faces' included,
+    cost a 2060 from 10 to 17 FPS with every face rendering.
     The pool is on layer 0 and shows in the probe. Anything that looks for the
     player's view must filter `PlayerCamera`, not `Camera3d`: the probe adds six
     more cameras. `pose_wildlife` and `stream_wall_view` did take every `Camera3d`.
