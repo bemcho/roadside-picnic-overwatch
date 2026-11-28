@@ -110,7 +110,7 @@ flowchart LR
 | Vehicle | `src/player/vehicle.rs`, `vehicle/contact.rs` | Throttle/steer, traction, four-tire terrain fit, wheels, spotlight |
 | World | `src/world/mod.rs` | World plugin, terrain/material setup, sky, fog, spawn and teardown |
 | Terrain | `src/world/terrain.rs`, `hydrology.rs`, `roads.rs` | Deterministic heights, water, road grading and masks |
-| Quarry ramp | `src/world/quarry_ramp.rs`, `ramp_cut.rs`, `assets/shaders/ramp_cut.wesl` | The haul roads down the Quarry rim's pit and the Golden Sphere's crater: per cut scan (`CutScan`), the pillars dropped from its cut corridor (`CutScan::pillars`), and its cut image and `RampCutMaterial` that hide the scan's stone over the road |
+| Quarry ramp | `src/world/quarry_ramp.rs`, `ramp_cut.rs`, `assets/shaders/ramp_cut.wesl` | The haul roads down the Quarry rim's pit and the Golden Sphere's crater: per cut scan (`CutScan`), the pillars dropped from its cut corridor (`CutScan::pillars`), and its cut image and `RampCutMaterial` that hide the scan's stone over the road (and, in the core, over its dark generated backdrop) |
 | Golden Sphere | `src/world/golden_sphere.rs`, `golden_sphere/{ferrofluid,mirror,reflection,uhd}.rs`, `assets/shaders/{ferrofluid,golden_sphere}.wesl` | `GoldenSpherePlugin`: the hovering Sphere and its `HoverClock`, the ferrofluid pool (vertex-shader spikes, `Collider`), the six-camera reflection probe (strong and exceptional GPUs), ray-traced stand-ins (modest GPUs), the streamed UHD scan (exceptional GPUs), `SPHERE_LAYER` |
 | Day/night and weather | `src/world/weather.rs` | `WorldClock`, daily `Weather` (temperature, humidity, fog tendency), sun/moon, exposure |
 | Ground fog | `src/world/ground_fog.rs`, `ground_fog/{field,render}.rs` | Fog field texture, terrain-hugging raymarch pass with the clouds and the shroud's smoke, regional distance fog |
@@ -549,7 +549,9 @@ floor. The numbers are in `doc/world-reference.md`.
   vehicles (boxes) that `gather_stand_ins` hands it. Strong and exceptional ones
   get the probe: six cameras at the Sphere (`reflection.rs`), rendering cube
   faces that the Sphere and the pool sample, one face a frame (256 px on strong
-  GPUs, 1024 px on exceptional ones), only while someone is within 15 m. Exceptional
+  GPUs, 1024 px on exceptional ones), only while someone is within 15 m. The faces
+  share the player's camera's exposure and sky light (`light_probe_faces`), or the
+  shaded crater renders black in them. Exceptional
   GPUs also stream the Sphere's UHD scan through `GpuScans` (`uhd.rs`) and swap
   it for the medium model while the stalker is near and the scan is resident.
 - **The Sphere is alone on `SPHERE_LAYER`.** The player's camera sees it; the
@@ -684,7 +686,11 @@ point, the Sphere's junction and the core's entrance. It is the second `Surface:
 track, the only road to the Sphere (the Chapter 4 route ends at the quarry).
 `CutScan::Core.pillars()` clears the core scan's collision along it, and its first
 leg, on the Quarry rim's floor, is in the quarry's cut corridor too: a cut scan's
-corridor is every ramp leg that reaches its footprint.
+corridor is every ramp leg that reaches its footprint. The core's corridor also takes
+in the scan's dark backdrop, the near-black face its generation painted a Sphere on:
+`tools/trace_crater_backdrop.py` traces its outline from the workspace scan into
+`pillars/golden_crater_backdrop.rs` (model x, z), and `CutScan::past_cut_corridor`
+takes the lesser of the road's distance and the signed distance past that outline.
 
 The cordon walls' posts are not generated: `cordon::WALL_PILLAR` holds two hand-set
 discs every 0.77 m along the wall, `WALL_DISC` sized to the baked box's half thickness

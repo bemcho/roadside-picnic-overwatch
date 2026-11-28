@@ -452,11 +452,13 @@ the stalker stands still.
     their cut corridor. A scan's corridor is every ramp leg whose box comes within
     two shoulders (18 m: the leg's own and the cut image's) of its footprint box
     (so the quarry's takes in the crater road's first leg, 23 m of it in the box
-    around the scan, on the pit's floor).
+    around the scan, on the pit's floor). The core's corridor also takes in the
+    scan's dark backdrop (see *Cut and collision* under the crater road).
     `CutScan::pillars()` keeps 1,658 of the
-    quarry's 3,186 pillars (the crater road's leg clears none more) and 1,708 of the
-    core's 4,034 (2,326 dropped, 58%), the one rule `CutScan::in_cut_corridor` shares
-    with the cut's texels (within 9 m of a centerline); filtered once at first use
+    quarry's 3,186 pillars (the crater road's leg clears none more) and 1,653 of the
+    core's 4,034 (2,381 dropped, 59%), the one rule `CutScan::in_cut_corridor` shares
+    with the cut's texels (within 9 m of a centerline, or inside the core's
+    backdrop); filtered once at first use
     from the same points. `Landmark::solids` serves it, so the stalker, the car,
     the carrier and the router meet no invisible wall on either road, its banks or
     the rest of the cut. Tests run per scan: `no_{quarry,core}_pillar_stands_on_the_ramp`,
@@ -536,7 +538,8 @@ the stalker stands still.
     model (-0.0172, -0.0138) of the core, world (-1229.3, 86.1). The real Sphere
     hovers over a pool on the floor 14.7 m from that glow (see **Golden Sphere**);
     the glow is still painted in the scan, and "the Sphere" in the road's checks
-    below means this glow (`sites::SPHERE_SMUDGE`).
+    below means this glow (`sites::SPHERE_SMUDGE`). The cut hides it with the
+    backdrop it is painted on (see *Cut and collision*).
     - *Track:* the quarry ramp's last point (-1063.6, 101.7), at -48.6 m on the Quarry
       rim's floor, `GOLDEN_SPHERE` (-1152, 84), the core's `entrance()` (-1161.8, 84)
       and the baked points under the core's pose, the first on the front edge
@@ -584,10 +587,30 @@ the stalker stands still.
       fading the cut out past 9 m would hide stone whose pillars still block
       (only those inside the corridor are dropped) and open the scan's hollow
       shell behind its face. On the floor the cut's edge on the Sphere's wall
-      follows the ground in a smooth curve beside the road's end. Click orders reach the crater's
+      follows the ground in a smooth curve beside the road's end. The cut also
+      takes in the scan's backdrop: the smooth, near-black face at the crater's
+      foot (907 m2, 40 corners) that carries the generation's own painted Sphere.
+      Where it stood above the drawn ground it showed as a black, bottle-shaped flat
+      beside the real Sphere, and the Sphere and the pool mirrored it as a dull
+      dark patch. `tools/trace_crater_backdrop.py` traces it once from the
+      workspace scan, which keeps the source JPEG texture (the runtime copy's is
+      KTX2), into `src/world/pillars/golden_crater_backdrop.rs` (model x, z):
+      every 0.5 m column whose top is dark (luminance under 0.16) and smooth,
+      joined to the painted Sphere, with the empty and dark cells up to 2 m into
+      the scan's hole beside it, where the face's edge hangs down as a skirt.
+      `CutScan::past_cut_corridor` for the core is the lesser of the road's
+      distance and the signed distance past that outline, so the cut and the
+      dropped pillars cover it alike and the terrain shows there instead:
+      ```
+      python3 tools/trace_crater_backdrop.py \
+          ~/Projects/agentic/RoadSide-Picnic/models/landmarks/uhd/landmark-core.glb \
+          src/world/pillars/golden_crater_backdrop.rs
+      ```
+      Click orders reach the crater's
       floor through both scans' cleared collision along the 799 m of road
       (`click_orders_reach_the_crater_floor`; see *Driving and orders*).
     - *Checks:* `the_crater_ramp_starts_at_the_quarry_ramps_end`,
+      `the_crater_cut_takes_in_the_painted_backdrop`, `past_polygon_is_a_signed_distance`,
       `the_crater_ramp_ends_beside_the_sphere` (ground below -95 m, 5.1 to 15 m from the
       Sphere's centre, not under the bed), `the_crater_ramp_laps_keep_apart` (18 m),
       `the_crater_ramp_keeps_clear_of_other_tracks` (18 m, after its first 30 m),
@@ -724,7 +747,11 @@ the stalker stands still.
     the gold shows in the black metal; elsewhere it samples the faces along its own
     reflection. The cameras are cleared transparent, so where they drew nothing
     (sky) the environment map's sky stays. They copy the player's camera's
-    `Exposure` each frame (EV 9 at night to 13 by day, less under cloud), HDR, no tonemapping or deband and no MSAA, no atmosphere or fog, and
+    `Exposure` each frame (EV 9 at night to 13 by day, less under cloud) and share
+    its sky light (`light_probe_faces` copies the player's `EnvironmentMapLight`
+    once, when Bevy has made it; Bevy refilters its maps from the sky every frame).
+    Without it the shaded crater, lit by the sky alone, rendered black in the faces
+    and the Sphere's shaded half mirrored black. HDR, no tonemapping or deband and no MSAA, no atmosphere or fog, and
     `ClusterConfig::Single` (one cluster for the whole view).
   - *Exceptional GPUs:* the faces are 1024 x 1024, rendered one a frame in turn
     with someone within 15 m and one every 10 frames otherwise, as on Strong
@@ -781,13 +808,14 @@ the stalker stands still.
     (`mirror.rs`); `the_probe_renders_one_face_a_frame_on_strong_cards`,
     `the_probe_renders_every_face_on_exceptional_cards`,
     `the_probe_rests_when_nobody_is_near_or_on_modest_cards`,
-    `re_entering_the_zone_keeps_six_probe_cameras` (`reflection.rs`);
+    `re_entering_the_zone_keeps_six_probe_cameras`,
+    `the_faces_share_the_players_sky_light` (`reflection.rs`);
     `the_uhd_sphere_shows_only_on_exceptional_cards_near_and_resident`,
     `an_evicted_uhd_sphere_falls_back_to_medium` (`uhd.rs`).
-  - *Open:* the golden smudge painted into the core scan's 8K texture (model
-    (-0.0172, -0.0138)) still shows 14.7 m from the real Sphere; removing it
-    needs the scan's texture edited and recompressed
-    (`~/Projects/agentic/roadside-picnic-overwatch/reviews/2026-11-27-golden-crater-ramp-followups.md`).
+  - *Painted Sphere:* the golden smudge painted into the core scan's 8K texture
+    (model (-0.0172, -0.0138)), 14.7 m from the real Sphere, no longer shows: the
+    crater's cut hides the dark backdrop it is painted on (see **Quarry ramp**,
+    *Cut and collision*), with the texture untouched.
 - **New Harmont** (`src/world/town.rs`): buildings cut from the Harmont town
   scan (`assets/models/harmont/`) line a street grid around a paved downtown
   plaza on one level town pad; each shows its full scan near the view and a

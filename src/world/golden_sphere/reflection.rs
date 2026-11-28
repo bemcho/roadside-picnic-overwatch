@@ -14,6 +14,7 @@ use bevy::render::render_resource::TextureFormat;
 use bevy::render::view::Msaa;
 
 use crate::assets::gpu_scans::{GpuTier, TierLevel};
+use crate::player::PlayerCamera;
 use crate::states::AppState;
 
 /// The render layer only the Sphere is on: the player's camera sees it, its
@@ -78,6 +79,24 @@ pub(super) struct ReflectionProbe {
 /// One of the probe's cameras, rendering face `0`.
 #[derive(Component)]
 pub(super) struct ProbeFace(pub usize);
+
+/// Lights the probe's faces with the sky's light, as the player's camera is:
+/// without it the ground and walls in shade, lit by the sky alone, render
+/// black, and the Sphere and the pool mirror them so. The faces share the
+/// player's light, whose maps Bevy refilters on the GPU every frame from the
+/// sky, so it is copied once, when Bevy has made it and the faces lack it.
+pub(super) fn light_probe_faces(
+    sky: Query<&EnvironmentMapLight, (With<PlayerCamera>, Without<ProbeFace>)>,
+    faces: Query<Entity, (With<ProbeFace>, Without<EnvironmentMapLight>)>,
+    mut commands: Commands,
+) {
+    let Ok(light) = sky.single() else {
+        return;
+    };
+    for face in &faces {
+        commands.entity(face).insert(light.clone());
+    }
+}
 
 /// The faces to render this `frame`: none on modest GPUs or unseen, one now
 /// and then while resting, and one a frame in turn while someone is close.
@@ -234,6 +253,34 @@ mod tests {
             "a car parked by the Sphere while the player looks elsewhere"
         );
         assert_eq!(watch(None, true), Watch::Unseen);
+    }
+
+    #[test]
+    fn the_faces_share_the_players_sky_light() {
+        let mut world = World::new();
+        let diffuse_map = Handle::<Image>::default();
+        world.spawn((
+            PlayerCamera,
+            EnvironmentMapLight {
+                diffuse_map: diffuse_map.clone(),
+                intensity: 1234.0,
+                ..default()
+            },
+        ));
+        let faces = [
+            world.spawn(ProbeFace(0)).id(),
+            world.spawn(ProbeFace(1)).id(),
+        ];
+        world
+            .run_system_once(light_probe_faces)
+            .expect("the system runs");
+        for face in faces {
+            let light = world
+                .get::<EnvironmentMapLight>(face)
+                .expect("the face is lit by the sky");
+            assert_eq!(light.diffuse_map, diffuse_map);
+            assert_eq!(light.intensity, 1234.0);
+        }
     }
 
     #[test]

@@ -653,7 +653,7 @@ mod tests {
                 "the {mover}'s route from {from} takes a {grade} grade at {at}, over its {limit}"
             );
         };
-        let reaches_the_floor = |mover: &str, from: Vec2, vehicle, mobility: Mobility| {
+        let reaches_the_floor = |mover: &str, from: Vec2, vehicle, mobility: Mobility, stalled| {
             let path = route(&terrain, (&solids, &carriers), vehicle, from, floor)
                 .unwrap_or_else(|| panic!("no route for the {mover} from {from}"));
             assert_eq!(path.last(), Some(&floor), "the {mover} from {from}");
@@ -662,7 +662,14 @@ mod tests {
                 contact.is_none(),
                 "the {mover}'s route from {from} runs into stone at {contact:?}"
             );
-            keeps_to_its_grade(mover, from, &path, mobility);
+            if stalled {
+                // From where it ran into stone the mover first sets off to the
+                // nearest free spot, over whatever ground it stands on (as the
+                // stalker steps off the rim's stone below).
+                keeps_to_its_grade(mover, path[0], &path[1..], mobility);
+            } else {
+                keeps_to_its_grade(mover, from, &path, mobility);
+            }
         };
         let movers = [
             ("stalker", None, ON_FOOT),
@@ -671,12 +678,12 @@ mod tests {
         ];
         for (mover, vehicle, mobility) in movers {
             for from in [crater[1], junction, Vec2::new(-844.8, 156.0)] {
-                reaches_the_floor(mover, from, vehicle, mobility);
+                reaches_the_floor(mover, from, vehicle, mobility, false);
             }
             let planned = route(&terrain, (&early.0, &early.1), vehicle, junction, floor)
                 .unwrap_or_else(|| panic!("no route for the {mover} before the crater streams in"));
             match first_contact(&terrain, &stone, mobility.body, junction, &planned) {
-                Some(stalled) => reaches_the_floor(mover, stalled, vehicle, mobility),
+                Some(stalled) => reaches_the_floor(mover, stalled, vehicle, mobility, true),
                 None => {
                     assert_eq!(
                         planned.last(),

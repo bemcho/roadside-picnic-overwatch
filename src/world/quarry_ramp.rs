@@ -1,14 +1,18 @@
 //! The haul ramps run through the scans they cut: the Quarry rim's pit and the
 //! Golden Sphere's crater. Each cut scan's collision leaves out the pillars
 //! whose centres lie in its cut corridor, so the stalker, the car and the click
-//! router can use the road the terrain was graded for.
+//! router can use the road the terrain was graded for. The crater's corridor
+//! also takes in the dark backdrop the scan was generated with, so the terrain
+//! shows there instead of a black face with a second, painted Sphere.
 
 use std::sync::LazyLock;
 
 use bevy::prelude::*;
 
 use super::collision::Pillar;
-use super::roads::{RAMP_HALF_WIDTH, RAMP_SHOULDER};
+#[cfg(test)]
+use super::roads::RAMP_HALF_WIDTH;
+use super::roads::RAMP_SHOULDER;
 use super::sites::{self, Kind};
 
 /// A scan whose stone a haul ramp cuts.
@@ -38,6 +42,19 @@ static CORRIDORS: LazyLock<[Vec<[Vec2; 2]>; 2]> = LazyLock::new(|| {
             .filter(|[from, to]| from.min(*to).cmple(high).all() && from.max(*to).cmpge(low).all())
             .collect()
     })
+});
+
+/// The core scan's dark backdrop (a smooth, near-black face at the crater's
+/// foot with the generation's own Sphere painted on it) in model units (x, z).
+const CRATER_BACKDROP: &[Vec2] = include!("pillars/golden_crater_backdrop.rs");
+
+/// `CRATER_BACKDROP` in world xz, placed once at first use.
+static BACKDROP: LazyLock<Vec<Vec2>> = LazyLock::new(|| {
+    let (pose, _) = sites::cut_scan(CutScan::Core);
+    CRATER_BACKDROP
+        .iter()
+        .map(|at| pose.transform_point(Vec3::new(at.x, 0.0, at.y)).xz())
+        .collect()
 });
 
 /// Each cut scan's collision without the pillars whose centres lie in its cut
@@ -74,17 +91,23 @@ impl CutScan {
     }
 
     /// Whether `at` lies in the corridor whose stone the cut hides: within a
-    /// ramp's bed and its shoulder. The collision and the cut share this rule.
+    /// ramp's bed and its shoulder, and in the crater on its dark backdrop.
+    /// The collision and the cut share this rule.
     pub(super) fn in_cut_corridor(self, at: Vec2) -> bool {
-        self.on_ramp_bed(at, RAMP_SHOULDER - RAMP_HALF_WIDTH)
+        self.past_cut_corridor(at) < 0.0
     }
 
     /// How far `at` lies outside the cut corridor, negative inside it.
     pub(super) fn past_cut_corridor(self, at: Vec2) -> f32 {
-        self.distance_to_ramp(at) - RAMP_SHOULDER
+        let road = self.distance_to_ramp(at) - RAMP_SHOULDER;
+        match self {
+            Self::Quarry => road,
+            Self::Core => road.min(past_polygon(&BACKDROP, at)),
+        }
     }
 
     /// Whether a circle of `radius` at `at` overlaps a ramp's bed in the scan.
+    #[cfg(test)]
     pub(super) fn on_ramp_bed(self, at: Vec2, radius: f32) -> bool {
         self.distance_to_ramp(at) < RAMP_HALF_WIDTH + radius
     }
@@ -92,13 +115,29 @@ impl CutScan {
     fn distance_to_ramp(self, at: Vec2) -> f32 {
         CORRIDORS[self as usize]
             .iter()
-            .map(|&[from, to]| {
-                let along = to - from;
-                let t = ((at - from).dot(along) / along.length_squared()).clamp(0.0, 1.0);
-                at.distance(from + along * t)
-            })
+            .map(|&[from, to]| distance_to_segment(at, from, to))
             .fold(f32::INFINITY, f32::min)
     }
+}
+
+fn distance_to_segment(at: Vec2, from: Vec2, to: Vec2) -> f32 {
+    let along = to - from;
+    let t = ((at - from).dot(along) / along.length_squared()).clamp(0.0, 1.0);
+    at.distance(from + along * t)
+}
+
+/// How far `at` lies outside the closed `polygon`, negative inside it.
+fn past_polygon(polygon: &[Vec2], at: Vec2) -> f32 {
+    let mut inside = false;
+    let mut nearest = f32::INFINITY;
+    for (i, &to) in polygon.iter().enumerate() {
+        let from = polygon[(i + polygon.len() - 1) % polygon.len()];
+        let crosses = (from.y > at.y) != (to.y > at.y)
+            && at.x < from.x + (at.y - from.y) / (to.y - from.y) * (to.x - from.x);
+        inside ^= crosses;
+        nearest = nearest.min(distance_to_segment(at, from, to));
+    }
+    if inside { -nearest } else { nearest }
 }
 
 #[cfg(test)]
@@ -235,6 +274,31 @@ mod tests {
     #[test]
     fn the_widest_mover_walks_the_crater_ramp_unpushed() {
         assert_the_widest_mover_walks_the_ramp_unpushed(CutScan::Core);
+    }
+
+    #[test]
+    fn the_crater_cut_takes_in_the_painted_backdrop() {
+        // The generation's own Sphere is painted in the middle of the face, its
+        // nearest edge some 9 m off.
+        let (pose, _) = sites::cut_scan(CutScan::Core);
+        let painted = pose.transform_point(sites::SPHERE_SMUDGE).xz();
+        let past = CutScan::Core.past_cut_corridor(painted);
+        assert!(past < -5.0, "the painted Sphere lies {past} m past the cut");
+        assert!(CutScan::Core.in_cut_corridor(painted));
+        assert!(past_polygon(&BACKDROP, painted) < -5.0);
+    }
+
+    #[test]
+    fn past_polygon_is_a_signed_distance() {
+        let square = [
+            Vec2::ZERO,
+            Vec2::new(2.0, 0.0),
+            Vec2::new(2.0, 2.0),
+            Vec2::new(0.0, 2.0),
+        ];
+        assert_eq!(past_polygon(&square, Vec2::new(1.0, 0.5)), -0.5);
+        assert_eq!(past_polygon(&square, Vec2::new(3.0, 1.0)), 1.0);
+        assert_eq!(past_polygon(&square, Vec2::new(-1.0, 1.0)), 1.0);
     }
 
     #[test]

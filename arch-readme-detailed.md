@@ -912,11 +912,15 @@ flowchart LR
    quarry ramp ends, then the Sphere's junction and entrance, then the spiral.
 3. **Road.** Both are `Surface::Ramp` tracks, re-applied over the diorama
    ground (`terrain.rs:230-232`).
-4. **Collision.** `CORRIDORS` (`quarry_ramp.rs:27`) is every ramp leg within
-   18 m of a scan's footprint; `PILLARS` (`:45`) drops the scan's pillars within
-   9 m of a centerline (`in_cut_corridor`, `:78`); `Landmark::solids`
+4. **Collision.** `CORRIDORS` (`quarry_ramp.rs:31`) is every ramp leg within
+   18 m of a scan's footprint; `PILLARS` (`:62`) drops the scan's pillars within
+   9 m of a centerline or, in the core, inside its dark generated backdrop
+   (`in_cut_corridor`, `:96`; the outline `BACKDROP`, `:52`, is traced once by
+   `tools/trace_crater_backdrop.py` into `pillars/golden_crater_backdrop.rs`,
+   because the face stood above the drawn ground as a black flat with a second,
+   painted Sphere on it); `Landmark::solids`
    (`sites.rs:580-582`) serves those. "The collision and the cut share this
-   rule" (`quarry_ramp.rs:76-80`).
+   rule" (`quarry_ramp.rs:93-95`).
 5. **Cut image.** `prepare_ramp_cut` (OnEnter, `ramp_cut.rs:100`), chained
    before `spawn_sites` (`world/mod.rs:165`), builds a 0.5 m `Rg32Float` lattice
    per scan (`build_ramp_cut`, `:122-158`): red is `mesh_height_at - BURY`
@@ -1409,7 +1413,11 @@ The reasons, where the code gives them:
   EV 13 would mirror the night up to 16 times too dark. The cameras have no `Atmosphere` or fog, are
   cleared to `Color::NONE`, and so leave alpha 0 where nothing was drawn: the
   shaders mix the faces over the lit surface by that alpha, and the environment
-  map's sky stays where the probe saw sky.
+  map's sky stays where the probe saw sky. The faces also carry the player's
+  `EnvironmentMapLight`, copied once by `light_probe_faces` when Bevy has made it
+  (its maps are refiltered from the sky on the GPU every frame, so one copy
+  stays current): without it the shaded crater, lit by the sky alone, rendered
+  black in the faces, and the Sphere's shaded half mirrored black.
 - **`FACES` (`:29`) and both shaders' `probe_sample` agree.** The camera for face
   *n* looks along `FACES[n].0` with that up; each shader picks the face from the
   ray's largest axis and the same up, and the twin functions in

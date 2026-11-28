@@ -33,7 +33,8 @@ use mirror::{
     stand_ins,
 };
 use reflection::{
-    ProbeFace, ReflectionProbe, spawn_reflection_probe, steer_reflection_probe, watch,
+    ProbeFace, ReflectionProbe, light_probe_faces, spawn_reflection_probe, steer_reflection_probe,
+    watch,
 };
 pub(crate) use reflection::{SPHERE_LAYER, SPHERE_SHADOW_LAYER};
 use uhd::{SphereSkin, on_exceptional_gpu, stream_uhd_sphere};
@@ -150,6 +151,7 @@ impl Plugin for GoldenSpherePlugin {
             (
                 pose_golden_sphere,
                 pull_ferrofluid,
+                light_probe_faces,
                 reflect_surroundings,
                 gather_stand_ins.run_if(on_modest_gpu),
                 stream_uhd_sphere.run_if(on_exceptional_gpu),
