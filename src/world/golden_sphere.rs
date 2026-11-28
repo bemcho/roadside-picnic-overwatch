@@ -258,12 +258,12 @@ fn spawn_ferrofluid_pool(
     probe: Option<Res<ReflectionProbe>>,
 ) {
     let pool = pool_centre(&terrain);
-    // Black metal, as the user asked: a mirror dark enough to read black, the
-    // sky and the Sun bright in it.
+    // Black metal, as the user asked: a mirror dark enough to read black, as
+    // polished as the Sphere, the sky, the Sun and the Sphere bright in it.
     let liquid = StandardMaterial {
-        base_color: Color::linear_rgb(0.05, 0.05, 0.055),
+        base_color: Color::linear_rgb(0.15, 0.15, 0.165),
         metallic: 1.0,
-        perceptual_roughness: 0.1,
+        perceptual_roughness: 0.075,
         ..default()
     };
     let level = tier.map_or(TierLevel::default(), |tier| tier.level());

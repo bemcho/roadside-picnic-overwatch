@@ -202,7 +202,11 @@ impl Ferrofluid {
         )
         .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
         .with_inserted_indices(Indices::U32(indices));
-        mesh.compute_smooth_normals();
+        // Area-weighted: Bevy's angle-weighted `compute_smooth_normals` skips
+        // corners whose edges' squared lengths multiply to under f32::EPSILON,
+        // which at the strong and exceptional cells' 1 cm and 5 mm left every
+        // normal zero and the liquid mirroring nothing.
+        mesh.compute_area_weighted_normals();
         mesh
     }
 }
@@ -308,6 +312,25 @@ mod tests {
                 .collect();
             let mean = edges.iter().sum::<f32>() / edges.len() as f32;
             assert!(mean <= longest_mean, "{level:?}: edges {mean} m on average");
+        }
+    }
+
+    #[test]
+    fn the_pools_liquid_faces_up_on_every_tier() {
+        for level in [TierLevel::Modest, TierLevel::Strong, TierLevel::Exceptional] {
+            let mesh = Ferrofluid::pool_mesh(level, |_| -0.1);
+            let Some(VertexAttributeValues::Float32x3(normals)) =
+                mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
+            else {
+                panic!("the pool has normals");
+            };
+            let flat = positions(&mesh)
+                .iter()
+                .zip(normals)
+                // Clear of the rim, whose bend leans its neighbours.
+                .filter(|(p, _)| p.xz().length() < SPHERE_POOL_RADIUS - RIM - 0.05)
+                .all(|(_, n)| Vec3::from(*n).distance(Vec3::Y) < 1e-4);
+            assert!(flat, "{level:?}: the flat liquid's normals point up");
         }
     }
 

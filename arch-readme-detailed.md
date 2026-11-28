@@ -1358,6 +1358,11 @@ move and leaves the six bound faces alone (`:282`). In `ferrofluid.wesl`:
 - The grid is the cost: `pool_mesh(level, ...)` steps 2 cm, 1 cm or 5 mm, so
   roughly 18 thousand, 71 thousand or 283 thousand vertices, each running the
   crown and the rings. The test holds the mean edge to 1.2 steps.
+- The normals are area-weighted (`compute_area_weighted_normals`): Bevy 0.20's
+  angle-weighted `compute_smooth_normals` drops a corner when its edges'
+  squared lengths multiply to under `f32::EPSILON` (1.2e-7), true of every
+  corner on the 1 cm and 5 mm grids. Every normal there was zero, and the
+  liquid mirrored nothing. `the_pools_liquid_faces_up_on_every_tier` guards it.
 
 **Reflections by tier.** `reflect_surroundings` (`golden_sphere.rs:296`) and
 `gather_stand_ins` (`:322`) feed the two mirrors each frame.

@@ -536,7 +536,8 @@ floor. The numbers are in `doc/world-reference.md`.
   the pool; `pose_golden_sphere` poses the Sphere from it and `pull_ferrofluid`
   hands the pool the field, the spin and the small rings.
 - **The spikes are in the vertex shader.** The pool's mesh is a flat disc
-  (`Ferrofluid::pool_mesh`, finer on stronger GPUs); `ferrofluid.wesl` raises the
+  (`Ferrofluid::pool_mesh`, finer on stronger GPUs, its normals area-weighted
+  since Bevy's angle-weighted ones vanish on cells that small); `ferrofluid.wesl` raises the
   crown and the creeping rings and tilts the normals. The shader is also the
   material's `prepass_vertex_shader`, so the shadow pass raises the same spikes.
 - **`GpuTier` decides the rest.** It is settled once at `Startup` from the

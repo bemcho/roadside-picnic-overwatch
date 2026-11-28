@@ -664,9 +664,12 @@ the stalker stands still.
     0.4 m bends down to the floor along a smoothstep. The pool has a `Collider`
     (`POOL_SOLID`, a pillar of the same radius from 0.1 m under the liquid to 3.4 m
     over it) and is `Unclimbable`: the stalker walks around it and cannot pass
-    under the Sphere. Black metal: linear 0.05, 0.05, 0.055, metallic 1, roughness
-    0.1. The disc's grid is 2 cm on modest GPUs, 1 cm on strong and 5 mm on
-    exceptional ones. It draws in a camera's depth prepass where one runs
+    under the Sphere. Black metal as polished as the Sphere: linear 0.15, 0.15,
+    0.165, metallic 1, roughness 0.075. The disc's grid is 2 cm on modest GPUs,
+    1 cm on strong and 5 mm on exceptional ones. Its normals are area-weighted:
+    Bevy's angle-weighted `compute_smooth_normals` skips corners whose edges'
+    squared lengths multiply to under `f32::EPSILON`, which zeroed every normal
+    on the 1 cm and 5 mm grids, so the liquid mirrored nothing and read flat black. It draws in a camera's depth prepass where one runs
     (DLSS's), raising this frame's spikes and, for their motion vectors, last
     frame's (`previous_field`, `previous_rings`), so the upscaler does not smear
     them; while paused both match (`hold_ferrofluid`), so the spikes report no
@@ -762,6 +765,7 @@ the stalker stands still.
     `the_field_falls_as_the_sphere_rises`, `the_sphere_turns_at_a_steady_rate`,
     `the_sphere_holds_still_while_paused` (`golden_sphere.rs`);
     `the_pool_mesh_is_a_disc_dense_enough_for_its_spikes`,
+    `the_pools_liquid_faces_up_on_every_tier`,
     `the_pools_rim_bends_down_to_the_floor`,
     `the_central_spikes_stand_1_4_m_under_the_lowest_sphere_and_1_m_under_the_highest`,
     `the_small_spikes_creep_inward_ring_after_ring`,
