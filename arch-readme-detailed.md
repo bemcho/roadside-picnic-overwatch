@@ -1799,7 +1799,10 @@ flowchart TD
   (multisampled or not), 2-3 the fog field and its sampler, 4-5 the shroud mask
   and its sampler.
 - **Draw.** One fullscreen triangle, blend `One, OneMinusSrcAlpha`
-  (premultiplied), GPU span `ground_fog`.
+  (premultiplied), GPU span `ground_fog`, in the main pass's render area
+  (`render.rs:300`: `Viewport::from_viewport_and_override`, smaller under
+  DLSS's `MainPassResolutionOverride`); the shader maps pixels to NDC through
+  `view.main_pass_viewport`, so the fog meets the depth it reads.
 - **Failure mode.** If an extracted resource is missing the node returns
   without drawing: no panic, no fog.
 

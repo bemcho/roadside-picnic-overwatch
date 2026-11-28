@@ -361,7 +361,9 @@ The ground fog is a custom render pass (`ground_fog/render.rs`), not Bevy's
 `FogVolume`. A single box cannot follow hills, and Bevy attenuates the sun's
 in-scattering by the box's bounding radius, which turns a dense thin layer
 black. The pass runs in `Core3d` after the main pass and before early
-post-processing. It binds the view's own `MeshViewBindGroup` (lights, shadow
+post-processing, in the main pass's render area (smaller under DLSS:
+`Viewport::from_viewport_and_override`, and the shader maps pixels through
+`view.main_pass_viewport`). It binds the view's own `MeshViewBindGroup` (lights, shadow
 cascades, atmosphere transmittance), the view depth, the per-camera `GroundFog`
 uniform, the fog field and the shroud mask (`ShroudMask`, extracted from
 `shroud.rs`). `ground_fog.wesl` marches each pixel's ray from the camera to the

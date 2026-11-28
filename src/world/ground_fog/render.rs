@@ -5,6 +5,7 @@
 //! atmosphere and shadowed by their cascades. Last, it covers unsurveyed ground
 //! with the shroud's black smoke (`shroud.rs`).
 
+use bevy::camera::{MainPassResolutionOverride, Viewport};
 use bevy::core_pipeline::{Core3dSystems, FullscreenShader, schedule::Core3d};
 use bevy::pbr::{
     MeshPipelineSystems, MeshPipelineViewLayoutKey, MeshPipelineViewLayouts, MeshViewBindGroup,
@@ -13,6 +14,7 @@ use bevy::pbr::{
 use bevy::prelude::*;
 use bevy::render::{
     Render, RenderApp, RenderStartup, RenderSystems,
+    camera::ExtractedCamera,
     diagnostic::RecordDiagnostics,
     extract_component::{
         ComponentUniforms, DynamicUniformIndex, ExtractComponent, ExtractComponentPlugin,
@@ -223,8 +225,12 @@ fn specialize_pipelines(
     }
 }
 
-/// What the fog pass needs from each view.
+/// What the fog pass needs from each view. An upscaler (DLSS) renders the
+/// main pass, and so the fog, into the top-left `MainPassResolutionOverride`
+/// of the view's textures.
 type FogView = (
+    &'static ExtractedCamera,
+    Option<&'static MainPassResolutionOverride>,
     &'static ViewTarget,
     &'static ViewDepthStencilTexture,
     &'static MeshViewBindGroup,
@@ -242,7 +248,8 @@ fn draw_ground_fog(
     images: Res<RenderAssets<GpuImage>>,
     mut ctx: RenderContext,
 ) {
-    let (target, depth, view_bind_group, pipeline_id, uniform_index, msaa) = view.into_inner();
+    let (camera, render_size, target, depth, view_bind_group, pipeline_id, uniform_index, msaa) =
+        view.into_inner();
     let (Some(render_pipeline), Some(uniform), Some(field), Some(shroud), Some(depth)) = (
         cache.get_render_pipeline(pipeline_id.0),
         uniforms.uniforms().binding(),
@@ -287,6 +294,18 @@ fn draw_ground_fog(
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+        if let Some(viewport) =
+            Viewport::from_viewport_and_override(camera.viewport.as_ref(), render_size)
+        {
+            pass.set_viewport(
+                viewport.physical_position.x as f32,
+                viewport.physical_position.y as f32,
+                viewport.physical_size.x as f32,
+                viewport.physical_size.y as f32,
+                viewport.depth.start,
+                viewport.depth.end,
+            );
+        }
         pass.set_pipeline(render_pipeline);
         pass.set_bind_group(0, &view_bind_group.main, &view_bind_group.main_offsets);
         pass.set_bind_group(1, &bind_group, &[uniform_index.index()]);

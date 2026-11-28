@@ -25,7 +25,7 @@ import bevy_pbr::render::shadow_sampling::sample_shadow_map_hardware;
 import bevy_pbr::render::shadows::{get_cascade_index, world_to_directional_light_local};
 import bevy_pbr::render::utils::interleaved_gradient_noise;
 import bevy_pbr::render::view_transformations::{
-    frag_coord_to_ndc, position_ndc_to_world, position_world_to_view,
+    position_ndc_to_world, position_world_to_view, uv_to_ndc,
 };
 
 struct GroundFog {
@@ -488,7 +488,9 @@ fn smoke_noise(p: vec2<f32>) -> f32 {
 fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
     let frag = in.position.xy;
     let depth = textureLoad(depth_texture, vec2<i32>(frag), 0);
-    let ndc = frag_coord_to_ndc(vec4(frag, depth, 1.0)).xy;
+    // The main pass's own viewport: an upscaler (DLSS) renders it smaller
+    // than the view, and the fog with it.
+    let ndc = uv_to_ndc((frag - view.main_pass_viewport.xy) / view.main_pass_viewport.zw);
     let camera = view.world_position;
     let ray = normalize(position_ndc_to_world(vec3(ndc, 1.0)) - camera);
     var end = FAR;

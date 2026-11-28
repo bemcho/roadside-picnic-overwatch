@@ -196,7 +196,10 @@ the stalker stands still.
   contrast (a house 50 m away still shows at about a quarter of its contrast),
   densest on the ground and thinning upward, its top rising and falling
   between 1.5 and 8 m; the two blend over 60 m across the Perimeter. Drifting
-  banks fray its edges, and billows and wind break it up.
+  banks fray its edges, and billows and wind break it up. Under an upscaler
+  (DLSS) the pass draws into the main pass's smaller render area
+  (`MainPassResolutionOverride`) and maps pixels by that area, so the fog stays
+  on the ground it covers.
   The sun and moon light it through the atmosphere with shadows and forward
   scattering. The hangar hall stays clear, and the fog thins out above ~140 m of
   camera height. The same pass marches three layers of cumulus whose bases lie
