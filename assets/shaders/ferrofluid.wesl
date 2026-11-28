@@ -9,7 +9,9 @@
 // fragment stage is standard PBR: black metal.
 
 // The same vertex stage raises the spikes in the shadow pass, so they cast
-// their shadows; there the full spikes always stand.
+// their shadows; there the full spikes always stand. In a camera's prepass
+// (DLSS's, with motion vectors) it raises them as in the main pass, and as
+// they stood a frame ago for the motion vectors.
 import bevy_pbr::render::{
     mesh_functions,
     mesh_view_bindings::view,
@@ -44,6 +46,9 @@ import bevy_pbr::render::pbr_functions::visibility_range_dither;
 @group(constants::MATERIAL_BIND_GROUP) @binding(110) var face_sampler: sampler;
 // xyz: the Sphere's centre, w: its radius; 0 while the faces are not live.
 @group(constants::MATERIAL_BIND_GROUP) @binding(111) var<uniform> probe: vec4<f32>;
+// `field` and `rings` a frame ago.
+@group(constants::MATERIAL_BIND_GROUP) @binding(112) var<uniform> previous_field: vec4<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(113) var<uniform> previous_rings: vec4<f32>;
 
 const HALF_SQRT3: f32 = 0.8660254;
 const TAU: f32 = 6.2831855;
@@ -183,46 +188,49 @@ fn spike_hash(ring: f32, i: f32, salt: f32) -> f32 {
     return fract(sin(ring * 12.9898 + i * 78.233 + salt * 37.719) * 43758.547);
 }
 
-// The crown's spikes at `p`: height and slope (d/dx, d/dz).
-fn crown(p: vec2<f32>) -> vec3<f32> {
+// The crown's spikes at `p` under `f` (`field`, now or a frame ago): height
+// and slope (d/dx, d/dz).
+fn crown(p: vec2<f32>, f: vec4<f32>) -> vec3<f32> {
     let r = length(p);
     let sigma = shape.z;
     let peak = exp(-r * r / (2.0 * sigma * sigma));
-    let pull = field.x * peak;
-    let envelope = peak * field.z * smoothstep(CALM, RISEN, pull)
+    let pull = f.x * peak;
+    let envelope = peak * f.z * smoothstep(CALM, RISEN, pull)
         * (1.0 - smoothstep(shape.x - shape.y, shape.x, r));
-    let local = turn(p, -field.y);
-    let spike = cone(local - nearest_spike(local, field.w), 0.5 * field.w, TIP);
-    return envelope * vec3<f32>(spike.x, turn(spike.yz, field.y));
+    let local = turn(p, -f.y);
+    let spike = cone(local - nearest_spike(local, f.w), 0.5 * f.w, TIP);
+    return envelope * vec3<f32>(spike.x, turn(spike.yz, f.y));
 }
 
-// The small spikes at `p`, ring `k` of them `progress` of its way in: height
-// and slope. Each ring turns with the Sphere, staggered from the others.
-fn small_ring(p: vec2<f32>, k: i32, progress: f32) -> vec3<f32> {
+// The small spikes at `p`, ring `k` of them `progress` of its way in, turned
+// by `spin`, their pulse at `seconds`: height and slope. Each ring turns with
+// the Sphere, staggered from the others.
+fn small_ring(p: vec2<f32>, k: i32, progress: f32, spin: f32, seconds: f32) -> vec3<f32> {
     let radius = mix(flow.x, flow.y, progress);
     if abs(length(p) - radius) > SMALL_FOOT {
         return vec3<f32>(0.0);
     }
     let step = TAU / SMALL_SPIKES;
-    let start = field.y + f32(k) * step / 3.0;
+    let start = spin + f32(k) * step / 3.0;
     let i = round((atan2(p.y, p.x) - start) / step);
     let angle = start + i * step;
     let axis = radius * vec2<f32>(cos(angle), sin(angle));
     let spike = i - SMALL_SPIKES * floor(i / SMALL_SPIKES);
     let pulses = PULSES + floor(PULSES * spike_hash(f32(k), spike, 0.0));
     let phase = TAU * spike_hash(f32(k), spike, 1.0);
-    let pulse = 0.5 + 0.5 * sin(TAU * pulses * rings.w / PULSE_WRAP + phase);
+    let pulse = 0.5 + 0.5 * sin(TAU * pulses * seconds / PULSE_WRAP + phase);
     let tall = mix(flow.z, flow.w, pulse);
     let height = tall * smoothstep(0.0, RISING, progress) * (1.0 - smoothstep(SINKING, 1.0, progress));
     return height * cone(p - axis, SMALL_FOOT, SMALL_TIP);
 }
 
 // The liquid's height at `p` on the pool and its slope (d/dx, d/dz), `seen`
-// the share of spikes standing at the viewer's distance.
-fn spikes(p: vec2<f32>, seen: f32) -> vec3<f32> {
-    var raised = crown(p);
+// the share of spikes standing at the viewer's distance, under `f` and `r`
+// (`field` and `rings`, now or a frame ago).
+fn spikes(p: vec2<f32>, seen: f32, f: vec4<f32>, r: vec4<f32>) -> vec3<f32> {
+    var raised = crown(p, f);
     for (var k = 0; k < 3; k++) {
-        raised += small_ring(p, k, rings[k]);
+        raised += small_ring(p, k, r[k], f.y, r.w);
     }
     return seen * raised;
 }
@@ -233,14 +241,16 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
     let vertex = decompress_vertex(vertex_in, vertex_in.instance_index);
     let world_from_local = mesh_functions::get_world_from_local(vertex_in.instance_index);
     // The share of spikes standing at the viewer's distance; a light's view
-    // says nothing of it, so shadows keep them all.
+    // says nothing of it, so shadows keep them all. Light views never have
+    // motion vectors; a camera's prepass must match its main pass's depth, so
+    // a camera given a depth prepass needs motion vectors too.
     var seen = 1.0;
-@if(!PREPASS_PIPELINE) {
+@if(!PREPASS_PIPELINE || MOTION_VECTOR_PREPASS) {
     let middle = mesh_functions::mesh_position_local_to_world(world_from_local, vec4<f32>(0.0, 0.0, 0.0, 1.0));
     let apart = field.w / pixel_at(distance(middle.xyz, view.world_position));
     seen = smoothstep(SETTLED_PIXELS, STANDING_PIXELS, apart);
 }
-    let raised = spikes(vertex.position.xz, seen);
+    let raised = spikes(vertex.position.xz, seen, field, rings);
     let position = vertex.position + vec3<f32>(0.0, raised.x, 0.0);
 
     out.world_position = mesh_functions::mesh_position_local_to_world(
@@ -255,6 +265,13 @@ fn vertex(vertex_in: Vertex) -> VertexOutput {
 @if(!PREPASS_PIPELINE || (NORMAL_PREPASS_OR_DEFERRED_PREPASS && VERTEX_NORMALS)) {
     let normal = normalize(vertex.normal + vec3<f32>(-raised.y, 0.0, -raised.z));
     out.world_normal = mesh_functions::mesh_normal_local_to_world(normal, vertex_in.instance_index);
+}
+@if(PREPASS_PIPELINE && MOTION_VECTOR_PREPASS) {
+    let before = spikes(vertex.position.xz, seen, previous_field, previous_rings);
+    out.previous_world_position = mesh_functions::mesh_position_local_to_world(
+        mesh_functions::get_previous_world_from_local(vertex_in.instance_index),
+        vec4<f32>(vertex.position + vec3<f32>(0.0, before.x, 0.0), 1.0),
+    );
 }
 @if(VERTEX_UVS_A)
     out.uv = vertex.uv;

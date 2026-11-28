@@ -659,7 +659,11 @@ the stalker stands still.
     over it) and is `Unclimbable`: the stalker walks around it and cannot pass
     under the Sphere. Black metal: linear 0.05, 0.05, 0.055, metallic 1, roughness
     0.1. The disc's grid is 2 cm on modest GPUs, 1 cm on strong and 5 mm on
-    exceptional ones. It has no depth prepass (nothing reads one from it).
+    exceptional ones. It draws in a camera's depth prepass where one runs
+    (DLSS's), raising this frame's spikes and, for their motion vectors, last
+    frame's (`previous_field`, `previous_rings`), so the upscaler does not smear
+    them; while paused both match (`hold_ferrofluid`), so the spikes report no
+    motion.
   - *Ferrofluid* (`ferrofluid.wesl`, vertex stage; the fragment stage is standard
     PBR): the flat disc is raised in the shader by a crown of spikes on a hexagonal
     lattice 0.45 m apart, concave cones with rounded tips whose feet touch, turning

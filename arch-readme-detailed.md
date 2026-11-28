@@ -1335,8 +1335,12 @@ move and leaves the six bound faces alone (`:282`). In `ferrofluid.wesl`:
 - The shadow pass runs the same vertex function (`prepass_vertex_shader`,
   `ferrofluid.rs:187`; the `PREPASS_PIPELINE` branches). There `view` is the
   light's, so the fade by pixel size is skipped and `seen` stays 1: shadows keep
-  every spike. `enable_prepass` is false: nothing reads a depth prepass from the
-  liquid (`ferrofluid.rs:191`).
+  every spike. `enable_prepass` is true (`ferrofluid.rs:226`): in a camera's
+  motion-vector prepass (DLSS's) the vertex stage raises last frame's spikes too
+  (`previous_field`, `previous_rings`, bindings 112-113) for
+  `previous_world_position`. `pull_ferrofluid` keeps last frame's values
+  (`Ferrofluid::follow`), and `hold_ferrofluid` (`golden_sphere.rs:327`) matches
+  them while paused, so the still spikes report no motion.
 - In the main view, `seen` (`:241`) is `smoothstep(3 px, 8 px, spacing in pixels)`
   from the pool's middle, so far spikes settle into smooth liquid instead of
   sparkling.

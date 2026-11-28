@@ -155,6 +155,10 @@ impl Plugin for GoldenSpherePlugin {
             )
                 .chain()
                 .run_if(in_state(InGamePhase::Running)),
+        )
+        .add_systems(
+            Update,
+            hold_ferrofluid.run_if(in_state(InGamePhase::Paused)),
         );
     }
 }
@@ -309,12 +313,27 @@ fn pull_ferrofluid(
         if let Some(mut fluid) = fluids.get_mut(&pool.0) {
             // Only what moves: the probe's faces stay bound.
             let liquid = &mut fluid.extension;
-            liquid.field = pulled.field;
-            liquid.rings = pulled.rings;
+            liquid.follow(&pulled);
             if liquid.probe.w > 0.0 {
                 let centre = at.translation + Vec3::Y * hover.height;
                 liquid.probe = centre.extend(liquid.probe.w);
             }
+        }
+    }
+}
+
+/// Stills the pool's motion vectors while paused: the spikes stand as they
+/// stood a frame ago.
+fn hold_ferrofluid(
+    pools: Query<&MeshMaterial3d<FerrofluidMaterial>, With<FerrofluidPool>>,
+    mut fluids: ResMut<Assets<FerrofluidMaterial>>,
+) {
+    for pool in &pools {
+        let moving = fluids
+            .get(&pool.0)
+            .is_some_and(|fluid| !fluid.extension.is_still());
+        if let Some(mut fluid) = fluids.get_mut(&pool.0).filter(|_| moving) {
+            fluid.extension.hold();
         }
     }
 }

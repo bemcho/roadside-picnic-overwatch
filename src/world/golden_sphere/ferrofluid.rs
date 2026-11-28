@@ -76,6 +76,12 @@ pub(super) struct Ferrofluid {
     /// xyz: the Sphere's centre, w: its radius; 0 while the faces are not live.
     #[uniform(111)]
     pub probe: Vec4,
+    /// `field` and `rings` a frame ago: the prepass raises last frame's spikes
+    /// too, for their motion vectors.
+    #[uniform(112)]
+    pub previous_field: Vec4,
+    #[uniform(113)]
+    pub previous_rings: Vec4,
 }
 
 impl Ferrofluid {
@@ -100,7 +106,28 @@ impl Ferrofluid {
             face_pz: None,
             face_nz: None,
             probe: Vec4::ZERO,
+            previous_field: Vec4::new(hover.field, hover.spin, tallest, SPIKE_SPACING),
+            previous_rings: rings,
         }
+    }
+
+    /// Takes `pulled`'s field and rings, keeping the ones it had as last
+    /// frame's.
+    pub fn follow(&mut self, pulled: &Self) {
+        self.hold();
+        self.field = pulled.field;
+        self.rings = pulled.rings;
+    }
+
+    /// Keeps the spikes as they stand as last frame's: no motion.
+    pub fn hold(&mut self) {
+        self.previous_field = self.field;
+        self.previous_rings = self.rings;
+    }
+
+    /// Whether the spikes stand as they stood a frame ago.
+    pub fn is_still(&self) -> bool {
+        self.previous_field == self.field && self.previous_rings == self.rings
     }
 
     /// The liquid mirroring the live probe's `faces`, the Sphere `radius`
@@ -194,9 +221,10 @@ impl MaterialExtension for Ferrofluid {
         assets::FERROFLUID_SHADER.into()
     }
 
-    // No depth prepass: nothing in the game reads one from the liquid.
+    // In the depth prepass, with motion vectors, wherever a camera has one
+    // (DLSS's): otherwise the upscaler smears the moving spikes.
     fn enable_prepass() -> bool {
-        false
+        true
     }
 }
 
@@ -207,6 +235,23 @@ mod tests {
     use super::super::SPHERE_DIAMETER;
 
     use super::*;
+
+    #[test]
+    fn the_pool_draws_in_the_depth_prepass() {
+        assert!(<Ferrofluid as MaterialExtension>::enable_prepass());
+    }
+
+    #[test]
+    fn the_liquid_keeps_last_frames_spikes_for_their_motion() {
+        let mut liquid = Ferrofluid::under(Hover::at(10.0));
+        assert!(liquid.is_still(), "a new pool has not moved");
+        let before = (liquid.field, liquid.rings);
+        liquid.follow(&Ferrofluid::under(Hover::at(10.1)));
+        assert_eq!((liquid.previous_field, liquid.previous_rings), before);
+        assert!(!liquid.is_still());
+        liquid.hold();
+        assert!(liquid.is_still(), "held, as while paused");
+    }
 
     #[test]
     fn the_pools_bounds_hold_its_tallest_spike() {
