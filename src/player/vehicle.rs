@@ -435,12 +435,36 @@ fn grounded_idle() -> Locomotion {
     }
 }
 
+/// Where the stalker steps out: the first door spot (left, right, back, front)
+/// within an easy step of the hull's height, else, on a bank too steep for any,
+/// the clear one nearest that height, so a stuck car never traps its driver.
 fn exit_position(
     at: &Transform,
     half_extents: Vec2,
     terrain: &Terrain,
     clear: impl Fn(Vec3) -> bool,
 ) -> Option<Vec3> {
+    let rise = |exit: &&Vec3| (exit.y - at.translation.y).abs();
+    let spots: Vec<Vec3> = door_spots(at, half_extents, terrain, clear).collect();
+    spots
+        .iter()
+        .find(|exit| rise(exit) <= EASY_STEP)
+        .or_else(|| spots.iter().min_by(|a, b| rise(a).total_cmp(&rise(b))))
+        .copied()
+}
+
+/// How far up or down from the hull a door spot may be and still be stepped
+/// onto, in metres.
+const EASY_STEP: f32 = 1.2;
+
+/// The spots beside each door, in order, that lie on the map, out of deep
+/// water and clear of solids, at any height.
+fn door_spots<'a>(
+    at: &'a Transform,
+    half_extents: Vec2,
+    terrain: &'a Terrain,
+    clear: impl Fn(Vec3) -> bool + 'a,
+) -> impl Iterator<Item = Vec3> + 'a {
     let (side, end) = (half_extents.x, half_extents.y);
     let heading = contact::heading(at.rotation);
     [
@@ -450,7 +474,7 @@ fn exit_position(
         FORWARD * end,
     ]
     .into_iter()
-    .find_map(|edge| {
+    .filter_map(move |edge| {
         let sample = |reach: f32| {
             let mut point = at.translation + heading * (edge + edge.normalize() * reach);
             point.y = terrain.mesh_height_at(point.xz());
@@ -458,7 +482,6 @@ fn exit_position(
         };
         let exit = sample(0.9);
         (exit.xz().abs().max_element() < TERRAIN_HALF_SIZE - super::EDGE_MARGIN
-            && (exit.y - at.translation.y).abs() <= 1.2
             && terrain.water_depth_at(exit.x, exit.z) <= 0.75
             && clear(sample(STANDING.radius))
             && clear(exit))
@@ -1723,6 +1746,23 @@ mod tests {
         });
         assert!(exit.is_some_and(|point| point.x < at.translation.x - HALF_EXTENTS.x));
         assert!(exit_position(&at, HALF_EXTENTS, &terrain, |_| false).is_none());
+    }
+
+    #[test]
+    fn a_car_stuck_on_a_steep_bank_still_lets_the_stalker_out() {
+        // A player's save (2026-11-28): the car wedged on a crater bank whose
+        // four exit spots lie 1.8 to 9.5 m above or below it.
+        let terrain = Terrain::new();
+        let at = Transform::from_xyz(-1183.8304, -51.47224, 78.002075)
+            .with_rotation(Quat::from_rotation_y(-3.0035748));
+        let exit = exit_position(&at, HALF_EXTENTS, &terrain, |_| true)
+            .expect("the stalker gets out somewhere");
+        assert!(exit.xz().distance(at.translation.xz()) <= 8.0, "{exit:?}");
+        assert_eq!(exit.y, terrain.mesh_height_at(exit.xz()));
+        assert!(
+            exit_position(&at, HALF_EXTENTS, &terrain, |_| false).is_none(),
+            "never into a solid"
+        );
     }
 
     fn press(app: &mut App, key: KeyCode) {

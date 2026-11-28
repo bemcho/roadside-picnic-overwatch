@@ -1149,6 +1149,11 @@ the stalker stands still.
   straight instead, if that is free, so a car nosed against a rock can still
   back out at full lock.
   Slopes beyond tire grip cause downhill sliding; the car and stalker fall at 9.81 m/s².
+  E lets the stalker out on the first clear door spot (left, right, back, front,
+  0.9 m from the hull) within 1.2 m of the hull's height; on a bank too steep
+  for any (`exit_position`), on the clear one nearest that height, so a car
+  stuck there never traps its driver. Only solids, deep water or the map's
+  edge on all four sides keep the stalker in.
   `tools/prepare_vehicle_asset.py` bakes the GLB's 3072 × 2048 PBR atlases from
   four texture sheets, with matte paint, dark trim, louver and lamp details,
   and subtle procedural wear.
