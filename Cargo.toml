@@ -25,6 +25,10 @@ wgpu = { version = "30", default-features = false, features = ["vulkan"] }
 # Offline meshlet preprocessing of dense UHD scans for Bevy's virtual geometry
 # (slow, pulls meshopt + metis); only used by `examples/meshletize.rs`.
 meshlet_processor = ["bevy/meshlet_processor"]
+# Development only (`cargo dev`, `.cargo/config.toml`): Bevy linked as a shared
+# library so an edit relinks in seconds, and assets reloaded on save. Never in
+# release, playtest (its FPS must match release) or wasm32 builds.
+dev = ["bevy/dynamic_linking", "bevy/file_watcher"]
 
 [[example]]
 name = "meshletize"

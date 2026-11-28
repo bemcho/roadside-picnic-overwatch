@@ -1,0 +1,4 @@
+[alias]
+# Development run: Bevy linked dynamically and assets reloaded on save (the
+# `dev` feature in Cargo.toml). Never for release, playtest or wasm32 builds.
+dev = "run --features dev"

@@ -137,6 +137,9 @@ Rules that hold everywhere:
 # Development run (fast, unoptimized)
 cargo run
 
+# Development run with fast relinking and asset hot reload (the `dev` feature)
+cargo dev
+
 # Release build (playable framerates; the shipping build, ~3.5 min to rebuild the game)
 cargo run --release
 
@@ -182,8 +185,11 @@ Run everything from the repository root so Bevy resolves `assets/`.
 
 ### Hot reloading (development only)
 
-Never enable these features in release or `wasm32` builds. Pass them on the command line rather than
-adding them to the default features in `Cargo.toml`.
+Never enable these features in release, playtest or `wasm32` builds. Pass them on the command line rather than
+adding them to the default features in `Cargo.toml`. `cargo dev` (an alias in `.cargo/config.toml`
+for `cargo run --features dev`) turns on `bevy/dynamic_linking` and `bevy/file_watcher` together;
+keep them out of the playtest build, whose FPS must match release and whose binary the playtest
+scripts start without Cargo (a dynamically linked one would not find Bevy's library).
 
 - **Assets:** the `file_watcher` feature makes the `AssetServer` watch `assets/` and reload textures,
   shaders, meshes, audio and scenes on save, with no restart. Run

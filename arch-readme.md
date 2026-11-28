@@ -1198,10 +1198,11 @@ Development-only asset watching:
 cargo run --features bevy/file_watcher
 ```
 
-Fast linking plus watching:
+Fast linking plus watching (the `dev` feature; `cargo dev` is the alias in
+`.cargo/config.toml`):
 
 ```bash
-cargo run --features bevy/dynamic_linking,bevy/file_watcher
+cargo dev
 ```
 
 Code hotpatching is a Dioxus/Subsecond development workflow, not a replacement
