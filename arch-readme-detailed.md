@@ -1052,8 +1052,12 @@ full scan     uhd/ scene via GpuScans    the one nearest plant within 8 m
   (`:134-135`).
 - **Instancing.** "Plants sharing a model are drawn as one GPU instance batch"
   (`:611`); rocks and marsh props use the same trick.
-- **Wind** (`bend_plants`, `:228`) writes one `vec4` into a `ShaderBuffer`
-  every plant material shares (binding 100, `:114`). `plant_wind.wesl` moves
+- **Wind** (`bend_plants`, `:233`) writes two `vec4`s, the wind now and a
+  frame ago, into a `ShaderBuffer` every plant material shares (binding 100,
+  `:114`); it runs while paused too, so the plants' motion settles. The
+  material's `prepass_vertex_shader` is `plant_wind.wesl` as well: a
+  motion-vector prepass (DLSS's) bends each vertex again with last frame's wind
+  for `previous_world_position`, so the upscaler does not smear the sway. `plant_wind.wesl` moves
   each vertex by its height above the instance origin (`flex`, line 24), so
   roots stay put and tips bend most. **Why a buffer:** "rewriting it each frame
   leaves the materials unchanged, where changing a material would re-specialize

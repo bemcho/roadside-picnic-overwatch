@@ -257,7 +257,11 @@ the stalker stands still.
   are computed on a worker thread as chunks stream in, and at most
   `PLANTS_PER_FRAME` (150) plants spawn per frame, nearest tile first, each
   given its model's precomputed bounds (`Aabb` + `NoAutoAabb`). Plants have
-  no collision or shadows. The rear and sides of the hangar form a dense
+  no collision or shadows. They draw in a camera's depth prepass where one
+  runs (DLSS's), bent by this frame's wind and, for their motion vectors, by
+  last frame's, so the upscaler does not smear them; the wind keeps updating
+  while paused, so their motion settles. No camera runs a prepass otherwise.
+  The rear and sides of the hangar form a dense
   shelterbelt; the central yard and roads stay clear.
 - **Vegetation** (`src/world/trees.rs`): four extracted, textured vegetation clusters
   (`assets/models/vegetation/medium/*.glb`) are scattered only around landmarks, on a jittered grid,

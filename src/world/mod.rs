@@ -176,12 +176,19 @@ impl Plugin for WorldPlugin {
             ),
         )
         .add_systems(Update, mipmap_filtered_textures)
+        // Paused too: the plants' motion vectors settle with the wind.
+        .add_systems(
+            Update,
+            plants::bend_plants
+                .after(weather::blow_wind)
+                .run_if(in_state(AppState::InGame)),
+        )
         .add_systems(
             Update,
             (
                 weather::advance_clock,
                 weather::blow_wind,
-                (plants::bend_plants, plants::sway_full_plants),
+                plants::sway_full_plants,
                 weather::light_the_sky,
                 places::survey_around_stalker,
                 ground_fog::update_ground_fog,

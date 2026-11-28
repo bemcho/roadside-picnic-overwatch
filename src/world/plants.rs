@@ -109,8 +109,8 @@ pub(super) type PlantMaterial = ExtendedMaterial<StandardMaterial, PlantWind>;
 /// where changing a material would re-specialize every plant drawn with it.
 #[derive(Asset, AsBindGroup, Reflect, Clone, Debug, Default)]
 pub(super) struct PlantWind {
-    /// One vec4: xy downwind bend in meters at a 1 m tip, z seconds of wind,
-    /// w gust.
+    /// Two vec4s, the wind now and a frame ago (for motion vectors): xy
+    /// downwind bend in meters at a 1 m tip, z seconds of wind, w gust.
     #[storage(100, read_only)]
     wind: Handle<ShaderBuffer>,
 }
@@ -120,10 +120,13 @@ impl MaterialExtension for PlantWind {
         assets::PLANT_WIND_SHADER.into()
     }
 
-    // Plants cast no shadows and need no depth prepass.
-    fn enable_prepass() -> bool {
-        false
+    // The prepass bends them as the main pass does, with motion vectors from
+    // last frame's wind, so an upscaler (DLSS) keeps swaying leaves sharp.
+    fn prepass_vertex_shader() -> ShaderRef {
+        assets::PLANT_WIND_SHADER.into()
     }
+
+    // Plants cast no shadows.
 
     fn enable_shadows() -> bool {
         false
@@ -192,7 +195,7 @@ pub(super) fn prepare_plant_looks(
     mut buffers: ResMut<Assets<ShaderBuffer>>,
     meshes: Res<Assets<Mesh>>,
 ) {
-    let wind = buffers.add(ShaderBuffer::from(vec![Vec4::ZERO]));
+    let wind = buffers.add(ShaderBuffer::from(vec![Vec4::ZERO; 2]));
     let bounds = |mesh: &Handle<Mesh>| meshes.get(mesh).and_then(MeshAabb::get_aabb);
     let looks = Kind::ALL.map(|kind| {
         kind.models()
@@ -224,16 +227,21 @@ pub(super) fn prepare_plant_looks(
     commands.insert_resource(PlantLooks { looks, wind });
 }
 
-/// Hands the wind to the plants' shader.
+/// Hands the wind to the plants' shader, with last frame's for their motion
+/// vectors (the same on the first frame). It runs while paused too, where the
+/// wind holds still, so the plants' motion settles to none.
 pub(super) fn bend_plants(
     wind: Res<Wind>,
     looks: Res<PlantLooks>,
     mut buffers: ResMut<Assets<ShaderBuffer>>,
+    mut last: Local<Option<Vec4>>,
 ) {
     let bend = wind.direction() * (0.05 + 0.18 * wind.strength());
+    let now = Vec4::new(bend.x, bend.y, wind.seconds, wind.gust);
+    let before = last.replace(now).unwrap_or(now);
     if let Some(mut buffer) = buffers.get_mut(&looks.wind) {
         buffer.clear();
-        buffer.extend([Vec4::new(bend.x, bend.y, wind.seconds, wind.gust)]);
+        buffer.extend([now, before]);
     }
 }
 
@@ -767,6 +775,44 @@ mod tests {
     use super::*;
     use crate::world::terrain::base_tile;
     use crate::world::{Collider, SWAMP};
+
+    #[test]
+    fn the_plants_wind_buffer_keeps_last_frames_wind() {
+        let mut app = App::new();
+        app.add_plugins((MinimalPlugins, AssetPlugin::default()))
+            .init_asset::<ShaderBuffer>()
+            .insert_resource(Wind {
+                velocity: Vec2::new(3.0, 1.0),
+                gust: 0.2,
+                seconds: 10.0,
+            })
+            .add_systems(Update, bend_plants);
+        let wind = app
+            .world_mut()
+            .resource_mut::<Assets<ShaderBuffer>>()
+            .add(ShaderBuffer::from(vec![Vec4::ZERO; 2]));
+        app.insert_resource(PlantLooks {
+            wind: wind.clone(),
+            ..default()
+        });
+        let read = |app: &App| -> Vec<Vec4> {
+            let buffers = app.world().resource::<Assets<ShaderBuffer>>();
+            let buffer = buffers.get(&wind).expect("the wind buffer stays");
+            buffer.cast_slice::<Vec4>().expect("vec4s").to_vec()
+        };
+        app.update();
+        let first = read(&app);
+        assert_eq!(first[0], first[1], "no motion on the first frame");
+        {
+            let mut blowing = app.world_mut().resource_mut::<Wind>();
+            blowing.seconds += 1.0;
+            blowing.gust = 0.7;
+        }
+        app.update();
+        let second = read(&app);
+        assert_ne!(second[0], first[0]);
+        assert_eq!(second[1], first[0], "last frame's wind kept");
+    }
 
     #[test]
     fn every_plant_model_ships_all_three_tiers() {

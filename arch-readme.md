@@ -745,10 +745,12 @@ about two of every three 24 s slots, veering it a little while they blow.
 `Wind::seconds` (the flutter clock) drive every consumer:
 
 - `canopy::update_canopy_motion` leans trees downwind and stirs them,
-- `plants::bend_plants` writes the wind into one storage buffer shared by
-  every plant material, read by `shaders/plant_wind.wesl`, a vertex shader:
-  each vertex moves by its height above the instance's origin (the root), so
-  roots stay put and tips bend furthest,
+- `plants::bend_plants` writes the wind, now and a frame ago, into one storage
+  buffer shared by every plant material, read by `shaders/plant_wind.wesl`, a
+  vertex shader: each vertex moves by its height above the instance's origin
+  (the root), so roots stay put and tips bend furthest; a motion-vector prepass
+  (DLSS's) bends them again with last frame's wind. It runs while paused too,
+  so their motion settles,
 - `plants::sway_full_plants` sways the nearest plant's full scan from its root
   (its scene keeps the scan's own materials),
 - `ground_fog::update_ground_fog` drifts the fog with the wind and churns it in
@@ -1143,7 +1145,12 @@ than stretching `sites.rs` into a universal object registry.
    the material's `prepass_vertex_shader`, or the shadow pass draws the
    unmoved surface. In the shadow pass `view` is the light's, so a fade by
    distance (the ferrofluid's, by pixel size) is skipped there and shadows keep
-   every spike.
+   every spike. Where a camera runs a motion-vector prepass (DLSS's), also write
+   `previous_world_position` from last frame's inputs
+   (`get_previous_world_from_local` and last frame's uniforms, as the ferrofluid
+   and `plant_wind.wesl` do) under `@if(PREPASS_PIPELINE && MOTION_VECTOR_PREPASS)`
+   (the forward pass defines `MOTION_VECTOR_PREPASS` too), or the upscaler smears
+   the moving surface.
 
 ## How to add gameplay events
 
