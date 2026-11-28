@@ -1359,7 +1359,7 @@ move and leaves the six bound faces alone (`:282`). In `ferrofluid.wesl`:
 |---|---|---|---|
 | Modest | up to three stand-ins ray-traced in its fragment shader: the stalker as a capsule, the car and carrier as boxes, within `REACH` 15 m (`mirror.rs:113`) | plain PBR, no Sphere | a few uniforms |
 | Strong | the probe's cube faces (256 px), one face a frame while someone is within 15 m | the Sphere, traced analytically, and the faces; gold shows in the black metal | one extra view |
-| Exceptional | the probe at 1024 px, all six faces a frame, and the UHD scan within 40 m | as Strong, at 1024 px | six extra views |
+| Exceptional | the probe at 1024 px, one face a frame, and the UHD scan within 40 m | as Strong, at 1024 px | one extra view |
 
 The reasons, where the code gives them:
 
@@ -1396,8 +1396,9 @@ The reasons, where the code gives them:
   `faces_to_render` picks the ones to wake by the `Watch`: none on Modest or
   `Unseen` (the player's camera past `SEEN`, 300 m, the Sphere's
   `detail_range`); while `Close` (the stalker or a vehicle within 15 m) face
-  `frame % 6` on Strong and all six on Exceptional; while `Resting` one face
-  every `RESTING_EVERY` (10) frames on both. A sleeping face keeps its last
+  `frame % 6` on both tiers (all six a frame on Exceptional cost a 2060 from
+  42 to 17 FPS: each face is a full view with its own sun cascades); while
+  `Resting` one face every `RESTING_EVERY` (10) frames. A sleeping face keeps its last
   image, so the resting refresh keeps the cube at most two seconds old: the
   time of day (and the T time-lapse) and a stalker who walked off never linger
   in a Sphere seen from afar, and a car parked beside it costs nothing while

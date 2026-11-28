@@ -717,8 +717,10 @@ the stalker stands still.
     (sky) the environment map's sky stays. They copy the player's camera's
     `Exposure` each frame (EV 9 at night to 13 by day, less under cloud), HDR, no tonemapping or deband and no MSAA, no atmosphere or fog, and
     `ClusterConfig::Single` (one cluster for the whole view).
-  - *Exceptional GPUs:* the faces are 1024 x 1024 and all six render every frame
-    with someone within 15 m (one every 10 frames otherwise, as on Strong), and the Sphere's UHD scan replaces the medium
+  - *Exceptional GPUs:* the faces are 1024 x 1024, rendered one a frame in turn
+    with someone within 15 m and one every 10 frames otherwise, as on Strong
+    (each face is a full view with its own sun cascades, about 7 ms on a 2060:
+    all six a frame held 17 FPS, one a frame 42), and the Sphere's UHD scan replaces the medium
     model. The scan (`models/artifacts/uhd/artifact-golden-sphere.glb`, from the
     workspace's `models/artifacts/uhd/`, 1.97 M triangles, one 8192 x 8192 BC7 KTX2
     gold texture, 70 MB on disk, 138 MB on the GPU measured) is streamed through
@@ -753,6 +755,9 @@ the stalker stands still.
     camera view per frame. With CPU clustering (`render::use_cpu_clustering`, see
     **RAM and GPU**) Strong measures 26-28 FPS at full clocks (findings in
     `~/Projects/agentic/roadside-picnic-overwatch/reviews/2026-11-27-gpu-usage-findings.md`).
+    On the real display (1440p, at the Sphere, 2026-11-28): Strong 38 FPS;
+    Exceptional with the shadow twin and one face a frame 42 FPS; 2-6 FPS less
+    in ground fog or at the widest zoom.
   - *Checks:* `the_spikes_stand_tallest_when_the_sphere_sinks_lowest`,
     `the_field_falls_as_the_sphere_rises`, `the_sphere_turns_at_a_steady_rate`,
     `the_sphere_holds_still_while_paused` (`golden_sphere.rs`);

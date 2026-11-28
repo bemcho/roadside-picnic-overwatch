@@ -545,8 +545,8 @@ floor. The numbers are in `doc/world-reference.md`.
   Sphere's fragment shader traces stand-ins for the stalker (a capsule) and the
   vehicles (boxes) that `gather_stand_ins` hands it. Strong and exceptional ones
   get the probe: six cameras at the Sphere (`reflection.rs`), rendering cube
-  faces that the Sphere and the pool sample, one face a frame on strong GPUs and
-  all six on exceptional ones, only while someone is within 15 m. Exceptional
+  faces that the Sphere and the pool sample, one face a frame (256 px on strong
+  GPUs, 1024 px on exceptional ones), only while someone is within 15 m. Exceptional
   GPUs also stream the Sphere's UHD scan through `GpuScans` (`uhd.rs`) and swap
   it for the medium model while the stalker is near and the scan is resident.
 - **The Sphere is alone on `SPHERE_LAYER`.** The player's camera sees it; the
@@ -1007,7 +1007,7 @@ Important paths:
     `SPHERE_SHADOW_LAYER` (2), seen by the Sun alone, casts it. A camera sees the Sphere only if its
     `RenderLayers` include 1; the default (layer 0) does not. Each active
     camera is a full view with its own light clustering and shadow cascades
-    (a strong GPU renders one probe face a frame and an exceptional one six), so
+    (the probe renders one face a frame: six a frame cost a 2060 25 FPS), so
     add cameras sparingly and wake them only when something can show in them.
 
 29. **Scale effects to the GPU through `GpuTier`, not the live VRAM budget.**

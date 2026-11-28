@@ -80,8 +80,9 @@ pub(super) struct ReflectionProbe {
 pub(super) struct ProbeFace(pub usize);
 
 /// The faces to render this `frame`: none on modest GPUs or unseen, one now
-/// and then while resting, one a frame in turn on strong GPUs and all six
-/// every frame on exceptional ones while someone is close.
+/// and then while resting, and one a frame in turn while someone is close.
+/// Exceptional GPUs too: each face is a full view with its own sun cascades,
+/// about 7 ms on a 2060, so all six a frame fell to 17 FPS where one holds 42.
 pub(super) fn faces_to_render(level: TierLevel, frame: u32, watch: Watch) -> &'static [usize] {
     let one = |turn: u32| {
         let face = turn as usize % ALL_FACES.len();
@@ -91,8 +92,7 @@ pub(super) fn faces_to_render(level: TierLevel, frame: u32, watch: Watch) -> &'s
         (TierLevel::Modest, _) | (_, Watch::Unseen) => &[],
         (_, Watch::Resting) if frame.is_multiple_of(RESTING_EVERY) => one(frame / RESTING_EVERY),
         (_, Watch::Resting) => &[],
-        (TierLevel::Strong, Watch::Close) => one(frame),
-        (TierLevel::Exceptional, Watch::Close) => &ALL_FACES,
+        (_, Watch::Close) => one(frame),
     }
 }
 
@@ -192,23 +192,17 @@ mod tests {
     use crate::states::AppState;
 
     #[test]
-    fn the_probe_renders_one_face_a_frame_on_strong_cards() {
-        let mut seen = Vec::new();
-        for frame in 0..6 {
-            let faces = faces_to_render(TierLevel::Strong, frame, Watch::Close);
-            assert_eq!(faces.len(), 1);
-            seen.push(faces[0]);
+    fn the_probe_renders_one_face_a_frame_on_strong_and_exceptional_cards() {
+        for level in [TierLevel::Strong, TierLevel::Exceptional] {
+            let mut seen = Vec::new();
+            for frame in 0..6 {
+                let faces = faces_to_render(level, frame, Watch::Close);
+                assert_eq!(faces.len(), 1, "{level:?}");
+                seen.push(faces[0]);
+            }
+            seen.sort();
+            assert_eq!(seen, [0, 1, 2, 3, 4, 5], "{level:?}: each face once");
         }
-        seen.sort();
-        assert_eq!(seen, [0, 1, 2, 3, 4, 5]);
-    }
-
-    #[test]
-    fn the_probe_renders_every_face_on_exceptional_cards() {
-        assert_eq!(
-            faces_to_render(TierLevel::Exceptional, 7, Watch::Close),
-            [0, 1, 2, 3, 4, 5]
-        );
     }
 
     #[test]
