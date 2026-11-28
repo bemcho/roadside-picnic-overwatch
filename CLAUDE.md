@@ -95,7 +95,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Audio | `audio/` |
 | Stalker model (rig, clips) | `player/animation.rs`, `tools/rig_stalker.py` |
 | Precompiled textures (KTX2, baked tangents) | `tools/compress_glb_textures.py` |
-| RAM and GPU (UHD scans from RAM, GPU scan budget, `--vram`, `GpuTier` and `--gpu-tier`) | `assets/{ram_source,gpu_scans}.rs`, `gpu_scans/` (`tier.rs`), `launch.rs` |
+| RAM and GPU (UHD scans from RAM, GPU scan budget, `--vram`, `GpuTier` and `--gpu-tier`, CPU light clustering) | `assets/{ram_source,gpu_scans}.rs`, `gpu_scans/` (`tier.rs`), `launch.rs`, `render/mod.rs` |
 | Entering the Zone (curtain) | `ui/curtain.rs` |
 
 Rules that hold everywhere:
@@ -246,6 +246,7 @@ src/
 ├── assets/          # asset path constants + startup preload handles
 ├── audio/           # synthesized ambience, effects, positional creature cues
 ├── player/          # stalker, animation, camera, orders/pathfinding, vehicle
+├── render/          # renderer tuning (CPU light clustering)
 ├── zone/            # per-run loop: anomalies and artifacts (placeholder geometry so far)
 ├── world/           # terrain, water, roads, scenery, base, sites, wildlife, weather, fog
 │   └── pillars/     # generated collision and relief data (tools/trim_tree_base.py,

@@ -119,20 +119,22 @@ messages.
 |---|---|---|
 | 1 | `register_ram_source(&mut app, "assets")` (`main.rs:34-35`) | Asset sources are built by `AssetPlugin`, so the `ram` source must exist before `DefaultPlugins` |
 | 2 | `DefaultPlugins.set(RenderPlugin { memory_hints: MemoryHints::MemoryUsage })` (`main.rs:40-48`) | wgpu's default 256 MiB blocks left ~1.2 GB of a 6 GB card reserved but unused, and a dropped scan freed nothing while its block held anything else; 8-64 MiB blocks keep ~0.4 GB less in use at the same frame rate (comment at `main.rs:36-39`, measured on the RTX 2060) |
-| 3 | `insert_resource(LaunchOptions::from_env())` (`main.rs:50`) | Parsed once the log is up, so a bad `--vram` or `--gpu-tier` is reported |
-| 4 | `GpuScansPlugin` (`main.rs:52`) | After the options (its fallback budget reads `--vram`, its fallback `GpuTier` reads `--gpu-tier` too) and after `DefaultPlugins` (it needs the render sub-app) |
-| 5 | `init_state::<AppState>`, `add_sub_state::<SplashPhase>`, `add_sub_state::<InGamePhase>` (`main.rs:53-55`) | States before any plugin that uses `in_state` |
-| 6 | `PreloadedAssets` + `Startup: preload_game_assets` (`main.rs:56-57`) | The splash's readiness list |
-| 7 | the six project plugins (`main.rs:58-65`) | Audio, World, Player, Zone, Ui, Save |
-| 8 | `toggle_pause`, `quit_on_q` in `Update` while `InGame` (`main.rs:66-67`) | App-wide keys |
-| 9 | `RamSourcePlugin` (native only, `main.rs:68-69`) | Its `start_ram_fill` needs `UhdFiles`, which `WorldPlugin::build` inserts |
+| 3 | `insert_resource(LaunchOptions::from_env())` (`main.rs:51`) | Parsed once the log is up, so a bad `--vram` or `--gpu-tier` is reported |
+| 4 | `GpuScansPlugin` (`main.rs:53`) | After the options (its fallback budget reads `--vram`, its fallback `GpuTier` reads `--gpu-tier` too) and after `DefaultPlugins` (it needs the render sub-app) |
+| 4a | `render::RenderTuningPlugin` (`main.rs:55`) | After `DefaultPlugins`: its `finish` runs after `PbrPlugin`'s, which inserts the `GlobalClusterSettings` it switches to CPU clustering |
+| 5 | `init_state::<AppState>`, `add_sub_state::<SplashPhase>`, `add_sub_state::<InGamePhase>` (`main.rs:56-58`) | States before any plugin that uses `in_state` |
+| 6 | `PreloadedAssets` + `Startup: preload_game_assets` (`main.rs:59-60`) | The splash's readiness list |
+| 7 | the six project plugins (`main.rs:61-68`) | Audio, World, Player, Zone, Ui, Save |
+| 8 | `toggle_pause`, `quit_on_q` in `Update` while `InGame` (`main.rs:69-70`) | App-wide keys |
+| 9 | `RamSourcePlugin` (native only, `main.rs:71-72`) | Its `start_ram_fill` needs `UhdFiles`, which `WorldPlugin::build` inserts |
 
 ```mermaid
 flowchart LR
     RAMSRC["register_ram_source"] --> DEF["DefaultPlugins + MemoryUsage"]
     DEF --> OPT["LaunchOptions"]
     OPT --> GPU["GpuScansPlugin"]
-    GPU --> ST["states + PreloadedAssets"]
+    GPU --> RT["RenderTuningPlugin"]
+    RT --> ST["states + PreloadedAssets"]
     ST --> SIX["Audio, World, Player, Zone, Ui, Save"]
     SIX --> KEYS["toggle_pause, quit_on_q"]
     KEYS --> RAMPL["RamSourcePlugin"]
@@ -1393,7 +1395,9 @@ The reasons, where the code gives them:
   in a Sphere seen from afar, and a car parked beside it costs nothing while
   the player is elsewhere. `ClusterConfig::Single` is the comment at `:123-126`:
   clustering a view at the default grid cost tens of milliseconds of CPU a
-  frame, and `None` crashes Bevy 0.20's GPU clustering.
+  frame under Bevy's GPU clustering, and `None` crashes it; with CPU
+  clustering (`render::use_cpu_clustering`) one cluster still keeps six
+  more views' light assignment at next to nothing.
 - **The faces live as long as the run, the cameras as long as the Zone.** The
   `ReflectionProbe` resource keeps the images; the cameras have
   `DespawnOnExit(InGame)` and are made again on each entry
@@ -1436,10 +1440,10 @@ that fits: the scans every tier shows come first.
 **What it costs.** Measured beside the Sphere on the 6 GB RTX 2060 (playtest
 build, Xephyr): Modest 34 FPS, Strong 27 to 28, Exceptional (forced with
 `--gpu-tier exceptional`) 10. The trace puts the cause on the CPU, not the GPU:
-Bevy 0.20's GPU light clustering takes 30 to 44 ms of CPU per camera view per
+Bevy 0.20's GPU light clustering took 30 to 44 ms of CPU per camera view per
 frame, and every probe face that renders is a view (it also gets its own four sun
-cascades). Moving to CPU clustering is the next branch's first item; the
-numbers are in
+cascades). The game now clusters lights on the CPU (`render/mod.rs`, 0.2 ms a
+frame) and Strong measures 26 to 28 at full clocks; the numbers are in
 `~/Projects/agentic/roadside-picnic-overwatch/reviews/2026-11-27-gpu-usage-findings.md`.
 
 ### 6.10 Invariants

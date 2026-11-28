@@ -147,10 +147,9 @@ pub(super) fn spawn_reflection_probe(
             Tonemapping::None,
             DebandDither::Disabled,
             Msaa::Off,
-            // One cluster: clustering a view at the default grid costs tens of
-            // milliseconds of CPU a frame (traced 2026-11-27). `None` would cost
-            // nothing, but Bevy 0.20's GPU clustering then fails on a zero-sized
-            // texture.
+            // One cluster: lamps barely show in the reflection, and it keeps
+            // the CPU's light assignment for six more views at next to nothing
+            // (`render::use_cpu_clustering`).
             ClusterConfig::Single,
             RenderLayers::layer(0),
             Transform::default(),

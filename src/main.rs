@@ -6,6 +6,7 @@ mod assets;
 mod audio;
 mod launch;
 mod player;
+mod render;
 mod save;
 mod states;
 mod ui;
@@ -50,6 +51,8 @@ fn main() {
         .insert_resource(LaunchOptions::from_env())
         // After the options: its fallback budget follows `--vram`.
         .add_plugins(GpuScansPlugin)
+        // After `DefaultPlugins`: its `finish` edits what `PbrPlugin`'s inserted.
+        .add_plugins(render::RenderTuningPlugin)
         .init_state::<AppState>()
         .add_sub_state::<SplashPhase>()
         .add_sub_state::<InGamePhase>()

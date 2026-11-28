@@ -104,6 +104,7 @@ flowchart LR
 | Saved progress | `src/save.rs` | `SavePlugin`: the progress file, F5/autosave/quit saves, restore on entry |
 | States | `src/states.rs` | `AppState::Loading/InGame`, `InGamePhase::Running/Paused` |
 | Asset paths | `src/assets/` | Canonical paths, preload handles, shared GLB loader helpers |
+| Render tuning | `src/render/mod.rs` | `RenderTuningPlugin`: lights clustered on the CPU (`use_cpu_clustering`, in `finish` after `PbrPlugin`'s) |
 | RAM and GPU | `src/assets/ram_source.rs`, `assets/gpu_scans.rs`, `gpu_scans/{streaming,residency,vram,tier}.rs`, `src/launch.rs` | `ram://` fill behind the splash, `assets::uhd`, `GpuScans` budget, admission, prefill and eviction, render-world residency, live `VK_EXT_memory_budget` reading, `GpuTier` (modest, strong or exceptional from the card's size, or forced by `--gpu-tier`) |
 | Player | `src/player/` | Stalker, camera, input, gravity, crawling, vehicle interaction |
 | Vehicle | `src/player/vehicle.rs`, `vehicle/contact.rs` | Throttle/steer, traction, four-tire terrain fit, wheels, spotlight |
@@ -999,9 +1000,8 @@ Important paths:
     only; the Sphere sits alone on `SPHERE_LAYER` (1), and the player's camera
     and the Sun see layers 0 and 1. A camera sees the Sphere only if its
     `RenderLayers` include 1; the default (layer 0) does not. Each active
-    camera is a full view with its own clustering and shadow cascades
-    (Bevy 0.20's GPU light clustering costs 30-44 ms of CPU per view per frame:
-    a strong GPU renders one probe face a frame and an exceptional one six), so
+    camera is a full view with its own light clustering and shadow cascades
+    (a strong GPU renders one probe face a frame and an exceptional one six), so
     add cameras sparingly and wake them only when something can show in them.
 
 29. **Scale effects to the GPU through `GpuTier`, not the live VRAM budget.**

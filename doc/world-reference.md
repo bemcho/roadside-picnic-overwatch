@@ -733,9 +733,9 @@ the stalker stands still.
     more cameras. `pose_wildlife` and `stream_wall_view` did take every `Camera3d`.
   - *Measured* on the 6 GB RTX 2060 (playtest build in Xephyr, beside the Sphere):
     modest 34 FPS, strong 27-28 FPS, exceptional (forced, `--gpu-tier exceptional`)
-    10 FPS. Traced cause: Bevy 0.20's GPU light clustering costs 30-44 ms of CPU per
-    camera view per frame, and every active probe face is a view. Switching to CPU
-    clustering is the next branch's first item (findings in
+    10 FPS, all with Bevy's GPU light clustering, which cost 30-44 ms of CPU per
+    camera view per frame. With CPU clustering (`render::use_cpu_clustering`, see
+    **RAM and GPU**) Strong measures 26-28 FPS at full clocks (findings in
     `~/Projects/agentic/roadside-picnic-overwatch/reviews/2026-11-27-gpu-usage-findings.md`).
   - *Checks:* `the_spikes_stand_tallest_when_the_sphere_sinks_lowest`,
     `the_field_falls_as_the_sphere_rises`, `the_sphere_turns_at_a_steady_rate`,
@@ -1313,6 +1313,18 @@ the stalker stands still.
   `the_tier_is_decided_once`,
   `without_a_reading_the_fallback_settles_and_a_forced_tier_wins`,
   `an_integrated_gpu_stays_modest_unless_forced` (`tier.rs`), `a_gpu_tier_can_be_forced` (`launch.rs`).
+  *Light clustering* (`src/render/mod.rs`): `RenderTuningPlugin` sets Bevy's
+  `GlobalClusterSettings::gpu_clustering` to `None` in its `finish`, after
+  `PbrPlugin`'s, so lamps are assigned to clusters on the CPU (0.2 ms a frame).
+  Bevy 0.20's GPU clustering rebuilt each view's buffers on the CPU every frame
+  at 30-44 ms a view when the GPU sat at low clocks. Measured on the RTX 2060
+  in Xephyr: equal at full clocks (34 FPS at the crater junction on Modest,
+  26-28 by the Sphere on Strong); when the driver holds the GPU at low clocks
+  (P3/P5, about one run in three on main and on this build alike, with no
+  thermal or power cap: the driver's own governor), 15-16 FPS instead of 8-11.
+  "Prefer Maximum Performance" in the NVIDIA PowerMizer setting is the
+  user-side remedy to try. Tests: `bevy_is_switched_to_cpu_light_clustering`,
+  `without_a_renderer_the_switch_does_nothing`.
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
   empty, every streamed plant has spawned (`world::PlantsGrowing`) and the
