@@ -29,7 +29,8 @@ stalker's world position (X, Y, Z in meters; Y is up).
 
 - **Any key** — enter the Zone from the hangar splash once loading finishes
 - **Left click** — move the stalker there (pathfinding around obstacles and deep
-  water; long trips run). While driving, click to drive there.
+  water; long trips run). While driving, click to drive there (as near as the
+  vehicle can get, where it stops).
 - **Shift + left click** — add a waypoint after the orders already given; a pulsing
   ring marks each one until it is reached and a thin line traces the route. A
   route started with Shift-clicks waits until Shift is released

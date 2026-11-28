@@ -1613,8 +1613,12 @@ sequenceDiagram
    - string-pulls the result (`smooth`).
 4. **Fallback.** For the stalker only, a failed search retries with grade
    infinity: "a steeper wall is a scramble, taken only when no gentler way joins
-   the trip" (`orders.rs:33-35`). The stalker can scramble; a car cannot. A vehicle click with no path is
-   refused silently.
+   the trip" (`orders.rs:33-35`). The stalker can scramble; a car cannot. A vehicle
+   is searched with `Reach::Nearest`: when A* exhausts the reachable cells
+   without the goal, `search` returns the path to the one nearest it (octile
+   distance, the cheapest of equals), from the wider of the two searches, so the
+   vehicle drives as near as it can get and stops; `replace_leg` moves the stop
+   to that end. Only when it can get no nearer than its start is there no order.
 5. **Order.** `give` replaces the order; Shift `append`s it and `hold`s it until
    Shift is released.
 6. **Replan.** `replan_order` re-runs a leg when the mover reaches a stop or

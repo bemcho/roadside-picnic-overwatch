@@ -50,8 +50,12 @@ get, which would close the crater's deepest laps to the carrier). So into a pit
 orders take the road graded down its walls. Where no such route joins a foot
 click's ends (6 of 200 random 20-250 m trips in the Zone), the stalker alone
 searches once more over any slope (`route`): `move_player` has no slope limit,
-so a click they could always walk must not fail; the car's and the carrier's are
-refused. That costs a trip that needs it 0.18 s against 0.13 s, and an
+so a click they could always walk must not fail. The car and the carrier are
+not given a route over ground they can't take: they drive to the reachable spot
+nearest the click and stop there (`Reach::Nearest`: the cell the failed wider
+search reached nearest the goal, octile distance, the cheapest of equals; no
+order if that is where they stand, `a_car_click_beyond_its_grip_stops_short`,
+`a_walled_in_goal_is_refused_or_neared`). That costs a trip that needs it 0.18 s against 0.13 s, and an
 unreachable click twice the searches, 0.36 s against 0.18 s (test build). The
 slope comes from the 2 m detail mesh's vertices, sampled once a search (`Terrain::mesh_patch`, about one land
 sample per 16 cells): the movers stand on that mesh, and `height_at` between its

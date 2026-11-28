@@ -571,7 +571,8 @@ with grid A* around collider pillars, deep water and ground too steep for the
 mover (`player/path.rs`, each mover's own `Mobility`: the stalker, the car and
 the carrier); where no such route joins a foot click's ends, `route` searches
 once more over any slope for the stalker alone, as `move_player` has no slope
-limit, and refuses the vehicles. With Shift held it plans from the last stop
+limit; a vehicle is routed to the reachable spot nearest the click instead
+(`Reach::Nearest`) and stops there. With Shift held it plans from the last stop
 and appends the leg (`MoveOrder::append`), and a route Shift starts on a standing
 mover is held (`MoveOrder::hold`) until Shift is released. `replan_order`
 pathfinds the leg to the next stop again from the mover's position when a stop

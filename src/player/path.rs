@@ -27,6 +27,16 @@ pub(in crate::player) struct Mobility {
     pub(in crate::player) max_grade: f32,
 }
 
+/// How near a route must come to where it was asked to go.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(in crate::player) enum Reach {
+    /// All the way, or no route.
+    Goal,
+    /// As near as the mover can get, where it stops: a vehicle clicked onto
+    /// ground too steep or deep for it drives to the edge of what it can reach.
+    Nearest,
+}
+
 /// An upright obstacle footprint in world space, already grown by the body radius.
 struct Obstacle {
     center: Vec2,
@@ -70,24 +80,32 @@ impl Grid {
     }
 }
 
-/// Waypoints from `from` to `to` (excluding the start), or `None` if unreachable.
-/// The whole footprint keeps to rendered ground no steeper than
+/// Waypoints from `from` to `to` (excluding the start), or `None` if unreachable;
+/// with `Reach::Nearest`, to the reachable spot nearest `to` instead (`None` only
+/// if the mover can get no nearer than it stands). The whole footprint keeps to rendered ground no steeper than
 /// `mobility.max_grade`, so into a pit the route takes the road graded down
 /// its walls. The search keeps to the trip's box and `MARGIN` around it; should no way
 /// lie in there, it searches once more within `WIDE_MARGIN`, for a road that
-/// winds out of the trip's box, as the crater's spiral does.
+/// winds out of the trip's box, as the crater's spiral does; the nearest spot
+/// comes from that wider search.
 pub(super) fn find_path<'a>(
     terrain: &Terrain,
     colliders: impl IntoIterator<Item = (&'a Collider, &'a GlobalTransform)>,
     from: Vec2,
     to: Vec2,
     mobility: Mobility,
+    reach: Reach,
 ) -> Option<Vec<Vec2>> {
     let colliders: Vec<_> = colliders.into_iter().collect();
-    [MARGIN, WIDE_MARGIN].into_iter().find_map(|margin| {
+    let mut nearest = None;
+    for margin in [MARGIN, WIDE_MARGIN] {
         let colliders = colliders.iter().copied();
-        find_path_within(terrain, colliders, from, to, mobility, margin)
-    })
+        match find_path_within(terrain, colliders, from, to, mobility, margin) {
+            Some((path, true)) => return Some(path),
+            found => nearest = found.map(|(path, _)| path),
+        }
+    }
+    nearest.filter(|_| reach == Reach::Nearest)
 }
 
 fn find_path_within<'a>(
@@ -97,7 +115,7 @@ fn find_path_within<'a>(
     to: Vec2,
     mobility: Mobility,
     margin: f32,
-) -> Option<Vec<Vec2>> {
+) -> Option<(Vec<Vec2>, bool)> {
     let low = from.min(to) - margin;
     let high = from.max(to) + margin;
     let area = (high - low).x * (high - low).y;
@@ -115,13 +133,16 @@ fn find_path_within<'a>(
     // A mover pressed into a solid (or climbing it, after it stalled there)
     // sets off from the nearest free spot, as an order ends at one.
     let start = nearest_free(&grid, grid.cell_at(from))?;
-    let goal = nearest_free(&grid, grid.cell_at(to))?;
-    let cells = search(&grid, start, goal)?;
+    let goal = nearest_free(&grid, grid.cell_at(to)).unwrap_or(grid.cell_at(to));
+    let (cells, whole) = search(&grid, start, goal)?;
+    if !whole && cells.len() < 2 {
+        return None;
+    }
     let mut points: Vec<Vec2> = cells.iter().map(|&c| grid.center(c)).collect();
-    if goal == grid.cell_at(to) {
+    if whole && goal == grid.cell_at(to) {
         *points.last_mut()? = to;
     }
-    Some(smooth(&grid, from, points))
+    Some((smooth(&grid, from, points), whole))
 }
 
 fn obstacles<'a>(
@@ -241,7 +262,9 @@ fn nearest_free(grid: &Grid, cell: IVec2) -> Option<IVec2> {
 }
 
 /// 8-connected A* with an octile heuristic; diagonals may not cut blocked corners.
-fn search(grid: &Grid, start: IVec2, goal: IVec2) -> Option<Vec<IVec2>> {
+/// The cells to `goal` and `true`, or, when it can't be reached, to the reached
+/// cell nearest it (the cheapest of equals) and `false`.
+fn search(grid: &Grid, start: IVec2, goal: IVec2) -> Option<(Vec<IVec2>, bool)> {
     const STEPS: [(IVec2, f32); 8] = [
         (IVec2::new(1, 0), 1.0),
         (IVec2::new(-1, 0), 1.0),
@@ -262,17 +285,15 @@ fn search(grid: &Grid, start: IVec2, goal: IVec2) -> Option<Vec<IVec2>> {
     let mut open = BinaryHeap::new();
     cost[start_index] = 0.0;
     open.push((Reverse((heuristic(start) * 1024.0) as u32), start_index));
+    let mut nearest = (heuristic(start), 0.0, start_index);
     while let Some((_, here)) = open.pop() {
         let cell = grid.cell_of(here);
         if cell == goal {
-            let mut path = vec![cell];
-            let mut i = here;
-            while came_from[i] != usize::MAX {
-                i = came_from[i];
-                path.push(grid.cell_of(i));
-            }
-            path.reverse();
-            return Some(path);
+            return Some((trace(grid, &came_from, here), true));
+        }
+        let left = heuristic(cell);
+        if (left, cost[here]) < (nearest.0, nearest.1) {
+            nearest = (left, cost[here], here);
         }
         for (step, length) in STEPS {
             let next = cell + step;
@@ -294,7 +315,18 @@ fn search(grid: &Grid, start: IVec2, goal: IVec2) -> Option<Vec<IVec2>> {
             }
         }
     }
-    None
+    Some((trace(grid, &came_from, nearest.2), false))
+}
+
+/// The cells from the search's start to cell `index`, following `came_from`.
+fn trace(grid: &Grid, came_from: &[usize], mut index: usize) -> Vec<IVec2> {
+    let mut path = vec![grid.cell_of(index)];
+    while came_from[index] != usize::MAX {
+        index = came_from[index];
+        path.push(grid.cell_of(index));
+    }
+    path.reverse();
+    path
 }
 
 /// Drops waypoints that a straight walk can skip.
@@ -387,11 +419,19 @@ mod tests {
             max_depth: 1.0,
             max_grade: 1.0,
         };
-        let open = find_path(&terrain, [], from, to, mobility).expect("open path");
+        let open = find_path(&terrain, [], from, to, mobility, Reach::Goal).expect("open path");
         assert_eq!(open, vec![to], "an open field needs no detour");
 
         let collider = Collider(WALL);
-        let path = find_path(&terrain, [(&collider, &wall)], from, to, mobility).expect("detour");
+        let path = find_path(
+            &terrain,
+            [(&collider, &wall)],
+            from,
+            to,
+            mobility,
+            Reach::Goal,
+        )
+        .expect("detour");
         assert_eq!(path.last(), Some(&to));
         assert!(path.len() >= 2, "the walk bends around the wall: {path:?}");
         let mut previous = from;
@@ -427,13 +467,60 @@ mod tests {
             max_depth: 1.0,
             max_grade: 1.0,
         };
-        let path = find_path(&terrain, [(&collider, &scan)], entrance, pit, on_foot)
-            .expect("a route down the ramp");
+        let path = find_path(
+            &terrain,
+            [(&collider, &scan)],
+            entrance,
+            pit,
+            on_foot,
+            Reach::Goal,
+        )
+        .expect("a route down the ramp");
         let route = length(&[&[entrance], path.as_slice()].concat());
         let limit = length(ramp) * 1.6;
         assert!(
             route <= limit,
             "the route is {route} m, the limit {limit} m"
+        );
+    }
+
+    #[test]
+    fn a_walled_in_goal_is_refused_or_neared() {
+        let terrain = Terrain::new();
+        let center = Vec2::new(40.0, -60.0);
+        let ground = terrain.mesh_height_at(center);
+        let pen = GlobalTransform::from_xyz(center.x, ground, center.y);
+        // A closed ring of posts 6 m across around the goal.
+        let ring: Vec<Pillar> = (0..48)
+            .map(|i| {
+                let at = Vec2::from_angle(i as f32 * std::f32::consts::TAU / 48.0) * 6.0;
+                Pillar {
+                    x: at.x,
+                    z: at.y,
+                    radius: 0.6,
+                    bottom: 0.0,
+                    top: 3.0,
+                }
+            })
+            .collect();
+        let collider = Collider(Box::leak(ring.into_boxed_slice()));
+        let mobility = Mobility {
+            body: Body {
+                radius: 0.35,
+                height: 1.8,
+            },
+            max_depth: 1.0,
+            max_grade: 1.0,
+        };
+        let from = center - Vec2::Y * 20.0;
+        let find = |reach| find_path(&terrain, [(&collider, &pen)], from, center, mobility, reach);
+        assert_eq!(find(Reach::Goal), None, "the goal is walled in");
+        let path = find(Reach::Nearest).expect("a route to the ring");
+        let end = *path.last().expect("waypoints");
+        let gap = end.distance(center);
+        assert!(
+            (6.6..8.0).contains(&gap),
+            "the route stops outside the ring, {gap} m from the goal"
         );
     }
 

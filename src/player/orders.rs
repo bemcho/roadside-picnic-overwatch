@@ -12,7 +12,7 @@ use bevy::window::PrimaryWindow;
 use crate::states::AppState;
 use crate::world::{Body, Boom, Collider, InstitutePass, Terrain, Weight, in_zone};
 
-use super::path::{Mobility, find_path};
+use super::path::{Mobility, Reach, find_path};
 use super::vehicle::{CAR, CARRIER_ROUTING, Carrier, Driving, FORD_DEPTH, MAX_GRIP_GRADE};
 use super::{Player, PlayerCamera, STALKER, STANDING};
 
@@ -404,7 +404,8 @@ pub(super) fn replan_order(
 /// A path for the stalker, or for the vehicle they drive (the car, or the
 /// wider Institute carrier), around everything that blocks it. Where no route
 /// keeps to ground the stalker is routed on, they get one over any slope, as
-/// `move_player` always let them walk; a vehicle is refused.
+/// `move_player` always let them walk; a vehicle drives as near as it can get
+/// and stops there.
 fn route(
     terrain: &Terrain,
     (colliders, carriers): (&Solids, &Query<(), With<Carrier>>),
@@ -433,15 +434,25 @@ fn route(
         })
         .map(|(_, collider, pose, ..)| (collider, pose))
         .collect();
-    let find = |mobility| find_path(terrain, obstacles.iter().copied(), from, to, mobility);
+    let find = |mobility, reach| {
+        find_path(
+            terrain,
+            obstacles.iter().copied(),
+            from,
+            to,
+            mobility,
+            reach,
+        )
+    };
     match vehicle {
-        None => find(mobility).or_else(|| {
-            find(Mobility {
+        None => find(mobility, Reach::Goal).or_else(|| {
+            let any_slope = Mobility {
                 max_grade: f32::INFINITY,
                 ..mobility
-            })
+            };
+            find(any_slope, Reach::Goal)
         }),
-        Some(_) => find(mobility),
+        Some(_) => find(mobility, Reach::Nearest),
     }
 }
 
@@ -780,12 +791,11 @@ mod tests {
     // `move_player` has no slope limit, so a click on foot may not fail where
     // the stalker could have walked: ground steeper than `ON_FOOT` routes is
     // used when nothing else joins the two. Trips sampled from the Zone, where
-    // no 1.0 grade route does; the car, held to its grip, is refused.
+    // no 1.0 grade route does.
     fn a_foot_click_falls_back_to_any_slope() {
         use bevy::ecs::system::SystemState;
         let terrain = Terrain::new();
         let mut world = World::new();
-        let car = world.spawn_empty().id();
         let mut state = SystemState::<(Solids, Query<(), With<Carrier>>)>::new(&mut world);
         let (solids, carriers) = state.get(&world).expect("valid queries");
         let trips = [
@@ -794,17 +804,33 @@ mod tests {
         ];
         for (from, to) in trips {
             assert!(
-                find_path(&terrain, [], from, to, ON_FOOT).is_none(),
+                find_path(&terrain, [], from, to, ON_FOOT, Reach::Goal).is_none(),
                 "a graded route joins {from} and {to}"
             );
             let path = route(&terrain, (&solids, &carriers), None, from, to)
                 .unwrap_or_else(|| panic!("no foot route from {from} to {to}"));
             assert_eq!(path.last(), Some(&to));
-            assert!(
-                route(&terrain, (&solids, &carriers), Some(car), from, to).is_none(),
-                "the car is routed from {from} to {to}"
-            );
         }
+    }
+
+    #[test]
+    // No route keeps to the car's grip all the way (see the foot click above):
+    // it drives as near as it can get and stops there.
+    fn a_car_click_beyond_its_grip_stops_short() {
+        use bevy::ecs::system::SystemState;
+        let terrain = Terrain::new();
+        let mut world = World::new();
+        let car = world.spawn_empty().id();
+        let mut state = SystemState::<(Solids, Query<(), With<Carrier>>)>::new(&mut world);
+        let (solids, carriers) = state.get(&world).expect("valid queries");
+        let (from, to) = (Vec2::new(-797.0, -550.0), Vec2::new(-837.0, -662.0));
+        let path = route(&terrain, (&solids, &carriers), Some(car), from, to)
+            .expect("a route toward the click");
+        let end = *path.last().expect("waypoints");
+        assert!(
+            end.distance(to) > VEHICLE_ARRIVAL && end.distance(to) < from.distance(to),
+            "the car stops short of {to}, nearer than it set off: at {end}"
+        );
     }
 
     #[test]
