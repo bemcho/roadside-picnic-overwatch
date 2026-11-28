@@ -85,7 +85,7 @@ assets, and update it in the same change.** Sections are bullets named as here.
 | Perimeter guns (laser scan, trespass, tracers, downed creatures) | `world/turrets.rs`, `turrets/{scan,fire,beam}.rs`, `wildlife/downed.rs`, `audio/guns.rs` |
 | Sites (Harmont map, 32 scan placements, stand-ins, relief, Institute lights) | `world/{sites,map,institute}.rs` |
 | Quarry ramp (haul road, `Surface::Ramp`, collision off the cut, scan cut, `tools/plan_quarry_ramp.py`); Golden Sphere's crater road (on through the Quarry rim) | `world/{quarry_ramp,ramp_cut}.rs`, `world/{roads,terrain,sites}.rs`, `shaders/ramp_cut.wesl`, `tools/trace_crater_backdrop.py`, generated `world/pillars/{quarry_ramp,golden_crater_ramp,golden_crater_backdrop}.rs` |
-| Golden Sphere (hover, pool, ferrofluid, reflections and UHD scan per GPU tier) | `world/golden_sphere.rs`, `world/golden_sphere/{ferrofluid,mirror,reflection,uhd}.rs`, `shaders/{ferrofluid,golden_sphere}.wesl` |
+| Golden Sphere (hover, pool, ferrofluid, reflections and UHD scan per GPU tier) | `world/golden_sphere.rs`, `world/golden_sphere/{ferrofluid,mirror,reflection,uhd}.rs`, `shaders/{ferrofluid,golden_sphere}.wesl`, `tools/smooth_golden_sphere.py` |
 | New Harmont; Railway; Marsh props; Rocks | `world/{town,railway,marsh,rocks}.rs` |
 | Guards; UN patrol; Harmont traffic; Institute carrier; Institute helicopters | `world/{guards,helicopters}.rs`, `player/vehicle/{patrol,traffic,carrier,carrier_track,track_loop}.rs` |
 | Townsfolk (New Harmont pedestrians, scientists at the Institute) | `world/townsfolk.rs` |

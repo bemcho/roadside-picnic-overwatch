@@ -1477,7 +1477,8 @@ alone loads scans"), and writes the Sphere's material only when the detail
 changes. The scan is centred and 0.98 m across, so the child's scale becomes
 `SOURCE_DIAMETER / UHD_DIAMETER`; the medium model returns when the anchors leave
 40 m or the scan is evicted, and the hold on its GPU copy is dropped with it. The
-file (`GOLDEN_SPHERE_UHD`, 1.97 M triangles, one 8192 px BC7 KTX2 texture, 70 MB,
+file (`GOLDEN_SPHERE_UHD`, with the generated scan's four knobs laid back onto
+the ball by `tools/smooth_golden_sphere.py`, 1.97 M triangles, one 8192 px BC7 KTX2 texture, 70 MB,
 138 MB measured on the GPU) is listed only on exceptional GPUs, last in
 `UhdFiles` (`list_uhd_sphere`): the list is built with the plugin, before the
 tier is known, so a `Startup` system ordered after `settle_gpu_tier` and before

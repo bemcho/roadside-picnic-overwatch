@@ -758,7 +758,7 @@ the stalker stands still.
     (each face is a full view with its own sun cascades, about 7 ms on a 2060:
     all six a frame held 17 FPS, one a frame 42), and the Sphere's UHD scan replaces the medium
     model. The scan (`models/artifacts/uhd/artifact-golden-sphere.glb`, from the
-    workspace's `models/artifacts/uhd/`, 1.97 M triangles, one 8192 x 8192 BC7 KTX2
+    workspace's `models/artifacts/uhd/` with its knobs smoothed off, 1.97 M triangles, one 8192 x 8192 BC7 KTX2
     gold texture, 70 MB on disk, 138 MB on the GPU measured) is streamed through
     `GpuScans` (`stream_uhd_sphere`): wanted once the nearest `StreamAnchor` is
     within 80 m (`UHD_RANGE`, 40 m, plus `UPLOAD_LEAD`, 40 m), and swapped in (mesh
@@ -767,7 +767,22 @@ the stalker stands still.
     or the scan is evicted. Only exceptional GPUs list it, last in `UhdFiles`
     (`list_uhd_sphere`, at `Startup` once the tier is settled and before the RAM
     fill starts), so the RAM fill and the prefill take it after every scan all
-    tiers show, and other tiers never read its 70 MB.
+    tiers show, and other tiers never read its 70 MB. The generated scan carries
+    four knobs the medium model lacks (two 6 cm bosses with a square socket, two
+    3 cm domed screw heads), which the mirror showed as door knobs.
+    `tools/smooth_golden_sphere.py` fits the ball (least squares, again without
+    the knobs), finds each knob as a cluster of points more than 2% proud of its
+    median radius, and lays everything within the knob's reach plus 7 mm (socket
+    and foot fillet included) onto the ball with outward normals, fading over the
+    next 7 mm; the raised seams (under 1%), UVs and texture stay. 49,103 of
+    1,002,049 vertices move; afterwards nothing stands more than 0.71% proud:
+    ```
+    python3 tools/smooth_golden_sphere.py \
+        ~/Projects/agentic/RoadSide-Picnic/models/artifacts/uhd/artifact-golden-sphere.glb \
+        assets/models/artifacts/uhd/artifact-golden-sphere.glb
+    python3 tools/compress_glb_textures.py assets/models/artifacts/uhd/artifact-golden-sphere.glb
+    ```
+    Tests: `python3 -m unittest tools/test_smooth_golden_sphere.py`.
   - *Bounds:* the pool's `Aabb` is the disc's raised to the tallest spike (1.4 m,
     `Ferrofluid::bounds`) with `NoAutoAabb`, since only the vertex shader raises
     the spikes: with Bevy's own box the main view, the shadow cascades and the
