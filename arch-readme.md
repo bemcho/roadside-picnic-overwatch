@@ -540,7 +540,9 @@ floor. The numbers are in `doc/world-reference.md`.
   since Bevy's angle-weighted ones vanish on cells that small); `ferrofluid.wesl` raises the
   crown and the creeping rings and tilts the normals. The shader is also the
   material's `prepass_vertex_shader`, so the shadow pass raises the same spikes.
-- **`GpuTier` decides the rest.** It is settled once at `Startup` from the
+- **`GpuTier` decides the rest** (cost on a 2060 at 1440p: the same frame on
+  every tier away from the Sphere; at it, Strong 38 FPS, Exceptional 42). It
+  is settled once at `Startup` from the
   card's size (`--gpu-tier` forces it) and read through `Option<Res<GpuTier>>`,
   with `Strong` where it is missing (tests). Modest GPUs get no live map: the
   Sphere's fragment shader traces stand-ins for the stalker (a capsule) and the

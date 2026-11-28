@@ -1372,6 +1372,17 @@ the stalker stands still.
   "Prefer Maximum Performance" in the NVIDIA PowerMizer setting is the
   user-side remedy to try. Tests: `bevy_is_switched_to_cpu_light_clustering`,
   `without_a_renderer_the_switch_does_nothing`.
+  *Final numbers* (RTX 2060 at 1440p, end of the gpu-optimal-usage branch):
+  - The CPU's main app takes 10-13 ms a frame on every tier (p95 under 15 ms).
+  - GPU time away from the Sphere is the same on all three tiers: 20-22 ms at
+    the crater junction at full clocks and 22-24 ms on a drive (mixed clocks).
+    That misses the 16.7 ms target but holds the 30 FPS floor. The main opaque
+    pass and the sun's shadow cascades dominate.
+  - At the Golden Sphere, on the real display: Strong 38 FPS, Exceptional 42.
+  - With 4 GB (`--vram 4` and the card held to 3.7 GiB free) the game uses
+    2.0 of a 3.4 GB budget, with no crash.
+  - The numbers and their caveats are in the GPU findings
+    (`~/Projects/agentic/roadside-picnic-overwatch/reviews/`).
 - **Entering the Zone** (`src/ui/curtain.rs`): an "Entering the Zone" curtain
   covers the freshly spawned world until the render pipeline queue has stayed
   empty, every streamed plant has spawned (`world::PlantsGrowing`) and the

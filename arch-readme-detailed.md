@@ -491,6 +491,15 @@ a card with hardware ray tracing is Exceptional from `EXCEPTIONAL_RT_GB` 5.75 Gi
 - **Startup, before the Zone.** `settle_gpu_tier` runs before `OnEnter(InGame)`
   builds anything the level sizes. It takes `RenderDevice` as an `Option`, so an
   app without one settles on the fallback.
+- **What the tiers cost** (RTX 2060, 1440p, end of the gpu-optimal-usage
+  branch):
+  - Away from the Sphere the three tiers draw the same frame: GPU 20-22 ms at
+    the crater junction at full clocks, the CPU's main app 11-13 ms.
+  - At the Sphere, on the real display: Strong 38 FPS, Exceptional 42.
+  - Measuring note: summing `RenderDiagnosticsPlugin` pass times is not valid
+    at the Sphere on Strong and Exceptional. The probe cameras run the same
+    passes under the same names, and the log keeps one view's value. Judge
+    those runs by real-display FPS.
 
 ### 3.7 Constants
 
