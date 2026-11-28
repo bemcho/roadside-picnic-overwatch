@@ -61,7 +61,8 @@ stalker's world position (X, Y, Z in meters; Y is up).
   card size the fallback budget assumes (6 GB without it). See **RAM and
   GPU** in `doc/world-reference.md`.
 - `cargo run --release -- --gpu-tier <modest|strong|exceptional>` forces the
-  effects tier (normally decided from the card's size). See **RAM and GPU**.
+  effects tier (normally decided from the card's size, and on 6 GB+ cards
+  whether it has hardware ray tracing). See **RAM and GPU**.
 
 ## World reference
 

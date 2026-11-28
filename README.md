@@ -269,7 +269,8 @@ another.
   scaled to the GPU use, whatever the card (the Golden Sphere's reflections
   and its close-up model are the first). Without it the game decides once, at
   start, from the card's size: under 5 GB is modest, 5 GB and up strong, 16 GB
-  and up exceptional (`--vram` caps the size it judges). The log says which
+  and up exceptional, and 6 GB and up with hardware ray tracing (an RTX 2060 or
+  newer) exceptional too (`--vram` caps the size it judges). The log says which
   tier it took:
 
   ```bash

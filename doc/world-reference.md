@@ -1327,7 +1327,10 @@ the stalker stands still.
   falls whenever another program holds VRAM and would take a 6 GB card for a
   4 GB one. Under 4.75 GiB is Modest (4 GB cards), 4.75 GiB and up Strong (a
   5 GB card as the driver reports it, 6 GB, and so on; drivers report a little
-  under the size sold) and 15 GiB and up Exceptional (16 GB cards). `--vram`
+  under the size sold) and 15 GiB and up Exceptional (16 GB cards), or 5.75 GiB
+  and up with hardware ray tracing (the adapter's ray queries: a 6 GB RTX 2060,
+  RX 6000 or newer; a 6 GB GTX 1660 stays Strong). The 2060, the slowest such
+  card, holds 42 FPS at the Golden Sphere on Exceptional (Strong: 38). `--vram`
   caps the size judged (`--vram 4` on a 16 GB card gives Modest). Where the
   driver reports no heap (the web, macOS), the fallback is judged from `--vram`,
   or 6 GB without it: Strong. An integrated GPU (or a CPU renderer, as wgpu's
@@ -1339,6 +1342,7 @@ the stalker stands still.
   the Golden Sphere reads it so far: its pool's grid, its reflections and its
   UHD scan (see **Golden Sphere**); that scan is the one streamed scan wanted
   only on Exceptional GPUs. Tests: `the_tier_follows_the_cards_size_capped_by_vram`,
+  `a_six_gb_rtx_card_runs_exceptional_effects`,
   `the_tier_is_decided_once`,
   `without_a_reading_the_fallback_settles_and_a_forced_tier_wins`,
   `an_integrated_gpu_stays_modest_unless_forced` (`tier.rs`), `a_gpu_tier_can_be_forced` (`launch.rs`).

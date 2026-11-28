@@ -1011,8 +1011,8 @@ Important paths:
     add cameras sparingly and wake them only when something can show in them.
 
 29. **Scale effects to the GPU through `GpuTier`, not the live VRAM budget.**
-    `GpuTier` is decided once at `Startup` from the card's size (capped by
-    `--vram`, forced by `--gpu-tier`) and does not change in a session. The
+    `GpuTier` is decided once at `Startup` from the card's size and its
+    hardware ray tracing (capped by `--vram`, forced by `--gpu-tier`) and does not change in a session. The
     live budget falls whenever another program holds VRAM and would flip an
     effect between tiers. Read the tier through `Option<Res<GpuTier>>` and fall
     back to `TierLevel::default()`; build anything sized by it (the pool's

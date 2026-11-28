@@ -2,7 +2,8 @@
 //! scan budget that follows it.
 
 use bevy::prelude::*;
-use bevy::render::renderer::{RenderAdapterInfo, RenderDevice};
+use bevy::render::render_resource::WgpuFeatures;
+use bevy::render::renderer::{RenderAdapter, RenderAdapterInfo, RenderDevice};
 
 use crate::launch::{DEFAULT_VRAM_GB, LaunchOptions};
 
@@ -70,15 +71,22 @@ pub fn settle_gpu_tier(
     mut tier: ResMut<GpuTier>,
     device: Option<Res<RenderDevice>>,
     adapter: Option<Res<RenderAdapterInfo>>,
+    features: Option<Res<RenderAdapter>>,
     launch: Res<LaunchOptions>,
 ) {
     let reading = device.and_then(|device| read_vram(&device));
     let integrated = adapter.is_some_and(|adapter| shares_system_memory(&adapter));
+    let ray_tracing = features.is_some_and(|adapter| {
+        adapter
+            .features()
+            .contains(WgpuFeatures::EXPERIMENTAL_RAY_QUERY)
+    });
     tier.settle_with(
         reading,
         launch.vram_gb.map(gib),
         launch.gpu_tier,
         integrated,
+        ray_tracing,
     );
     info!("GPU: effects at the {:?} tier", tier.level());
 }

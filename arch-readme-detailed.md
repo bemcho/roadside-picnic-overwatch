@@ -453,12 +453,13 @@ one `TierLevel`: `Modest`, `Strong` or `Exceptional`. `GpuTier`
 | Step | Code | What happens |
 |---|---|---|
 | Assume | `GpuScansPlugin::build` (`streaming.rs:43`) → `GpuTier::fallback` (`tier.rs:62`) | Before any reading: `--gpu-tier` if given, else the level of `--vram` (6 GB without it, `Strong`) |
-| Settle | `settle_gpu_tier` (`vram.rs:69`, `Startup`) → `GpuTier::settle_with` (`tier.rs:76`) | The first call only: a forced tier wins; else the card's size from the driver's reading (`VramReading::card`, the largest device-local heap), capped by `--vram`; else the fallback stays. Logs `GPU: effects at the Strong tier` |
+| Settle | `settle_gpu_tier` (`vram.rs:69`, `Startup`) → `GpuTier::settle_with` (`tier.rs:76`) | The first call only: a forced tier wins; else the card's size from the driver's reading (`VramReading::card`, the largest device-local heap), capped by `--vram`, with the adapter's ray-query feature (`WgpuFeatures::EXPERIMENTAL_RAY_QUERY` on `RenderAdapter`); else the fallback stays. Logs `GPU: effects at the Strong tier` |
 | Read | `GpuTier::level` | `OnEnter(InGame)` builds what the level sizes; `Update` systems pick their branch by `run_if` |
 | Say | `track_vram_budget` (`vram.rs:62`) | With the first reading: `GPU: a N GB card, effects at the X tier` |
 
 `tier_for` (`tier.rs:41`) maps a size to a level: under `STRONG_GB` 4.75 GiB is
-Modest, from there to under `EXCEPTIONAL_GB` 15 GiB Strong, above Exceptional.
+Modest, from there to under `EXCEPTIONAL_GB` 15 GiB Strong, above Exceptional;
+a card with hardware ray tracing is Exceptional from `EXCEPTIONAL_RT_GB` 5.75 GiB.
 
 **Why.**
 
@@ -473,6 +474,12 @@ Modest, from there to under `EXCEPTIONAL_GB` 15 GiB Strong, above Exceptional.
   sold" (`tier.rs:11-13`): a 5 GB card reports about 4.9 GiB, hence 4.75; a
   16 GB card, 15. The user chose the sizes (a 5 GB card is the first Strong
   one, a 16 GB card the first Exceptional one).
+- **Ray tracing as the class marker.** Exceptional costs no more than Strong
+  where it matters: on the 6 GB RTX 2060 at the Sphere, 42 FPS against 38
+  (one probe face a frame, the Sphere's shadow from its medium model). Hardware
+  ray queries mark that card's class and newer (`tier.rs:17-19`); a 6 GB card
+  without them (a GTX 1660) stays Strong
+  (`a_six_gb_rtx_card_runs_exceptional_effects`).
 - **`--vram` caps the tier too.** Someone who limits the game to leave room for
   other programs gets the effects of that smaller card (`--vram 4` on a 16 GB
   card is Modest).
@@ -498,7 +505,7 @@ Modest, from there to under `EXCEPTIONAL_GB` 15 GiB Strong, above Exceptional.
 | `FREE_WAIT_SECONDS` | 30 | `gpu_scans.rs:53` |
 | `OOM_SQUEEZE_GB` | 0.5 | `gpu_scans.rs:56` |
 | `READ_EVERY` | 1 s | `vram.rs:12` |
-| `STRONG_GB` / `EXCEPTIONAL_GB` | 4.75 / 15 GiB | `tier.rs:14-15` |
+| `STRONG_GB` / `EXCEPTIONAL_GB` / `EXCEPTIONAL_RT_GB` | 4.75 / 15 / 5.75 GiB | `tier.rs:14-19` |
 | `MAX_RECOVERIES` / `TROUBLE_SECONDS` / `ECHO_SECONDS` | 3 / 60 / 2 | `recovery.rs:20-24` |
 
 ### 3.8 Invariants
@@ -2302,7 +2309,7 @@ so the next change in the area can fix it.
 | **Explored** | The 108 x 108 survey grid of 32 m cells |
 | **Full scan** | A site's, plant's, tree's or artifact's `uhd/` model, streamed near and swapped for its stand-in |
 | **GpuScans** | The resource that admits UHD scans to the GPU within a budget |
-| **GpuTier** | The session's GPU level (`Modest`, `Strong`, `Exceptional`), decided once from the card's size; forced by `--gpu-tier` |
+| **GpuTier** | The session's GPU level (`Modest`, `Strong`, `Exceptional`), decided once from the card's size and its ray tracing; forced by `--gpu-tier` |
 | **Leg** | A road segment (`roads.rs`), or a carrier route phase (`carrier.rs`); context tells which |
 | **Mobility** | A mover's radius, deepest water and steepest grade for route planning |
 | **Pillar** | An upright collision cylinder in a model's local space |
