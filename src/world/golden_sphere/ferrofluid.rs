@@ -225,8 +225,11 @@ impl MaterialExtension for Ferrofluid {
         assets::FERROFLUID_SHADER.into()
     }
 
-    // In the depth prepass, with motion vectors, wherever a camera has one
-    // (DLSS's): otherwise the upscaler smears the moving spikes.
+    // In the depth prepass, with motion vectors, wherever a camera has one:
+    // otherwise an upscaler smears the moving spikes. Dormant: no camera runs
+    // a prepass today (DLSS was tried and dropped). A camera given a depth
+    // prepass must also get `MotionVectorPrepass`, or the prepass draws every
+    // spike while the main pass fades far ones, and the pool tears.
     fn enable_prepass() -> bool {
         true
     }

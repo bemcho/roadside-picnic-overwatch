@@ -7,7 +7,7 @@ use bevy::render::renderer::{RenderAdapter, RenderAdapterInfo, RenderDevice};
 
 use crate::launch::{DEFAULT_VRAM_GB, LaunchOptions};
 
-use super::{GpuScans, GpuTier, VramReading, gb, gib};
+use super::{GpuScans, GpuTier, TierLevel, VramReading, gb, gib};
 
 /// Seconds between two readings of the driver's budget.
 const READ_EVERY: f32 = 1.0;
@@ -88,7 +88,14 @@ pub fn settle_gpu_tier(
         integrated,
         ray_tracing,
     );
-    info!("GPU: effects at the {:?} tier", tier.level());
+    let level = tier.level();
+    if ray_tracing && level == TierLevel::Exceptional && launch.gpu_tier.is_none() {
+        info!(
+            "GPU: effects at the Exceptional tier for a ray-tracing card; `--gpu-tier strong` if the Golden Sphere runs slow"
+        );
+    } else {
+        info!("GPU: effects at the {level:?} tier");
+    }
 }
 
 /// The budget and usage of the largest device-local heap. `heaps` holds each

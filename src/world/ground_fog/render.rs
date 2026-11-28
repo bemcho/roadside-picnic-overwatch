@@ -225,9 +225,9 @@ fn specialize_pipelines(
     }
 }
 
-/// What the fog pass needs from each view. An upscaler (DLSS) renders the
-/// main pass, and so the fog, into the top-left `MainPassResolutionOverride`
-/// of the view's textures.
+/// What the fog pass needs from each view. An upscaler renders the main pass,
+/// and so the fog, into the top-left `MainPassResolutionOverride` of the
+/// view's textures (none does today: DLSS was tried and dropped).
 type FogView = (
     &'static ExtractedCamera,
     Option<&'static MainPassResolutionOverride>,

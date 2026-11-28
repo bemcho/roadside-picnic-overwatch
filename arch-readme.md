@@ -361,7 +361,7 @@ The ground fog is a custom render pass (`ground_fog/render.rs`), not Bevy's
 `FogVolume`. A single box cannot follow hills, and Bevy attenuates the sun's
 in-scattering by the box's bounding radius, which turns a dense thin layer
 black. The pass runs in `Core3d` after the main pass and before early
-post-processing, in the main pass's render area (smaller under DLSS:
+post-processing, in the main pass's render area (smaller under an upscaler, none today:
 `Viewport::from_viewport_and_override`, and the shader maps pixels through
 `view.main_pass_viewport`). It binds the view's own `MeshViewBindGroup` (lights, shadow
 cascades, atmosphere transmittance), the view depth, the per-camera `GroundFog`
@@ -753,7 +753,7 @@ about two of every three 24 s slots, veering it a little while they blow.
   buffer shared by every plant material, read by `shaders/plant_wind.wesl`, a
   vertex shader: each vertex moves by its height above the instance's origin
   (the root), so roots stay put and tips bend furthest; a motion-vector prepass
-  (DLSS's) bends them again with last frame's wind. It runs while paused too,
+  (dormant: no camera runs one today) bends them again with last frame's wind. It runs while paused too,
   so their motion settles,
 - `plants::sway_full_plants` sways the nearest plant's full scan from its root
   (its scene keeps the scan's own materials),
@@ -1150,7 +1150,8 @@ than stretching `sites.rs` into a universal object registry.
    the material's `prepass_vertex_shader`, or the shadow pass draws the
    unmoved surface. In the shadow pass `view` is the light's, so a fade by
    distance (the ferrofluid's, by pixel size) is skipped there and shadows keep
-   every spike. Where a camera runs a motion-vector prepass (DLSS's), also write
+   every spike. Where a camera runs a motion-vector prepass (none does today;
+   one with a depth prepass must have `MotionVectorPrepass` too), also write
    `previous_world_position` from last frame's inputs
    (`get_previous_world_from_local` and last frame's uniforms, as the ferrofluid
    and `plant_wind.wesl` do) under `@if(PREPASS_PIPELINE && MOTION_VECTOR_PREPASS)`

@@ -121,7 +121,8 @@ impl MaterialExtension for PlantWind {
     }
 
     // The prepass bends them as the main pass does, with motion vectors from
-    // last frame's wind, so an upscaler (DLSS) keeps swaying leaves sharp.
+    // last frame's wind, so an upscaler keeps swaying leaves sharp. Dormant:
+    // no camera runs a prepass today (DLSS was tried and dropped).
     fn prepass_vertex_shader() -> ShaderRef {
         assets::PLANT_WIND_SHADER.into()
     }

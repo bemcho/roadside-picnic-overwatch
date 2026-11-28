@@ -477,9 +477,12 @@ a card with hardware ray tracing is Exceptional from `EXCEPTIONAL_RT_GB` 5.75 Gi
 - **Ray tracing as the class marker.** Exceptional costs no more than Strong
   where it matters: on the 6 GB RTX 2060 at the Sphere, 42 FPS against 38
   (one probe face a frame, the Sphere's shadow from its medium model). Hardware
-  ray queries mark that card's class and newer (`tier.rs:17-19`); a 6 GB card
+  ray queries roughly mark that card's class (`tier.rs:15-19`); a 6 GB card
   without them (a GTX 1660) stays Strong
-  (`a_six_gb_rtx_card_runs_exceptional_effects`).
+  (`a_six_gb_rtx_card_runs_exceptional_effects`). It is a heuristic: slower
+  cards report ray queries too (an RTX 3050 6 GB, an RX 6500 XT, an Arc A380),
+  so `settle_gpu_tier` logs `--gpu-tier strong` as the way back when ray
+  tracing decided.
 - **`--vram` caps the tier too.** Someone who limits the game to leave room for
   other programs gets the effects of that smaller card (`--vram 4` on a 16 GB
   card is Modest).
@@ -1063,7 +1066,7 @@ full scan     uhd/ scene via GpuScans    the one nearest plant within 8 m
   frame ago, into a `ShaderBuffer` every plant material shares (binding 100,
   `:114`); it runs while paused too, so the plants' motion settles. The
   material's `prepass_vertex_shader` is `plant_wind.wesl` as well: a
-  motion-vector prepass (DLSS's) bends each vertex again with last frame's wind
+  motion-vector prepass (dormant: none runs today) bends each vertex again with last frame's wind
   for `previous_world_position`, so the upscaler does not smear the sway. `plant_wind.wesl` moves
   each vertex by its height above the instance origin (`flex`, line 24), so
   roots stay put and tips bend most. **Why a buffer:** "rewriting it each frame
@@ -1346,11 +1349,12 @@ move and leaves the six bound faces alone (`:282`). In `ferrofluid.wesl`:
 - The shadow pass runs the same vertex function (`prepass_vertex_shader`,
   `ferrofluid.rs:187`; the `PREPASS_PIPELINE` branches). There `view` is the
   light's, so the fade by pixel size is skipped and `seen` stays 1: shadows keep
-  every spike. `enable_prepass` is true (`ferrofluid.rs:226`): in a camera's
-  motion-vector prepass (DLSS's) the vertex stage raises last frame's spikes too
+  every spike. `enable_prepass` is true (`ferrofluid.rs:230`): in a camera's
+  motion-vector prepass (dormant: none runs today; a depth prepass without
+  motion vectors would tear the pool) the vertex stage raises last frame's spikes too
   (`previous_field`, `previous_rings`, bindings 112-113) for
   `previous_world_position`. `pull_ferrofluid` keeps last frame's values
-  (`Ferrofluid::follow`), and `hold_ferrofluid` (`golden_sphere.rs:327`) matches
+  (`Ferrofluid::follow`), and `hold_ferrofluid` (`golden_sphere.rs:339`) matches
   them while paused, so the still spikes report no motion.
 - In the main view, `seen` (`:241`) is `smoothstep(3 px, 8 px, spacing in pixels)`
   from the pool's middle, so far spikes settle into smooth liquid instead of
@@ -1436,7 +1440,7 @@ The reasons, where the code gives them:
 player's camera (`player/mod.rs:271`) sees layers 0 and 1; the probe cameras
 see 0 only, so the probe renders the crater, the pool and the stalker but never
 the Sphere from inside. The shown Sphere is a `NotShadowCaster`; a twin of its
-medium model on `SPHERE_SHADOW_LAYER` (2, `reflection.rs:22`), with a plain
+medium model on `SPHERE_SHADOW_LAYER` (2, `reflection.rs:26`), with a plain
 material, casts its shadow, and the Sun sees layers 0 and 2. No camera draws
 layer 2. Bevy culls a directional light's casters by the light's layers, not
 the camera's, and builds cascades for every active camera, so the UHD scan's
@@ -1818,8 +1822,8 @@ flowchart TD
   and its sampler.
 - **Draw.** One fullscreen triangle, blend `One, OneMinusSrcAlpha`
   (premultiplied), GPU span `ground_fog`, in the main pass's render area
-  (`render.rs:300`: `Viewport::from_viewport_and_override`, smaller under
-  DLSS's `MainPassResolutionOverride`); the shader maps pixels to NDC through
+  (`render.rs:298`: `Viewport::from_viewport_and_override`, smaller under an
+  upscaler's `MainPassResolutionOverride`; none runs today); the shader maps pixels to NDC through
   `view.main_pass_viewport`, so the fog meets the depth it reads.
 - **Failure mode.** If an extracted resource is missing the node returns
   without drawing: no panic, no fog.

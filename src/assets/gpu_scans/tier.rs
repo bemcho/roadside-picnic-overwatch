@@ -13,8 +13,10 @@ use super::{VramReading, gib};
 /// tracing): drivers report a little under the size sold.
 const STRONG_GB: f32 = 4.75;
 const EXCEPTIONAL_GB: f32 = 15.0;
-/// Ray tracing marks a card of the RTX 2060's class or newer, the slowest of
-/// which holds 42 FPS at the Golden Sphere on exceptional effects (Strong: 38).
+/// Hardware ray queries as a rough mark of an RTX 2060-class card, which holds
+/// 42 FPS at the Golden Sphere on exceptional effects (Strong: 38). Only a
+/// heuristic: slower cards report them too (an RTX 3050 6 GB, an RX 6500 XT,
+/// an Arc A380), so the log names `--gpu-tier strong` when it decides.
 const EXCEPTIONAL_RT_GB: f32 = 5.75;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

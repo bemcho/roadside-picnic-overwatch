@@ -197,9 +197,10 @@ the stalker stands still.
   densest on the ground and thinning upward, its top rising and falling
   between 1.5 and 8 m; the two blend over 60 m across the Perimeter. Drifting
   banks fray its edges, and billows and wind break it up. Under an upscaler
-  (DLSS) the pass draws into the main pass's smaller render area
+  the pass draws into the main pass's smaller render area
   (`MainPassResolutionOverride`) and maps pixels by that area, so the fog stays
-  on the ground it covers.
+  on the ground it covers (dormant: no upscaler runs today; DLSS was tried and
+  dropped).
   The sun and moon light it through the atmosphere with shadows and forward
   scattering. The hangar hall stays clear, and the fog thins out above ~140 m of
   camera height. The same pass marches three layers of cumulus whose bases lie
@@ -261,9 +262,10 @@ the stalker stands still.
   `PLANTS_PER_FRAME` (150) plants spawn per frame, nearest tile first, each
   given its model's precomputed bounds (`Aabb` + `NoAutoAabb`). Plants have
   no collision or shadows. They draw in a camera's depth prepass where one
-  runs (DLSS's), bent by this frame's wind and, for their motion vectors, by
-  last frame's, so the upscaler does not smear them; the wind keeps updating
-  while paused, so their motion settles. No camera runs a prepass otherwise.
+  runs, bent by this frame's wind and, for their motion vectors, by last
+  frame's, so an upscaler does not smear them; the wind keeps updating while
+  paused, so their motion settles. Dormant: no camera runs a prepass today
+  (DLSS was tried and dropped).
   The rear and sides of the hangar form a dense
   shelterbelt; the central yard and roads stay clear.
 - **Vegetation** (`src/world/trees.rs`): four extracted, textured vegetation clusters
@@ -669,11 +671,15 @@ the stalker stands still.
     1 cm on strong and 5 mm on exceptional ones. Its normals are area-weighted:
     Bevy's angle-weighted `compute_smooth_normals` skips corners whose edges'
     squared lengths multiply to under `f32::EPSILON`, which zeroed every normal
-    on the 1 cm and 5 mm grids, so the liquid mirrored nothing and read flat black. It draws in a camera's depth prepass where one runs
-    (DLSS's), raising this frame's spikes and, for their motion vectors, last
-    frame's (`previous_field`, `previous_rings`), so the upscaler does not smear
-    them; while paused both match (`hold_ferrofluid`), so the spikes report no
-    motion.
+    on the 1 cm and 5 mm grids, so the liquid mirrored nothing and read flat
+    black. It draws in a camera's depth prepass where one runs, raising this
+    frame's spikes and, for their motion vectors, last frame's
+    (`previous_field`, `previous_rings`), so an upscaler does not smear them;
+    while paused both match (`hold_ferrofluid`), so the spikes report no motion.
+    Dormant: no camera runs a prepass today (DLSS was tried and dropped). A
+    camera given a depth prepass must also get `MotionVectorPrepass`: without
+    it the prepass draws every spike while the main pass fades far ones, and
+    the pool tears.
   - *Ferrofluid* (`ferrofluid.wesl`, vertex stage; the fragment stage is standard
     PBR): the flat disc is raised in the shader by a crown of spikes on a hexagonal
     lattice 0.45 m apart, concave cones with rounded tips whose feet touch, turning
@@ -1182,8 +1188,9 @@ the stalker stands still.
   (`Seat::distance`) reaches from 1.2 m below the hull up to 0.6 m above its
   roof, within 1.65 m of its footprint. With the roof blocked too, they step
   out on the clear door spot nearest the hull's height, so a car stuck there
-  never traps its driver. Only solids, deep water or the map's edge on all
-  four sides and the roof keep the stalker in. Tests:
+  never traps its driver. Only solids or the map's edge on all four sides and
+  the roof keep the stalker in: the roof has no water check, so a car stalled
+  in a deep ford lets them out onto its roof. Tests:
   `a_car_stuck_on_a_steep_bank_still_lets_the_stalker_out`,
   `a_stalker_bailing_out_on_a_steep_bank_can_climb_back_in`,
   `a_stalker_on_the_roof_can_get_in`.
@@ -1333,8 +1340,11 @@ the stalker stands still.
   5 GB card as the driver reports it, 6 GB, and so on; drivers report a little
   under the size sold) and 15 GiB and up Exceptional (16 GB cards), or 5.75 GiB
   and up with hardware ray tracing (the adapter's ray queries: a 6 GB RTX 2060,
-  RX 6000 or newer; a 6 GB GTX 1660 stays Strong). The 2060, the slowest such
-  card, holds 42 FPS at the Golden Sphere on Exceptional (Strong: 38). `--vram`
+  RX 6000 or newer; a 6 GB GTX 1660 stays Strong). The 2060 holds 42 FPS at
+  the Golden Sphere on Exceptional (Strong: 38). Ray queries are only a
+  heuristic for that class: slower cards report them too (an RTX 3050 6 GB, an
+  RX 6500 XT, an Arc A380), so when they decide the tier the log says so and
+  names `--gpu-tier strong`. `--vram`
   caps the size judged (`--vram 4` on a 16 GB card gives Modest). Where the
   driver reports no heap (the web, macOS), the fallback is judged from `--vram`,
   or 6 GB without it: Strong. An integrated GPU (or a CPU renderer, as wgpu's
