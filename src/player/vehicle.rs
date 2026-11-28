@@ -24,7 +24,7 @@ use bevy::world_serialization::WorldInstanceReady;
 use crate::assets;
 use crate::world::{
     Collider, Crusher, Describe, InstitutePass, Pillar, Place, STEP_HEIGHT, TERRAIN_HALF_SIZE,
-    Terrain, Weight, push_out,
+    Terrain, Weight, push_out, support_height,
 };
 
 use super::{
@@ -52,6 +52,10 @@ const HALF_EXTENTS: Vec2 = Vec2::new(0.283 * MODEL_SCALE, 0.5 * MODEL_SCALE);
 const HULL_HEIGHT: f32 = 0.47 * MODEL_SCALE;
 const GROUND_CLEARANCE: f32 = 0.035;
 const ENTRY_REACH: f32 = 1.65;
+/// How far below the hull's origin, or above its roof, the stalker may stand
+/// and still reach in, in metres.
+const ENTRY_DROP: f32 = 1.2;
+const ROOF_REACH: f32 = 0.6;
 /// How far beside a seat the stalker is put when saved while driving.
 const STEP_OUT: f32 = 2.0;
 pub(super) const FORD_DEPTH: f32 = 0.60;
@@ -139,10 +143,13 @@ impl Seat {
         Vec3::new(self.half_extents.x, self.height / 2.0, self.half_extents.y)
     }
 
-    /// How far `point` is from the footprint posed at `at`.
+    /// How far `point` is from the footprint posed at `at`: infinitely far
+    /// when it lies well below the hull or above its roof. Standing on the roof
+    /// counts as beside it, so a car the stalker bailed out of onto its roof is
+    /// still a shelter to climb back into.
     pub(crate) fn distance(&self, at: &Transform, point: Vec3) -> f32 {
         let offset = at.rotation.inverse() * (point - at.translation);
-        if offset.y.abs() >= 1.2 {
+        if offset.y <= -ENTRY_DROP || offset.y >= self.height + ROOF_REACH {
             return f32::INFINITY;
         }
         (offset.xz().abs() - self.half_extents)
@@ -388,8 +395,12 @@ pub(super) fn interact_vehicle(
         let Ok((entity, seat, at, mut vehicle)) = seats.get_mut(driving.0) else {
             return;
         };
+        let roof = colliders
+            .get(entity)
+            .ok()
+            .and_then(|(_, collider, _, _)| roof_spot(at, collider));
         if vehicle.as_ref().is_none_or(|vehicle| vehicle.grounded)
-            && let Some(exit) = exit_position(at, seat.half_extents, &terrain, |point| {
+            && let Some(exit) = exit_position(at, seat.half_extents, &terrain, roof, |point| {
                 push_out(
                     point.xz(),
                     point.y,
@@ -436,21 +447,40 @@ fn grounded_idle() -> Locomotion {
 }
 
 /// Where the stalker steps out: the first door spot (left, right, back, front)
-/// within an easy step of the hull's height, else, on a bank too steep for any,
-/// the clear one nearest that height, so a stuck car never traps its driver.
+/// within an easy step of the hull's height; on a bank too steep for any, the
+/// `roof`, where they can climb back in from; with the roof blocked too, the
+/// clear door spot nearest the hull's height, so a stuck car never traps its
+/// driver.
 fn exit_position(
     at: &Transform,
     half_extents: Vec2,
     terrain: &Terrain,
+    roof: Option<Vec3>,
     clear: impl Fn(Vec3) -> bool,
 ) -> Option<Vec3> {
     let rise = |exit: &&Vec3| (exit.y - at.translation.y).abs();
-    let spots: Vec<Vec3> = door_spots(at, half_extents, terrain, clear).collect();
+    let spots: Vec<Vec3> = door_spots(at, half_extents, terrain, &clear).collect();
     spots
         .iter()
         .find(|exit| rise(exit) <= EASY_STEP)
-        .or_else(|| spots.iter().min_by(|a, b| rise(a).total_cmp(&rise(b))))
         .copied()
+        .or_else(|| roof.filter(|&roof| clear(roof)))
+        .or_else(|| {
+            spots
+                .iter()
+                .min_by(|a, b| rise(a).total_cmp(&rise(b)))
+                .copied()
+        })
+}
+
+/// Where a stalker stands on the roof of a hull posed at `at`: over the middle
+/// of its footprint, on the highest of its `collider`'s pillars there, as
+/// `support_height` holds them up once they stand on it.
+fn roof_spot(at: &Transform, collider: &Collider) -> Option<Vec3> {
+    let middle = at.translation.xz();
+    let pose = GlobalTransform::from(*at);
+    support_height(middle, f32::INFINITY, STANDING.radius, [(collider, &pose)])
+        .map(|top| Vec3::new(middle.x, top, middle.y))
 }
 
 /// How far up or down from the hull a door spot may be and still be stepped
@@ -1741,11 +1771,11 @@ mod tests {
         let terrain = Terrain::new();
         let y = terrain.height_at(BASE.0, BASE.1);
         let at = Transform::from_xyz(BASE.0, y, BASE.1);
-        let exit = exit_position(&at, HALF_EXTENTS, &terrain, |point| {
+        let exit = exit_position(&at, HALF_EXTENTS, &terrain, None, |point| {
             point.x < at.translation.x
         });
         assert!(exit.is_some_and(|point| point.x < at.translation.x - HALF_EXTENTS.x));
-        assert!(exit_position(&at, HALF_EXTENTS, &terrain, |_| false).is_none());
+        assert!(exit_position(&at, HALF_EXTENTS, &terrain, None, |_| false).is_none());
     }
 
     #[test]
@@ -1755,13 +1785,43 @@ mod tests {
         let terrain = Terrain::new();
         let at = Transform::from_xyz(-1183.8304, -51.47224, 78.002075)
             .with_rotation(Quat::from_rotation_y(-3.0035748));
-        let exit = exit_position(&at, HALF_EXTENTS, &terrain, |_| true)
+        let exit = exit_position(&at, HALF_EXTENTS, &terrain, None, |_| true)
             .expect("the stalker gets out somewhere");
         assert!(exit.xz().distance(at.translation.xz()) <= 8.0, "{exit:?}");
         assert_eq!(exit.y, terrain.mesh_height_at(exit.xz()));
         assert!(
-            exit_position(&at, HALF_EXTENTS, &terrain, |_| false).is_none(),
+            exit_position(&at, HALF_EXTENTS, &terrain, None, |_| false).is_none(),
             "never into a solid"
+        );
+    }
+
+    #[test]
+    fn a_stalker_bailing_out_on_a_steep_bank_can_climb_back_in() {
+        // The save from a_car_stuck_on_a_steep_bank_still_lets_the_stalker_out:
+        // every door spot is out of reach of the hull, so the roof is the way out.
+        let terrain = Terrain::new();
+        let at = Transform::from_xyz(-1183.8304, -51.47224, 78.002075)
+            .with_rotation(Quat::from_rotation_y(-3.0035748))
+            .with_scale(Vec3::splat(MODEL_SCALE));
+        let roof = roof_spot(&at, &Collider(COLLISION));
+        let exit = exit_position(&at, HALF_EXTENTS, &terrain, roof, |_| true)
+            .expect("the stalker gets out");
+        assert!(
+            exit.y > at.translation.y + EASY_STEP,
+            "onto the roof: {exit:?}"
+        );
+        assert!(Seat::CAR.can_enter(&grounded_idle(), &at, exit));
+    }
+
+    #[test]
+    fn a_stalker_on_the_roof_can_get_in() {
+        let at = Transform::from_xyz(3.0, 1.0, -2.0).with_rotation(Quat::from_rotation_y(0.7));
+        let roof = at.translation + Vec3::Y * HULL_HEIGHT;
+        assert!(Seat::CAR.distance(&at, roof) <= ENTRY_REACH);
+        assert_eq!(
+            Seat::CAR.distance(&at, roof + Vec3::Y * 1.0),
+            f32::INFINITY,
+            "not from a ledge well above the roof"
         );
     }
 

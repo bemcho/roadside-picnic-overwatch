@@ -1150,10 +1150,18 @@ the stalker stands still.
   back out at full lock.
   Slopes beyond tire grip cause downhill sliding; the car and stalker fall at 9.81 m/s².
   E lets the stalker out on the first clear door spot (left, right, back, front,
-  0.9 m from the hull) within 1.2 m of the hull's height; on a bank too steep
-  for any (`exit_position`), on the clear one nearest that height, so a car
-  stuck there never traps its driver. Only solids, deep water or the map's
-  edge on all four sides keep the stalker in.
+  0.9 m from the hull) within 1.2 m of the hull's height. On a bank too steep
+  for any (`exit_position`), they bail out onto the roof (`roof_spot`: over the
+  middle of the footprint, on the car collider's highest pillar there), so the
+  stuck car stays a shelter: E there gets them back in, since entry
+  (`Seat::distance`) reaches from 1.2 m below the hull up to 0.6 m above its
+  roof, within 1.65 m of its footprint. With the roof blocked too, they step
+  out on the clear door spot nearest the hull's height, so a car stuck there
+  never traps its driver. Only solids, deep water or the map's edge on all
+  four sides and the roof keep the stalker in. Tests:
+  `a_car_stuck_on_a_steep_bank_still_lets_the_stalker_out`,
+  `a_stalker_bailing_out_on_a_steep_bank_can_climb_back_in`,
+  `a_stalker_on_the_roof_can_get_in`.
   `tools/prepare_vehicle_asset.py` bakes the GLB's 3072 × 2048 PBR atlases from
   four texture sheets, with matte paint, dark trim, louver and lamp details,
   and subtle procedural wear.
